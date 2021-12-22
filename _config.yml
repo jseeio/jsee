@@ -1,0 +1,26 @@
+title: "JSEE"
+description: > # this means to ignore newlines until "show_excerpts:"
+  JavaScript Execution Environment
+
+show_excerpts: false
+
+logo_header:
+  src: https://jsee.io/images/logo.svg
+  href: https://jsee.io/
+  width: 70
+
+logo_footer:
+  src: https://jsee.io/images/logo.svg
+  href: https://jsee.io/
+  width: 50
+
+header_pages:
+  -
+
+minima:
+  social_links:
+    twitter: jseeio
+    facebook: jseeio
+    github: jseeio
+
+remote_theme: "jseeio/minima"

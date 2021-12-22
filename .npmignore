@@ -1,0 +1,5 @@
+node_modules/
+apps/
+*.swp
+npm-debug.log
+tmp/
