@@ -57,4 +57,4 @@ JSEE takes a schema object that contains five main blocks:
 - `inputs` - Inputs definition
 - `outputs` - Outputs definition
 
-JSEE is a reactive version of StatSim's [Port](https://github.com/statsim/port)
+JSEE is a reactive version of StatSim's [Port](https://github.com/statsim/port). Still work in progress. Expect API changes.
