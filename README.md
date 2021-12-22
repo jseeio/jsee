@@ -1,6 +1,6 @@
 # Focus on code, not UI
 
-JSEE is a highly opinionated GUI wrapper for processing tasks. Not even close to R's [shiny](https://shiny.rstudio.com/) or Python's [streamlit](https://streamlit.io/). Mostly used in [StatSim Apps](https://statsim.com/#apps). 
+JSEE is a highly opinionated GUI wrapper for processing tasks. Not even close to R's [shiny](https://shiny.rstudio.com/) or Python's [streamlit](https://streamlit.io/). Mostly used in [StatSim Apps](https://statsim.com/#apps) and [JSEE.io](https://jsee.io).
 
 JSEE is based on the idea of declarative interface design and reactivity. Instead of writing a "glue" front-end code, you can declare inputs/outputs of a model in a JSON schema and JSEE will do the rest. JSEE creates a Vue app based on the provided schema, parses files, loads needed libraries, orchestrates communication between code and GUI and uses Web Workers to run everything smoothly. It's not a swiss-army knife, not a framework. JSEE solves one specific task - wrapping algorithms in a simple web interface.
 

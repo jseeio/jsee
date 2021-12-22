@@ -5,13 +5,13 @@ description: > # this means to ignore newlines until "show_excerpts:"
 show_excerpts: false
 
 logo_header:
-  src: https://jsee.io/images/logo.svg
-  href: https://jsee.io/
+  src: https://jsee.io/design/jsee_logo.svg
+  href: https://jsee.org/
   width: 70
 
 logo_footer:
   src: https://jsee.io/images/logo.svg
-  href: https://jsee.io/
+  href: https://jsee.org/
   width: 50
 
 header_pages:
