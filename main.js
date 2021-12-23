@@ -260,10 +260,25 @@ export default class JSEE {
     } else if (this.schema.model.type === 'get') {
       this.overlay.hide()
       this.modelFunc = (data) => {
+        log('Sending GET request to', this.schema.model.url)
         const query = new window['URLSearchParams'](data).toString()
         log('Generated query string:', query)
         const resPromise = fetch(this.schema.model.url +'?' + query)
           .then(response => response.json())
+        return resPromise
+      }
+    } else if (this.schema.model.type === 'post') {
+      this.overlay.hide()
+      this.modelFunc = (data) => {
+        log('Sending POST request to', this.schema.model.url)
+        const resPromise = fetch(this.schema.model.url, {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(data)
+        }).then(response => response.json())
         return resPromise
       }
     }
@@ -354,6 +369,7 @@ export default class JSEE {
       case 'async-init':
       case 'async-function':
       case 'get':
+      case 'post':
         if (this.schema.model.worker) {
           this.worker.postMessage(inputValues)
         } else {
