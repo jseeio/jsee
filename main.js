@@ -110,6 +110,11 @@ export default class JSEE {
       schema.model.worker = true
     }
 
+    // Check inputs
+    if (typeof schema.inputs === 'undefined') {
+      schema.inputs = []
+    }
+
     // Check if name is present, if not - get name from the file
     if (typeof schema.model.name === 'undefined') {
       // Two options here
@@ -135,7 +140,7 @@ export default class JSEE {
       this.modelContainer = container.querySelector('#model')
 
       // Init overlay
-      this.overlay = new Overlay(this.inputsContainer)
+      this.overlay = new Overlay(this.inputsContainer ? this.inputsContainer : this.outputsContainer)
     })
     this.data = this.app.$data
 

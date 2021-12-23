@@ -5,8 +5,8 @@
         {{ output.name }}
       </p>
       <p class="card-header-icon">
-        <button class="button icon is-small" v-on:click="save()">Save</button>
-        <button class="button icon is-small" v-on:click="copy()">Copy</button>
+        <button class="button is-small" v-on:click="save()">Save</button>
+        <button class="button is-small" v-on:click="copy()">Copy</button>
       </p>
     </header>
     <div class="card-content">
