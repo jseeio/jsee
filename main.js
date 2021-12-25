@@ -1,6 +1,8 @@
 import { createVueApp } from './src/app'
 import Worker from './src/worker.js'
 
+const utils = require('./src/utils')
+
 const { Notyf } = require('notyf')
 const notyf = new Notyf({
   types: [
@@ -42,6 +44,12 @@ function isObject (item) {
   return (typeof item === 'object' && !Array.isArray(item) && item !== null)
 }
 
+function getName (code) {
+  const words = code.split(' ')
+  const functionIndex = words.findIndex((word) => word == 'function')
+  return words[numberIndex + 1]
+}
+
 // Return input value
 function getValue (input) {
   if (input.type === 'group') {
@@ -55,6 +63,60 @@ function getValue (input) {
   }
 }
 
+function getType (model) {
+  if (model.code) {
+    let target
+    if (typeof model.code === 'string') {
+      if (model.code.split(' ').map(v => v.trim()).includes('def')) {
+        return 'py'
+      }
+      target = eval('(' + model.code + ')')
+    } else {
+      target = model.code
+    }
+    if (typeof target === 'function') {
+      if (/^class[\s{]/.test(toString.call(target))) {
+        return 'class'
+      } else {
+        return 'function'
+      }
+    }
+  } else if (model.url) {
+    const lastWordInURL = model.url.split('/').pop()
+    if (lastWordInURL.includes('py')) {
+      return 'py'
+    } else if (lastWordInURL.includes('js')) {
+      return 'js'
+    } else {
+      return 'post'
+    }
+  }
+  return undefined
+}
+
+// Nice trick by Jack Allan
+// From: https://stackoverflow.com/a/9924463/2998960
+const STRIP_COMMENTS = /((\/\/.*$)|(\/\*[\s\S]*?\*\/))/mg
+const ARGUMENT_NAMES = /([^\s,]+)/g
+function getParamNames (func) {
+  const fnStr = func.toString().replace(STRIP_COMMENTS, '')
+  let result = fnStr.slice(fnStr.indexOf('(')+1, fnStr.indexOf(')')).match(ARGUMENT_NAMES)
+  if (result === null)
+    result = []
+  return result
+}
+
+function getInputs (model) {
+  if (model.code) {
+    const params = getParamNames(model.code)
+    return params.map(p => ({
+      'name': p,
+      'type': 'string'
+    }))
+  }
+  return []
+}
+
 export default class JSEE {
   constructor (params) {
     log('Initializing JSEE with parameters: ', params)
@@ -62,7 +124,7 @@ export default class JSEE {
     this.params = params
     this.__version__ = VERSION
 
-    // Get schema then initialize a model
+    // Get schema then initialize a model 
     if (params.schema) {
       if (typeof params.schema === 'object') {
         log('Received schema as object')
@@ -91,13 +153,7 @@ export default class JSEE {
   init (schema) {
     log('Initializing schema', schema)
 
-    // Convert JS code to string
-    if (schema.model.code && (typeof schema.model.code !== 'string')) {
-      log('Convert code in schema to string')
-      schema.model.code = schema.model.code.toString()
-    }
-
-    // Update model URL if needed
+    // Update model URL if needed 
     if (schema.model.url && !schema.model.url.includes('/') && this.schemaUrl && this.schemaUrl.includes('/')) {
       let oldModelUrl = schema.model.url
       log('Schema URL:', this.schemaUrl)
@@ -112,8 +168,13 @@ export default class JSEE {
 
     // Check inputs
     if (typeof schema.inputs === 'undefined') {
-      schema.inputs = []
+      schema.inputs = getInputs(schema.model)
     }
+    schema.inputs.forEach(input => {
+      if (typeof input.type === 'undefined') {
+        input.type = 'string'
+      }
+    })
 
     // Check if name is present, if not - get name from the file
     if (typeof schema.model.name === 'undefined') {
@@ -124,6 +185,7 @@ export default class JSEE {
         log('Use name from url: ', schema.model.name)
       } else if (schema.model.code) {
         // 2. Get the name from the url
+        // TODO: WILL NOT WORK. CODE IS STRING
         schema.model.name = schema.model.code.name
         log('Use name from code: ', schema.model.name)
       }
@@ -132,155 +194,73 @@ export default class JSEE {
     this.schema = clone(schema)
 
     // Init Vue app
+    // ------------
     this.app = createVueApp(this, this.schema, (container) => {
       // Called when the app is mounted
       // FYI "this" here refers to port object
       this.outputsContainer = container.querySelector('#outputs')
       this.inputsContainer = container.querySelector('#inputs')
       this.modelContainer = container.querySelector('#model')
-
       // Init overlay
       this.overlay = new Overlay(this.inputsContainer ? this.inputsContainer : this.outputsContainer)
     })
     this.data = this.app.$data
 
+    // Init WebWorker
+    // --------------
+    if (this.schema.model.worker) {
+      this.worker = new Worker()
+      this.worker.onmessage = (e) => {
+        this.overlay.hide()
+        const res = e.data
+        if ((typeof res === 'object') && (res._status)) {
+          switch (res._status) {
+            case 'loaded':
+              notyf.success('Loaded: JS model (in worker)')
+              break
+            case 'log':
+              log(...res._log)
+              break
+          }
+        } else {
+          log('Response from worker:', res)
+          this.output(res)
+        }
+      }
+      this.worker.onerror = (e) => {
+        this.overlay.hide()
+        notyf.error(e.message)
+        log('Error from worker:', e)
+      }
+    }
+
+    // Infer model type
+    if (typeof this.schema.model.type === 'undefined') {
+      this.schema.model.type = getType(this.schema.model)
+    }
+
     // Init Model
     // ----------
-    if (this.schema.model.type === 'py') {
-      // Add loading indicator
-      this.overlay.show()
-      let script = document.createElement('script')
-      script.src = 'https://cdn.jsdelivr.net/pyodide/v0.18.1/full/pyodide.js'
-      script.onload = async () => {
-        this.pyodide = await loadPyodide({ indexURL : "https://cdn.jsdelivr.net/pyodide/v0.18.1/full/" });
-        notyf.success('Loaded: Python')
-        const resRaw = await fetch(this.schema.model.url)
-        const res = await resRaw.text()
-        this.pymodel = res
-        log('Loaded python code:', res)
-        // Check if micropip is used
-        if (res.includes('micropip')) {
-          await this.pyodide.loadPackage('micropip')
-          log('Loaded micropip')
-        }
-        // Import packages if defined
-        if ('packages' in this.schema.model) {
-          await this.pyodide.loadPackage(this.schema.model.packages)
-          log('Loaded packages from schema')
-        } else {
-          await this.pyodide.loadPackagesFromImports(res)
-          log('Loaded packages from Python code')
-        }
-        this.overlay.hide()
-      }
-      document.head.appendChild(script)
-    } else if (['function', 'class', 'async-init', 'async-function'].includes(this.schema.model.type)) {
-      // Initialize worker with the model
-      if (this.schema.model.worker) {
-        // this.worker = new Worker(new URL('./src/worker.js', import.meta.url))
-        this.worker = new Worker()
-        if (this.schema.model.url) {
-          fetch(this.schema.model.url)
-            .then(res => res.text())
-            .then(res => {
-              log('Loaded js code for worker')
-              this.schema.model.code = res
-              this.worker.postMessage(this.schema.model)
-            })
-        } else if (typeof this.schema.model.code !== 'undefined') {
-          this.worker.postMessage(this.schema.model)
-        } else {
-          notyf.error('No code provided')
-        }
-
-        this.worker.onmessage = (e) => {
-          this.overlay.hide()
-          const res = e.data
-          if ((typeof res === 'object') && (res._status)) {
-            switch (res._status) {
-              case 'loaded':
-                notyf.success('Loaded: JS model (in worker)')
-                break
-              case 'log':
-                log(...res._log)
-                break
-            }
-          } else {
-            log('Response from worker:', res)
-            this.output(res)
-          }
-        }
-        this.worker.onerror = (e) => {
-          this.overlay.hide()
-          notyf.error(e.message)
-          log('Error from worker:', e)
-        }
-      } else {
-        // Initialize model in main window
-        log('Init model in window')
-        let script = document.createElement('script')
-        script.src = this.schema.model.url
-        script.onload = () => {
-          notyf.success('Loaded: JS model')
-          this.overlay.hide()
-          log('Loaded JS model in main window')
-
-          // Initializing the model (same in worker)
-          if (this.schema.model.type === 'class') {
-            log('Init class')
-            const modelClass = new window[this.schema.model.name]()
-            this.modelFunc = (...a) => {
-              return modelClass[this.schema.model.method || 'predict'](...a)
-            }
-          } else if (this.schema.model.type === 'async-init') {
-            log('Init function with promise')
-            window[this.schema.model.name]().then((m) => {
-              log('Async init resolved: ', m)
-              this.modelFunc = m
-            })
-          } else {
-            log('Init function')
-            this.modelFunc = window[this.schema.model.name]
-          }
-        }
-        document.head.appendChild(script)
-      }
-    } else if (this.schema.model.type === 'tf') {
-      // Initialize TF
-      let script = document.createElement('script')
-      script.src = 'dist/tf.min.js'
-      script.onload = () => {
-        log('Loaded TF.js')
-        this.overlay.hide()
-        window['tf'].loadLayersModel(this.schema.model.url).then(res => {
-          log('Loaded Tensorflow model')
-        })
-      }
-      document.head.appendChild(script)
-    } else if (this.schema.model.type === 'get') {
-      this.overlay.hide()
-      this.modelFunc = (data) => {
-        log('Sending GET request to', this.schema.model.url)
-        const query = new window['URLSearchParams'](data).toString()
-        log('Generated query string:', query)
-        const resPromise = fetch(this.schema.model.url +'?' + query)
-          .then(response => response.json())
-        return resPromise
-      }
-    } else if (this.schema.model.type === 'post') {
-      this.overlay.hide()
-      this.modelFunc = (data) => {
-        log('Sending POST request to', this.schema.model.url)
-        const resPromise = fetch(this.schema.model.url, {
-          method: 'POST',
-          headers: {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(data)
-        }).then(response => response.json())
-        return resPromise
-      }
+    switch (this.schema.model.type) {
+      case 'py':
+        this.initPython()
+        break
+      case 'tf':
+        this.initTF()
+        break
+      case 'function':
+      case 'class':
+      case 'async-init':
+      case 'async-function':
+        this.initJS()
+        break
+      case 'get':
+      case 'post':
+        this.initAPI()
+        break
+      default:
+        notyf.error('No type information')
+        break
     }
 
     // Init render
@@ -313,6 +293,127 @@ export default class JSEE {
       }
       document.head.appendChild(script)
     }
+  }
+
+  initPython () {
+    // Add loading indicator
+    this.overlay.show()
+    let script = document.createElement('script')
+    script.src = 'https://cdn.jsdelivr.net/pyodide/v0.18.1/full/pyodide.js'
+    script.onload = async () => {
+      this.pyodide = await loadPyodide({ indexURL : "https://cdn.jsdelivr.net/pyodide/v0.18.1/full/" });
+      notyf.success('Loaded: Python')
+      const resRaw = await fetch(this.schema.model.url)
+      const res = await resRaw.text()
+      this.pymodel = res
+      log('Loaded python code:', res)
+      // Check if micropip is used
+      if (res.includes('micropip')) {
+        await this.pyodide.loadPackage('micropip')
+        log('Loaded micropip')
+      }
+      // Import packages if defined
+      if ('packages' in this.schema.model) {
+        await this.pyodide.loadPackage(this.schema.model.packages)
+        log('Loaded packages from schema')
+      } else {
+        await this.pyodide.loadPackagesFromImports(res)
+        log('Loaded packages from Python code')
+      }
+      this.overlay.hide()
+    }
+    document.head.appendChild(script)
+  }
+
+  initJS () {
+    // Worker: Initialize worker with the model
+    if (this.schema.model.worker) {
+      if (this.schema.model.url) {
+        fetch(this.schema.model.url)
+          .then(res => res.text())
+          .then(res => {
+            log('Loaded JS code for worker from:', this.schema.model.url)
+            this.schema.model.code = res
+            this.worker.postMessage(this.schema.model)
+          })
+      } else if (this.schema.model.code) {
+        if (typeof this.schema.model.code !== 'string') {
+          log('Convert code in schema to string for WebWorker')
+          this.schema.model.code = this.schema.model.code.toString()
+        }
+        this.worker.postMessage(this.schema.model)
+      } else {
+        notyf.error('No code provided')
+      }
+    } else {
+      // Main: Initialize model in main window
+
+      const prepModelFunc = () => {
+        // Classes are not added to window. So there is an extra check.
+        // https://stackoverflow.com/questions/37711603/javascript-es6-class-definition-not-accessible-in-window-global
+        const target = this.schema.model.type === 'class'
+          ? eval(this.schema.model.name)
+          : window[this.schema.model.name]
+        // Need promise here in case of async init
+        Promise.resolve(utils.getModelFuncJS(this.schema.model, target, log))
+          .then(m => {
+            this.overlay.hide()
+            notyf.success('Loaded: JS model')
+            this.modelFunc = m 
+          })
+      }
+
+      if (this.schema.model.url) {
+        log('Init model in main window from URL:', this.schema.model.url)
+        let script = document.createElement('script')
+        script.src = this.schema.model.url
+        script.onload = () => {
+          log('Loaded: script file')
+          prepModelFunc()
+        }
+        document.head.appendChild(script)
+      } else if (this.schema.model.code) {
+        // Danger zone
+        if (typeof this.schema.model.code === 'string') {
+          if (this.schema.model.name) {
+            log('Evaluating code from string (has name)')
+            this.modelFunc = Function(
+              `${this.schema.model.code} ;return ${this.schema.model.name}`
+            )()
+          } else {
+            log('Evaluating code from string (no name)')
+            this.modelFunc = eval(`(${this.schema.model.code})`) // ( ͡° ͜ʖ ͡°) YEAHVAL
+          }
+        } else {
+          prepModelFunc()
+        }
+      }
+
+    }
+  }
+
+  initAPI () {
+    this.overlay.hide()
+    if (this.schema.model.worker) {
+      // Worker:
+      this.worker.postMessage(this.schema.model)
+    } else {
+      // Main:
+      this.modelFunc = utils.getModelFuncAPI(model, log)
+    }
+  }
+
+  initTF () {
+    let script = document.createElement('script')
+    script.src = 'dist/tf.min.js'
+    script.onload = () => {
+      log('Loaded TF.js')
+      this.overlay.hide()
+      window['tf'].loadLayersModel(this.schema.model.url).then(res => {
+        log('Loaded Tensorflow model')
+      })
+    }
+    document.head.appendChild(script)
   }
 
   run () {
@@ -384,8 +485,6 @@ export default class JSEE {
           log('modelFunc results:', res)
           Promise.resolve(res).then(r => { this.output(r) })
         }
-        break
-      case 'api':
         break
     }
   }

@@ -87,7 +87,9 @@ module.exports = (env) => {
           },
         }
       })],
-    }
+    },
+    // Source map
+    devtool: 'eval'
   }
 
   return config

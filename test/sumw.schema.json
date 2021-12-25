@@ -1,0 +1,17 @@
+{
+  "model": {
+    "name": "sum",
+    "type": "function",
+    "title": "title",
+    "description": "description",
+    "container": "args",
+    "url": "example-sum.js",
+    "autorun": true,
+    "worker": true
+  },
+  "inputs": [
+    { "name": "a", "type": "int", "default": 100 },
+    { "name": "b", "type": "int", "default": 42 }
+  ]
+}
+

@@ -1,3 +1,5 @@
+const utils = require('./utils')
+
 function log () {
   const args = Array.prototype.slice.call(arguments);
   args.unshift('[Worker]')
@@ -5,7 +7,50 @@ function log () {
   postMessage({_status: 'log', _log: args})
 }
 
+function initTF (model) {
+  throw new Error('Tensorflow in worker (not implemented)')
+}
+
+function initPython (model) {
+  throw new Error('Python in worker (not implemented)')
+}
+
+function initJS (model) {
+  log('Init JS')
+  this.container = model.container
+
+  if (model.code) {
+    log('Load code as a string')
+    // https://github.com/altbdoor/blob-worker/blob/master/blobWorker.js
+    importScripts(URL.createObjectURL(new Blob([model.code], { type: 'text/javascript' })))
+  } else if (model.url) {
+    log('Load script from URL:', model.url)
+    importScripts(model.url)
+  } else {
+    log('No script provided')
+  }
+
+
+  // Related:
+  // https://stackoverflow.com/questions/37711603/javascript-es6-class-definition-not-accessible-in-window-global
+  const target = model.type === 'class' 
+    ? eval(model.name)
+    : this[model.name]
+  // Need promise here in case of async init
+  Promise.resolve(utils.getModelFuncJS(model, target, log))
+    .then(m => {
+      postMessage({_status: 'loaded'})
+      this.modelFunc = m
+    })
+}
+
+function initAPI (model) {
+  log('Init API')
+  this.modelFunc = utils.getModelFuncAPI(model, log)
+}
+
 onmessage = function (e) {
+
   var data = e.data
   log('Received message of type:', typeof data)
 
@@ -14,67 +59,30 @@ onmessage = function (e) {
       INIT MESSAGE
     */
     let model = data
+    log('Init...')
 
-    if (model.type === 'py') {
-      // Python with Pyodide
-      importScripts('https://pyodide.cdn.iodide.io/pyodide.js')
-      // Check when all's loaded
-      /*
-      TODO: Implement same loaded as port
-      let pyCheck = setInterval(() => {
-        if (self.pyodide && self.pyodide.runPythonAsync && this.model && this.model.length) {
-          console.log('[Worker] Pyodide lib and model loaded. Try running to preload all imports')
-          self.pyodide.runPythonAsync(this.model, () => {})
-            .then((res) => {
-              postMessage({_status: 'loaded'})
-            })
-            .catch((err) => {
-              postMessage({_status: 'loaded'})
-            })
-          clearInterval(pyCheck)
-        }
-      }, 500)
-      */
-    } else {
-      // Javascript
-      this.container = model.container
-
-      if (model.code) {
-        log('Load code from schema')
-        // https://github.com/altbdoor/blob-worker/blob/master/blobWorker.js
-        importScripts(URL.createObjectURL(new Blob([model.code], { type: 'text/javascript' })))
-      } else if (model.url) {
-        log('Load script from URL:', model.url)
-        importScripts(model.url)
-      } else {
-        log('No script provided')
-      }
-
-      if (model.type === 'class') {
-        log('[Worker] Init class')
-        // this.modelFunc = (new this[model.name]())[model.method || 'predict']
-
-        const modelClass = new this[model.name]()
-        this.modelFunc = (...a) => {
-          return modelClass[model.method || 'predict'](...a)
-        }
-      } else if (model.type === 'async-init') {
-        log('Init function with promise')
-        log(this[model.name])
-        this[model.name]().then((m) => {
-          log('Async init resolved: ', m)
-          this.modelFunc = m
-        })
-      } else {
-        log('Init function')
-        this.modelFunc = this[model.name]
-      }
-
-      postMessage({_status: 'loaded'})
+    switch (model.type) {
+      case 'tf':
+        initTF(model)
+        break
+      case 'py':
+        initPython(model)
+        break
+      case 'function':
+      case 'class':
+      case 'async-init':
+      case 'async-function':
+        initJS(model)
+        break
+      case 'get':
+      case 'post':
+        initAPI(model)
+        break
     }
   } else {
     /*
-      CALL MESSAGE
+    :w
+    CALL MESSAGE
     */
     var res
     if (typeof this.modelFunc === 'string') {
