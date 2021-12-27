@@ -1,0 +1,14 @@
+<html>
+  <div id="jsee-container">
+  <script src="/dist/jsee.js"></script>
+  <script>
+    new JSEE({
+      schema: {
+        'model': function (a, b) {
+          return a * b
+        }
+      },
+      container: 'jsee-container'
+    })
+  </script>
+</html>
