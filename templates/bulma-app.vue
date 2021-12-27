@@ -26,6 +26,7 @@
       justify-content: center;
     }
 
+
     .card-header {
       box-shadow: none;
       border-bottom: 1px solid #ececec;
@@ -50,6 +51,48 @@
         background-color: whitesmoke;
       }
     }
+
+    .card-footer {
+      /* background: linear-gradient(62deg, rgba(0,171,209,1) 0%, rgba(0,209,178,1) 100%); */
+      background: linear-gradient(90deg, #4395d0 0%, #00d1b2 100%);
+    }
+
+    .card-footer.reset {
+      background: linear-gradient(90deg, #ff577f 0%, #4395d0 50%, #00d1b2 100%);
+    }
+
+    .card-footer .button {
+      background: none;
+      padding: .75rem 1.5rem;
+      border: none !important;
+      font-size: 16px;
+      font-weight: 400;
+      border-radius: 0;
+    }
+
+    .reset-button {
+      justify-content: left;
+    }
+
+    .reset-button:hover {
+      background-color: transparent !important;
+      background: linear-gradient(90deg, #ff3a56 0%, #fff0 80%)
+    }
+
+    .card-footer .run-button {
+      border-left: 1px dashed white;
+      justify-content: right;
+    }
+
+    .card-footer .run-button:hover {
+      background-color: transparent !important;
+      background: linear-gradient(270deg, #02dbb2 0%, #fff0 80%);
+    }
+
+
+    .field {
+      margin-bottom: 5px;
+    }
   }
 </style>
 <template>
@@ -73,21 +116,21 @@
               <pre v-if="$parent.model.debug">{{ $parent.inputs }}</pre>
               <!-- <button class="button is-primary" id="run"><span>▸</span>&nbsp;&nbsp;Run</button> -->
             </div>
-            <footer class="card-footer">
+            <footer class="card-footer" v-bind:class="{ reset: $parent.dataChanged }">
               <button 
                 v-on:click="$parent.reset()"
-                v-if="$parent.inputs && $parent.inputs.length > 0"
-                class="button icon card-footer-item is-danger is-small"
+                v-if="$parent.inputs && $parent.inputs.length > 0 && $parent.dataChanged"
+                class="button reset-button icon card-footer-item is-danger is-small"
               >
                 <span class="has-text-danger-dark">✕</span>
                 <span>&nbsp; Reset</span>
               </button>
               <button 
                 v-on:click="$parent.run()" 
-                class="button icon card-footer-item is-primary is-small"
+                class="button run-button icon card-footer-item is-primary is-small"
               >
+                <span>&nbsp; Run &nbsp;</span>
                 <span class="has-text-primary-dark">▸</span>
-                <span>&nbsp; Run</span>
               </button>
             </footer>
           </div>
