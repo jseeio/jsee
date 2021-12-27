@@ -65,7 +65,7 @@
       background: none;
       padding: .75rem 1.5rem;
       border: none !important;
-      font-size: 16px;
+      font-size: 14px;
       font-weight: 400;
       border-radius: 0;
     }
@@ -84,14 +84,21 @@
       justify-content: right;
     }
 
-    .card-footer .run-button:hover {
+    .card-footer .run-button:hover,{
       background-color: transparent !important;
       background: linear-gradient(270deg, #02dbb2 0%, #fff0 80%);
     }
 
+    .card-footer .run-button.running .run-icon {
+      color: #016c5c !important;
+    }
 
     .field {
       margin-bottom: 5px;
+    }
+
+    .input, .textarea, .select select {
+      border-color: #e8e8e8;
     }
   }
 </style>
@@ -122,15 +129,16 @@
                 v-if="$parent.inputs && $parent.inputs.length > 0 && $parent.dataChanged"
                 class="button reset-button icon card-footer-item is-danger is-small"
               >
-                <span class="has-text-danger-dark">✕</span>
+                <span class="rest-icon has-text-danger-dark">✕</span>
                 <span>&nbsp; Reset</span>
               </button>
               <button 
                 v-on:click="$parent.run()" 
                 class="button run-button icon card-footer-item is-primary is-small"
+                v-bind:class="{ running: $parent.clickRun }"
               >
                 <span>&nbsp; Run &nbsp;</span>
-                <span class="has-text-primary-dark">▸</span>
+                <span class="run-icon has-text-primary-dark">▸</span>
               </button>
             </footer>
           </div>

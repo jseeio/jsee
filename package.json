@@ -1,6 +1,6 @@
 {
   "name": "@jseeio/jsee",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "",
   "main": "dist/jsee.js",
   "private": false,

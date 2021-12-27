@@ -77,6 +77,8 @@ function createVueApp (env, mountedCallback, logMain) {
 
   // Flag that shows if data was changed from initial conditions
   dataInit.dataChanged = false
+  // Flag for autorun feedback
+  dataInit.clickRun = false
 
   function len(s) {
     return s.length;
@@ -149,7 +151,7 @@ function createVueApp (env, mountedCallback, logMain) {
         handler (v) {
           this.dataChanged = true // Used in the reset button
           if (this.model.autorun) {
-            env.run()
+            this.run()
           }
         }
       }
@@ -164,9 +166,16 @@ function createVueApp (env, mountedCallback, logMain) {
       },
       reset () {
         resetInputs(this.inputs)
+        this.$nextTick(() => {
+          this.dataChanged = false
+        })
       },
       run () {
+        this.clickRun = true
         env.run()
+        setTimeout(() => {
+          this.clickRun = false
+        }, 150)
       },
       notify (msg) {
         env.notify(msg)
