@@ -20,12 +20,7 @@ const components = {
 const filtrex = require('filtrex')
 const JsonViewer = require('vue3-json-viewer').default
 
-function log () {
-  console.log(`[Vue]`, ...arguments)
-}
-
 function resetInputs (inputs) {
-  log('Resetting inputs...')
   inputs.forEach(input => {
     if (input.default) { 
       input.value = input.default 
@@ -65,7 +60,14 @@ function resetInputs (inputs) {
   })
 }
 
-function createVueApp (env, dataInit, mountedCallback) {
+function createVueApp (env, mountedCallback, logMain) {
+  function log () {
+    logMain('[Vue]', ...arguments)
+  }
+
+  // Vue's data is based on schema
+  const dataInit = env.schema
+
   // Reset input values to default ones
   resetInputs(dataInit.inputs)
 

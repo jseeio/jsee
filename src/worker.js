@@ -3,7 +3,6 @@ const utils = require('./utils')
 function log () {
   const args = Array.prototype.slice.call(arguments);
   args.unshift('[Worker]')
-  console.log(args)
   postMessage({_status: 'log', _log: args})
 }
 

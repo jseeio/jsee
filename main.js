@@ -27,8 +27,11 @@ require('notyf/notyf.min.css')
 const fetch = window['fetch']
 const Blob = window['Blob']
 
+let verbose = true
 function log () {
-  console.log(`[JSEE v${VERSION}]`, ...arguments)
+  if (verbose) {
+    console.log(`[JSEE v${VERSION}]`, ...arguments)
+  }
 }
 
 // const Worker = window['Worker']
@@ -109,6 +112,8 @@ export default class JSEE {
       }
     }
 
+    verbose = !(params.verbose === false)
+
     log('Initializing JSEE with parameters: ', params)
     params.schema = params.schema || params.config
     this.params = params
@@ -140,97 +145,99 @@ export default class JSEE {
   }
 
   init (schema) {
-    this.initSchema(schema).then(() => { // -> this.schema
-      this.initWorker() // -> this.worker
-      this.initModel() // -> this.modelFunc (depends on this.worker)
+    this.loadCode(schema).then((code) => { // -> code
+      this.initSchema(schema, code) // -> this.schema
       this.initVue() // -> this.app, this.data
+      this.initWorker() // -> this.worker
       this.initRender() // -> this.renderFunc
+      this.initModel() // -> this.modelFunc (depends on this.worker)
     })
   }
 
-  initSchema (schema) {
-    log('Initializing schema')
-
-    // Check for super minimal config
-    if (typeof schema === 'function') {
-      schema = {
-        'model': {
-          'code': schema,
-          'type': 'function'
-        }
-      }
-    } else if (typeof schema.model === 'function') {
-      schema.model = {
-        'code': schema.model,
-        'type': 'function'
-      }
-    }
-
-    // Check for worker flag
-    if (typeof schema.model.worker === 'undefined') {
-      schema.model.worker = true
-    }
-
+  loadCode (schema) {
     const initPromise = new Promise((resolve, reject) => {
       // Unwind this ball of possible cases
-      const url = schema.model.url
+      let url = schema.model.url
       if (url && (url.includes('.js') || url.includes('.py'))) {
-
-
         // Update model URL if needed
         if (!url.includes('/') && this.schemaUrl && this.schemaUrl.includes('/')) {
-          schema.model.url = window.location.protocol + '//' + window.location.host + this.schemaUrl.split('/').slice(0, -1).join('/') + '/' + url
-          log(`Changed the old model URL from ${url} to ${schema.model.url} (based on the schema URL)`)
+          url = window.location.protocol + '//' + window.location.host + this.schemaUrl.split('/').slice(0, -1).join('/') + '/' + url
+          log(`Changed the old model URL to ${url} (based on the schema URL)`)
         }
-
-        // Update model name if absent
-        if (typeof schema.model.name === 'undefined') {
-          schema.model.name = schema.model.url.split('/').pop().split('.')[0]
-          log('Use model name from url: ', schema.model.name)
-        }
-
-        fetch(schema.model.url)
+        fetch(url)
           .then(res => res.text())
           .then(res => {
-            log('Loaded code from:', schema.model.url)
-            schema.model.code = res
-            resolve()
+            log('Loaded code from:', url)
+            resolve(res)
           })
+      } else if (typeof schema === 'function') {
+        log('Code is: schema')
+        resolve(schema)
+      } else if (typeof schema.model === 'function') {
+        log('Code is: schema.model')
+        resolve(schema.model)
+      } else if (!(typeof schema.model.code === 'undefined')) {
+        log('Code is: schema.model.code')
+        resolve(schema.model.code)
       } else {
-        resolve()
+        log('No code. Probably API...')
+        resolve(undefined)
       }
-    }).then(() => {
-      // Check inputs
-      // Relies on model.code
-      // So run after possible fetching
-      if (typeof schema.inputs === 'undefined') {
-        schema.model.container = 'args'
-        schema.inputs = getInputs(schema.model)
-      }
-
-      // Relies on input check
-      // Set default input type
-      schema.inputs.forEach(input => {
-        if (typeof input.type === 'undefined') {
-          input.type = 'string'
-        }
-      })
-
-      // Infer model type
-      if (typeof schema.model.type === 'undefined') {
-        schema.model.type = getType(schema.model)
-      }
-
-      // At this point we have all code in model.code or api
-      this.schema = clone(schema)
     })
 
     return initPromise
   }
 
+  initSchema (schema, code) {
+    log('Initializing schema')
+
+    // Check for empty model block
+    if (typeof schema.model === 'undefined') {
+      schema.model = {}
+    }
+
+    schema.model.code = code
+
+    // Check for super minimal config
+    // Check for worker flag
+    if (typeof schema.model.worker === 'undefined') {
+      schema.model.worker = true
+    }
+
+    // Check inputs
+    // Relies on model.code
+    // So run after possible fetching
+    if (typeof schema.inputs === 'undefined') {
+      schema.model.container = 'args'
+      schema.inputs = getInputs(schema.model)
+    }
+
+    // Relies on input check
+    // Set default input type
+    schema.inputs.forEach(input => {
+      if (typeof input.type === 'undefined') {
+        input.type = 'string'
+      }
+    })
+
+    // Infer model type
+    if (typeof schema.model.type === 'undefined') {
+      schema.model.type = getType(schema.model)
+    }
+
+    // Update model name if absent
+    if ((typeof schema.model.name === 'undefined') && (schema.model.url) && (schema.model.url.includes('.js'))) {
+      schema.model.name = schema.model.url.split('/').pop().split('.')[0]
+      log('Use model name from url: ', schema.model.name)
+    }
+
+    // At this point we have all code in model.code or api
+    this.schema = clone(schema)
+  }
+
   initVue () {
     log('Initializing VUE')
-    this.app = createVueApp(this, this.schema, (container) => {
+    this.app = createVueApp(this, (container) => {
       // Called when the app is mounted
       // FYI "this" here refers to port object
       this.outputsContainer = container.querySelector('#outputs')
@@ -238,7 +245,7 @@ export default class JSEE {
       this.modelContainer = container.querySelector('#model')
       // Init overlay
       this.overlay = new Overlay(this.inputsContainer ? this.inputsContainer : this.outputsContainer)
-    })
+    }, log)
     this.data = this.app.$data
   }
 
