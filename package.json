@@ -1,12 +1,12 @@
 {
   "name": "@jseeio/jsee",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "",
   "main": "dist/jsee.js",
   "private": false,
   "scripts": {
-    "build-dev": "webpack --mode=development --progress --stats-children",
-    "build": "webpack --mode=production --progress && npx webpack --mode=production --progress --env RUNTIME",
+    "build-dev": "webpack --mode=development --progress --stats-children --env DEVELOPMENT",
+    "build": "webpack --mode=production --progress && webpack --mode=production --progress --env RUNTIME",
     "watch": "nodemon --watch . --ignore dist --ext vue,js,css,html --exec 'npm run build-dev && npm test'",
     "prepublishOnly": "npm run build && npm test",
     "test": "jest test.js --detectOpenHandles",

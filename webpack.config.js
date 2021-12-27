@@ -89,7 +89,9 @@ module.exports = (env) => {
       })],
     },
     // Source map
-    devtool: 'eval'
+    devtool: env.DEVELOPMENT
+      ? 'eval-source-map'
+      : false
   }
 
   return config
