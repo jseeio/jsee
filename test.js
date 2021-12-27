@@ -53,8 +53,10 @@ describe('Some edge cases', () => {
   test('Minimal', async () => {
     schema.model.worker = false
     await page.goto(urlQuery(schema))
+    await expect(page).toFill('#a', '100')
+    await expect(page).toFill('#b', '4')
     await expect(page).toClick('button', { text: 'Run' })
-    await expect(page).toMatch('200')
+    await expect(page).toMatch('25')
   })
 })
 
