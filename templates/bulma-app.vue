@@ -65,9 +65,9 @@
       background: none;
       padding: .75rem 1.5rem;
       border: none !important;
+      border-radius: .25rem !important;
       font-size: 14px;
       font-weight: 400;
-      border-radius: 0;
     }
 
     .reset-button {
@@ -76,7 +76,8 @@
 
     .reset-button:hover {
       background-color: transparent !important;
-      background: linear-gradient(90deg, #ff3a56 0%, #fff0 80%)
+      background: linear-gradient(90deg, #ff3a56 0%, #fff0 80%);
+      box-shadow: -5px 0px 5px -2px #fd4c7e30;
     }
 
     .card-footer .run-button {
@@ -87,6 +88,7 @@
     .card-footer .run-button:hover,{
       background-color: transparent !important;
       background: linear-gradient(270deg, #02dbb2 0%, #fff0 80%);
+      box-shadow: 5px 0px 5px -2px #48ffd43b;
     }
 
     .card-footer .run-button.running .run-icon {
