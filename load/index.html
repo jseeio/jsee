@@ -4,13 +4,20 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title>JSEE Schema Loader</title>
+    <style>
+      body {
+        font-family: sans-serif;
+      }
+      #jsee-container {
+        max-width: 1100px;
+      }
+    </style>
   </head>
   <body>
     <div id="jsee-container"></div>
-    <div id="txt-container">
-      <p>You can use this script for testing purposes. Placing your apps in the <b>apps</b> folder (e.g. <code>./apps/myapp</code> will make it possible to load it with <code>load.html?s=myapp</code> </p>
-    </div>
-    <script src="dist/jsee.js" type="text/javascript"></script>
+    <script src="/dist/jsee.js" type="text/javascript"></script>
+    <script>window.JSEE || document.write('<script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@latest/dist/jsee.runtime.js">\x3C/script>')</script>
+    <script>window.JSEE || document.write('<script src="https://unpkg.com/@jseeio/jsee@latest/dist/jsee.runtime.js">\x3C/script>')</script>
     <script>
       var params = new URLSearchParams(window.location.search)
       var schemaStr = params.get('s')
@@ -26,9 +33,6 @@
           container: document.getElementById('jsee-container'),
           schema: schema
         })
-      } else {
-        document.getElementById('port-container').style.display = 'none'
-        document.getElementById('txt-container').style.display = 'block'
       }
     </script>
   </body>
