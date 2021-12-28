@@ -3,9 +3,9 @@ require('expect-puppeteer')
 page.setDefaultTimeout(1000)
 
 const port = 8080
-const urlSchema = (name) => `http://localhost:${port}/load.html?s=/test/${name}.schema.json`
+const urlSchema = (name) => `http://localhost:${port}/load/?s=/test/${name}.schema.json`
 const urlHTML = (name) => `http://localhost:${port}/test/${name}.html`
-const urlQuery = (schema) => `http://localhost:${port}/load.html?s=${JSON.stringify(schema)}`
+const urlQuery = (schema) => `http://localhost:${port}/load/?s=${JSON.stringify(schema)}`
 
 describe('Initial test', () => {
   beforeAll(async () => {

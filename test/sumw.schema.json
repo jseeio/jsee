@@ -2,8 +2,6 @@
   "model": {
     "name": "sum",
     "type": "function",
-    "title": "title",
-    "description": "description",
     "container": "args",
     "url": "example-sum.js",
     "autorun": true,
