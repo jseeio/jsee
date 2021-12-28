@@ -99,7 +99,23 @@
 
     .input, .textarea, .select select {
       border-color: #e8e8e8;
+      border-top-left-radius: 0;
     }
+
+    .input:focus, .textarea:focus, .select select:focus, .is-focused.input, .is-focused.textarea, .select select.is-focused, .input:active, .textarea:active, .select select:active, .is-active.input, .is-active.textarea, .select select.is-active {
+      border-color: #7ab8e6;
+      box-shadow: 0 0 0 0.125em rgba(72, 139, 199, 0.25);
+    }
+
+    #inputs .field > label:first-child {
+      background: #f2f2f2;
+      padding: 1px 5px;
+      margin-top: 2px;
+      display: inline-block;
+      border-top-left-radius: 5px;
+      border-top-right-radius: 5px;
+    }
+
   }
 </style>
 <template>
