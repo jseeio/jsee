@@ -1,10 +1,17 @@
 # Focus on code, not UI
 
-JSEE is a highly opinionated GUI wrapper for processing tasks. Not even close to R's [shiny](https://shiny.rstudio.com/) or Python's [streamlit](https://streamlit.io/). Mostly used in [StatSim Apps](https://statsim.com/#apps) and [JSEE.io](https://jsee.io).
+## Execution environment
 
-JSEE is based on the idea of declarative interface design and reactivity. Instead of writing a "glue" front-end code, you can declare inputs/outputs of a model in a JSON schema and JSEE will do the rest. JSEE creates a Vue app based on the provided schema, parses files, loads needed libraries, orchestrates communication between code and GUI and uses Web Workers to run everything smoothly. It's not a swiss-army knife, not a framework. JSEE solves one specific task - wrapping algorithms in a simple web interface.
+JSEE is a browser-based environment for processing tasks. It creates a graphical interface, executes code in a web worker or via API, bridges all pieces together into a user-friendly web app. In some cases, JSEE does all of that automatically, without any configuration. And when the configuration is required, it's just one JSON file with an [intuitive structure](#schema). 
+
+## Inputs and outputs
+
+JSEE works best with functional tasks and one-way flow from inputs to outputs (i.e., inputs → processing → outputs). You can also extend it to more complex scenarios, like inputs → preprocessing → updated inputs → processing → outputs or inputs → processing → outputs → custom renderer. Even though many computational tasks have a functional form, some problems require more complex interactions between a user interface and code. For such cases, JSEE is probably too constrained. That makes it not as universal as R's [shiny](https://shiny.rstudio.com/) or Python's [streamlit](https://streamlit.io/).
 
 ## How it works
+
+Instead of dealing with raw HTML tags, input elements or charts, JSEE makes it possible to work on a higher level and describe only `inputs` and `outputs` in a JSON schema. It similarly handles code execution, by checking the `model` part of that JSON object. Those three parts are the most important for the future app. In many cases JSEE can generate a new schema automatically by analyzing the code alone. For example, it's possible to extract a list function arguments and use them as model inputs. When JSEE receives the JSON schema it creates a new Vue app based on it and initializes a new worker for code execution. The final app can take inputs from a user, parse files, load needed libraries, orchestrate communication between code and GUI, use Web Workers to run everything smoothly
+
 ```
              Schema   Model   Render*
     DEV ->    json    js/py     js
@@ -23,20 +30,22 @@ JSEE is based on the idea of declarative interface design and reactivity. Instea
 * - optional
 ```
 
-JSEE takes a schema object that contains five main blocks:
-
-- `model` - describes a model/script (its location, is it a function or class, should it be called automatically on every GUI change)
-- `render` - visualization part (optional)
-- `design` - overall appearance (optional)
+JSEE takes a schema object that contains three main blocks:
+- `model` - describes a model/script/API (its location, is it a function or class, should it be called automatically on every GUI change or not)
 - `inputs` - list of inputs and their descriptions
-- `outputs` - list of outputs and their descriptions (optional)
+- `outputs` - list of outputs and their descriptions
 
-### Config/schema object
+Two extra blocks can be provided for further customization
+- `render` - visualization part (optional). Defines custom rendering code.
+- `design` - overall appearance (optional). Defines how the app looks overwriting defaults.
+
+
+### Schema
 
 - `model` - Contains main parameters of the model/script
-  - `url` (string) - URL of a JS/Python file to load, or:
-  - `code` (function) - It's possible to pass functions directly to JSEE instead of using an URL
-  - `name` (string) - Name of the callable object. Default value is taken from `url` or `code`
+  - `url` (string) - URL of a JS/Python script or POST/GET API
+  - `code` (function) - It's possible to pass code directly to JSEE instead of using an URL
+  - `name` (string) - Name of the executed object. Default value is taken from `url` or `code`
   - `autorun` (boolean, default - `false`) - Defines if the script should be evaluated on each input change event
   - `type` (string, default - `function`) - What kind of script is loaded. Influences how the code is initializated. Possible values: 
     - `function`
@@ -57,4 +66,4 @@ JSEE takes a schema object that contains five main blocks:
 - `inputs` - Inputs definition
 - `outputs` - Outputs definition
 
-JSEE is a reactive version of [StatSim](https://statsim.com)'s [Port](https://github.com/statsim/port). Still work in progress. Expect API changes.
+JSEE is a reactive branch of [StatSim](https://statsim.com)'s [Port](https://github.com/statsim/port). It's still work in progress. Expect API changes.
