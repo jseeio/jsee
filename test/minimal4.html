@@ -1,0 +1,22 @@
+<html>
+  <div id="jsee-container">
+  <script src="/dist/jsee.js"></script>
+  <script>
+    new JSEE({
+      schema: {
+        "model": {
+          "name": "div",
+          "code": "function div (a) { ruturn a / 2 }"
+        },
+        "inputs": [
+          {
+            "name": "a",
+            "type": "int",
+            "value": 0
+          }
+        ]
+      },
+      container: '#jsee-container'
+    })
+  </script>
+</html>

@@ -48,9 +48,17 @@ function isObject (item) {
 }
 
 function getName (code) {
-  const words = code.split(' ')
-  const functionIndex = words.findIndex((word) => word == 'function')
-  return words[numberIndex + 1]
+  switch (typeof code) {
+    case 'function':
+      return code.name
+    case 'string':
+      const words = code.split(' ')
+      const functionIndex = words.findIndex((word) => word == 'function')
+      const name = words[functionIndex + 1]
+      return name.includes('(') ? undefined : name
+    default:
+      return undefined
+  }
 }
 
 // Return input value
@@ -103,19 +111,27 @@ function getFunctionContainer (target) {
 }
 
 export default class JSEE {
-  constructor (params, alt) {
-    // Check if JSEE was initialized with 2 args rather than 1 obj
-    if (('model' in params) || !(typeof alt === 'undefined')) {
+  constructor (params, alt1, alt2) {
+    // JSEE(fun, container, verbose)
+    // JSEE({}, container, verbose)
+    // JSEE(
+
+    // Check if JSEE was initialized with args rather than with a params object
+    if (('model' in params) || (typeof params === 'string') || (typeof params === 'function') || !(typeof alt === 'undefined')) {
       params = {
         'schema': params,
-        'container': alt
+        'container': alt1,
+        'verbose': alt2
       }
     }
 
+    // Set global verbose flag
     verbose = !(params.verbose === false)
 
-    log('Initializing JSEE with parameters: ', params)
+    // Previous naming
     params.schema = params.schema || params.config
+
+    log('Initializing JSEE with parameters: ', params)
     this.params = params
     this.__version__ = VERSION
 
@@ -123,6 +139,19 @@ export default class JSEE {
     if (params.schema) {
       if (typeof params.schema === 'object') {
         log('Received schema as object')
+        if (typeof params.schema.model === 'function') {
+          params.schema.model = {
+            code: params.schema.model
+          }
+        }
+        this.init(params.schema)
+      } else if (typeof params.schema === 'function') {
+        log('Received schema as function')
+        params.schema = {
+          model: {
+            code: params.schema,
+          }
+        }
         this.init(params.schema)
       } else if (typeof params.schema === 'string') {
         log('Received schema as string')
@@ -170,12 +199,12 @@ export default class JSEE {
             log('Loaded code from:', url)
             resolve(res)
           })
-      } else if (typeof schema === 'function') {
-        log('Code is: schema')
-        resolve(schema)
-      } else if (typeof schema.model === 'function') {
-        log('Code is: schema.model')
-        resolve(schema.model)
+      // } else if (typeof schema === 'function') {
+      //   log('Code is: schema')
+      //   resolve(schema)
+      // } else if (typeof schema.model === 'function') {
+      //   log('Code is: schema.model')
+      //   resolve(schema.model)
       } else if (!(typeof schema.model.code === 'undefined')) {
         log('Code is: schema.model.code')
         resolve(schema.model.code)
@@ -226,9 +255,13 @@ export default class JSEE {
     }
 
     // Update model name if absent
-    if ((typeof schema.model.name === 'undefined') && (schema.model.url) && (schema.model.url.includes('.js'))) {
-      schema.model.name = schema.model.url.split('/').pop().split('.')[0]
-      log('Use model name from url: ', schema.model.name)
+    if (typeof schema.model.name === 'undefined'){
+      if ((schema.model.url) && (schema.model.url.includes('.js'))) {
+        schema.model.name = schema.model.url.split('/').pop().split('.')[0]
+        log('Use model name from url: ', schema.model.name)
+      } else if (schema.model.code) {
+        schema.model.name = getName(schema.model.code)
+      }
     }
 
     // At this point we have all code in model.code or api
@@ -372,10 +405,15 @@ export default class JSEE {
 
     if (this.schema.model.worker) {
       // Worker: Initialize worker with the model
-      if (typeof this.schema.model.code !== 'string') {
-        // 2 -> 1
+      // 2 -> 1
+      if (typeof this.schema.model.code === 'function') {
         log('Convert code in schema to string for WebWorker')
         this.schema.model.code = this.schema.model.code.toString()
+      }
+      // Wrap anonymous functions
+      if (!this.schema.model.name) {
+        this.schema.model.code = `function anon () { return (${this.schema.model.code})(...arguments) }`
+        this.schema.model.name = 'anon'
       }
       this.worker.postMessage(this.schema.model)
     } else {

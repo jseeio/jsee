@@ -1,0 +1,15 @@
+<!-- Minimal example -->
+<html>
+  <div id="jsee-container">
+  <script src="/dist/jsee.js"></script>
+  <script>window.JSEE || document.write('<script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@latest/dist/jsee.runtime.js">\x3C/script>')</script>
+  <script>window.JSEE || document.write('<script src="https://unpkg.com/@jseeio/jsee@latest/dist/jsee.runtime.js">\x3C/script>')</script>
+  <script>
+    function mul (a, b) {
+      return a * b
+    }
+    new JSEE({
+      model: mul
+    }, '#jsee-container')
+  </script>
+</html>

@@ -44,19 +44,40 @@ describe('Initial test (worker)', () => {
   })
 })
 
-describe('Some edge cases', () => {
+describe('Minimal examples', () => {
   const schema = {
     'model': {
       'code': 'function (a, b) { return a / b }', // TODO: check '+'
     }
   }
-  test('Minimal', async () => {
+  test('Code only (text) (main window)', async () => {
     schema.model.worker = false
     await page.goto(urlQuery(schema))
     await expect(page).toFill('#a', '100')
     await expect(page).toFill('#b', '4')
     await expect(page).toClick('button', { text: 'Run' })
     await expect(page).toMatch('25')
+  })
+  test('Code instead of schema (function)', async () => {
+    await page.goto(urlHTML('minimal1'))
+    await expect(page).toFill('#a', '100')
+    await expect(page).toFill('#b', '4')
+    await expect(page).toClick('button', { text: 'Run' })
+    await expect(page).toMatch('400')
+  })
+  test('Code instead of model (function)', async () => {
+    await page.goto(urlHTML('minimal2'))
+    await expect(page).toFill('#a', '100')
+    await expect(page).toFill('#b', '4')
+    await expect(page).toClick('button', { text: 'Run' })
+    await expect(page).toMatch('400')
+  })
+  test('Code instead of schema (anonymous function)', async () => {
+    await page.goto(urlHTML('minimal3'))
+    await expect(page).toFill('#a', '100')
+    await expect(page).toFill('#b', '4')
+    await expect(page).toClick('button', { text: 'Run' })
+    await expect(page).toMatch('400')
   })
 })
 
