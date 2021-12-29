@@ -74,7 +74,7 @@ function getValue (input) {
   }
 }
 
-function getType (model) {
+function getModelType (model) {
   if (model.code && typeof model.code === 'string' && model.code.split(' ').map(v => v.trim()).includes('def')) {
     return 'py'
   } else if (model.url) {
@@ -112,9 +112,6 @@ function getFunctionContainer (target) {
 
 export default class JSEE {
   constructor (params, alt1, alt2) {
-    // JSEE(fun, container, verbose)
-    // JSEE({}, container, verbose)
-    // JSEE(
 
     // Check if JSEE was initialized with args rather than with a params object
     if (('model' in params) || (typeof params === 'string') || (typeof params === 'function') || !(typeof alt === 'undefined')) {
@@ -136,8 +133,8 @@ export default class JSEE {
     this.__version__ = VERSION
 
     // Get schema then initialize a new environment
-    if (params.schema) {
-      if (typeof params.schema === 'object') {
+    switch (typeof params.schema) {
+      case 'object':
         log('Received schema as object')
         if (typeof params.schema.model === 'function') {
           params.schema.model = {
@@ -145,7 +142,8 @@ export default class JSEE {
           }
         }
         this.init(params.schema)
-      } else if (typeof params.schema === 'function') {
+        break
+      case 'function':
         log('Received schema as function')
         params.schema = {
           model: {
@@ -153,7 +151,8 @@ export default class JSEE {
           }
         }
         this.init(params.schema)
-      } else if (typeof params.schema === 'string') {
+        break
+      case 'string':
         log('Received schema as string')
         this.schemaUrl = params.schema.indexOf('json') ? params.schema : params.schema + '.json'
         fetch(this.schemaUrl)
@@ -165,7 +164,10 @@ export default class JSEE {
           .catch((err) => {
             console.error(err)
           })
-      }
+        break
+      default:
+        log('No schema provided')
+        notyf.error('No schema provided')
     }
   }
 
@@ -199,12 +201,6 @@ export default class JSEE {
             log('Loaded code from:', url)
             resolve(res)
           })
-      // } else if (typeof schema === 'function') {
-      //   log('Code is: schema')
-      //   resolve(schema)
-      // } else if (typeof schema.model === 'function') {
-      //   log('Code is: schema.model')
-      //   resolve(schema.model)
       } else if (!(typeof schema.model.code === 'undefined')) {
         log('Code is: schema.model.code')
         resolve(schema.model.code)
@@ -251,7 +247,7 @@ export default class JSEE {
 
     // Infer model type
     if (typeof schema.model.type === 'undefined') {
-      schema.model.type = getType(schema.model)
+      schema.model.type = getModelType(schema.model)
     }
 
     // Update model name if absent

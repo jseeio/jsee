@@ -1,5 +1,5 @@
 <template>
-  <div class="card mb-5" v-if="output.value">
+  <div class="card mb-5" v-if="!(typeof output.value === 'undefined')">
     <header class="card-header">
       <p class="card-header-title is-size-6" v-if="output.name">
         {{ output.name }}
@@ -23,12 +23,6 @@
         <pre>{{ output.value }}</pre>
       </div>
     </div>
-    <!-- 
-    <footer class="card-footer" v-if="output.filename">
-      <a v-on:click="save()" class="card-footer-item">Save</a>
-      <a v-on:click="copy()" class="card-footer-item">Copy</a>
-    </footer>
-    -->
   </div>
 </template>
 

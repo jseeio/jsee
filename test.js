@@ -140,3 +140,21 @@ describe('Classes', () => {
     await expect(page).toMatch('200')
   })
 })
+
+describe('Some edge cases', () => {
+  test('Result is zero', async () => {
+    const schema = {
+      'model': {
+        'code': 'function mul (a, b) { return a * b }',
+      }
+    }
+    schema.model.worker = false
+    await page.goto(urlQuery(schema))
+    await expect(page).toFill('#a', '0')
+    await expect(page).toFill('#b', '0')
+    await expect(page).toClick('button', { text: 'Run' })
+    await expect(page).toMatch('Copy')
+  })
+})
+
+
