@@ -1,8 +1,10 @@
 {
   "name": "@jseeio/jsee",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "",
   "main": "dist/jsee.js",
+  "unpkg": "dist/jsee.js",
+  "jsdelivr": "dist/jsee.js",
   "private": false,
   "scripts": {
     "build-dev": "webpack --mode=development --progress --stats-children --env DEVELOPMENT",
@@ -14,6 +16,14 @@
   },
   "author": "Anton Zemlyansky",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jseeio/jsee"
+  },
+  "homepage": "https://jsee.org",
+  "bugs": {
+    "url": "https://github.com/jseeio/jsee/issues"
+  },
   "dependencies": {
     "@mdi/font": "^6.5.95",
     "bulma": "^0.9.3",

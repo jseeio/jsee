@@ -97,7 +97,8 @@ function getParamNames (func) {
 
 function getInputs (model) {
   if (model.code) {
-    const params = getParamNames(model.code)
+    const params = getParamNames(model.code).filter(p => !['(', ')', '#', '{', '}'].some(c => p.includes(c)))
+    log('Trying to infer inputs from params:', params)
     return params.map(p => ({
       'name': p,
       'type': 'string'

@@ -16,7 +16,7 @@ Minimal example:
 
 ↳ [Result](https://jsee.org/test/minimal1.html) (if you see nothing, it's probably because today is Dec 29, and the CDN hasn't updated its cache yet)
 
-## Execution environment
+## JavaScript Execution Environment
 
 JSEE is a browser-based environment for processing tasks. It creates a graphical interface, executes code in a web worker or via API, bridges all pieces together into a user-friendly web app. In some cases, JSEE does all of that automatically, without any configuration. And when the configuration is required, it's just one JSON file with an [intuitive structure](#schema). 
 
@@ -32,15 +32,15 @@ Instead of dealing with raw HTML tags, input elements or charts, JSEE makes it p
 
 ```
             Schema   Model   Render*
-   DEV ─►    json    js/py     js
-              │        │        │
+   DEV  -►   json    js/py     js
+              |        |        |
            ┌──▼────────▼────────▼───┐
            │      new JSEE (...)    │
-           └──┬───────────────┬─────┘
-              │               │
-           ┌──▼──┐     ┌──────▼─────┐ ◄┐ tf.js
- USER  ◄─► │ GUI │ ◄─► │    Model   │ ◄│ pyodide
-           └─────┘     └────────────┘ ◄┘ wasm
+           └────────────────────────┘
+              |               |
+           ┌──▼──┐     ┌──────▼─────┐ ◄~ tf.js
+ USER  ◄-► │ GUI │ ◄-► │    Model   │ ◄~ pyodide
+           └─────┘     └────────────┘ ◄~ wasm
              Vue³        WebWorker*
 
  * - optional

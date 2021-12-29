@@ -1,3 +1,6 @@
+## [0.2.8]
+- [x] Fix no input case
+
 ## [0.2.7]
 - [x] Show output when result is `0`
 - [x] Updated style for buttons and inputs
