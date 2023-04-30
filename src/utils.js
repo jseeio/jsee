@@ -19,6 +19,44 @@ function getModelFuncJS (model, target, log=console.log) {
   }
 }
 
+function getUrl (url) {
+  let newUrl
+  try {
+    newUrl = (new URL(url)).href
+  } catch (e) {
+    newUrl = (new URL(url, 'https://cdn.jsdelivr.net/npm/')).href
+  }
+  return newUrl
+}
+
+function importScriptAsync (url, async=true) {
+  url = getUrl(url)
+  return new Promise((resolve, reject) => {
+    try {
+      const scriptElement = document.createElement('script')
+      scriptElement.type = 'text/javascript'
+      scriptElement.async = async
+      scriptElement.src = url
+      scriptElement.addEventListener('load', (ev) => {
+        resolve({ status: true })
+      })
+      scriptElement.addEventListener('error', (ev) => {
+        reject({
+          status: false,
+          message: `Failed to import ＄{url}`
+        })
+      })
+      document.body.appendChild(scriptElement);
+    } catch (error) {
+      reject(error)
+    }
+  })
+}
+
+function importScripts (...imports) {
+  return Promise.all(imports.map(importScriptAsync))
+}
+
 function getModelFuncAPI (model, log=console.log) {
   switch (model.type) {
     case 'get':
@@ -48,5 +86,7 @@ function getModelFuncAPI (model, log=console.log) {
 
 module.exports = {
   getModelFuncJS,
-  getModelFuncAPI
+  getModelFuncAPI,
+  importScripts,
+  getUrl
 }

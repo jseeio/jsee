@@ -178,14 +178,13 @@ export default class JSEE {
     notyf.success(txt)
   }
 
-  init (schema) {
-    this.loadCode(schema).then((code) => {      // Following inits create:
-      this.initSchema(schema, code)             // -> this.schema
-      this.initVue()                            // -> this.app, this.data
-      this.initWorker()                         // -> this.worker
-      this.initRender()                         // -> this.renderFunc
-      this.initModel()                          // -> this.modelFunc (depends on this.worker)
-    })
+  async init (schema) {
+    const code = await this.loadCode(schema)
+    this.initSchema(schema, code)             // -> this.schema
+    this.initVue()                            // -> this.app, this.data
+    this.initWorker()                         // -> this.worker
+    this.initRender()                         // -> this.renderFunc
+    this.initModel()                          // -> this.modelFunc (depends on this.worker)
   }
 
   loadCode (schema) {
@@ -261,6 +260,19 @@ export default class JSEE {
       } else if (schema.model.code) {
         schema.model.name = getName(schema.model.code)
       }
+    }
+
+    // Put autorun, worker and imports inside the model block
+    ['autorun', 'worker', 'imports'].forEach(key => {
+      if (typeof schema[key] !== 'undefined') {
+        schema.model[key] = schema[key]
+        delete schema[key]
+      }
+    })
+
+    // Check if imports are string
+    if (typeof schema.model.imports === 'string') {
+      schema.model.imports = [schema.model.imports]
     }
 
     // At this point we have all code in model.code or api
@@ -393,7 +405,7 @@ export default class JSEE {
     document.head.appendChild(script)
   }
 
-  initJS () {
+  async initJS () {
     // 1. String input <- loaded from url or code(string)
     // 2. Target object (can be function, class or a function with async init <- code(object)
     // 3. Model function
@@ -436,13 +448,15 @@ export default class JSEE {
         target = this.schema.model.code
       }
 
-      // Need promise here in case of async init
-      Promise.resolve(utils.getModelFuncJS(this.schema.model, target, log))
-        .then(m => {
-          this.overlay.hide()
-          notyf.success('Loaded: JS model')
-          this.modelFunc = m 
-        })
+      if (this.schema.model.imports && this.schema.model.imports.length) {
+        log('Loading imports from schema')
+        await utils.importScripts(...this.schema.model.imports)
+        notyf.success('Loaded: JS imports')
+      }
+
+      this.modelFunc = await utils.getModelFuncJS(this.schema.model, target, log)
+      this.overlay.hide()
+      notyf.success('Loaded: JS code')
     }
   }
 

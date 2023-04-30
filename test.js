@@ -162,4 +162,38 @@ describe('Some edge cases', () => {
   })
 })
 
+describe('Imports', () => {
+  const schema = {
+    'model': {
+      'name': 'kebab',
+      'type': 'function',
+      'container': 'args',
+      'code': `
+      function kebab (str) {
+        return _.kebabCase(str)
+      }
+      `
+    },
+    'imports': 'lodash@4.17.21/lodash.min.js',
+    'inputs': [
+      { 'name': 'str', 'type': 'string', 'default': 'FooBar' },
+    ]
+  }
+  test('Window', async () => {
+    schema.model.worker = false  
+    await page.goto(urlQuery(schema))
+    await expect(page).toClick('button', { text: 'Run' })
+    await expect(page).toMatchTextContent('foo-bar')
+  })
+  test('Worker', async () => {
+    schema.model.worker = true
+    await page.goto(urlQuery(schema))
+    // await 1 sec
+    await (new Promise(resolve => setTimeout(resolve, 1000)))
+    await expect(page).toClick('button', { text: 'Run' })
+    await (new Promise(resolve => setTimeout(resolve, 1000)))
+    await expect(page).toMatchTextContent('foo-bar')
+    await (new Promise(resolve => setTimeout(resolve, 1000)))
+  })
+})
 

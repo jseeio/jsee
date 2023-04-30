@@ -18,6 +18,17 @@ function initJS (model) {
   log('Init JS')
   this.container = model.container
 
+  // Load imports
+  if (model.imports && model.imports.length) {
+    log('Loading imports...')
+    for (let imp of model.imports) {
+      // Try creating an url
+      const url = utils.getUrl(imp)
+      log('Importing:', url)
+      importScripts(url)
+    }
+  }
+
   if (model.code) {
     log('Load code as a string')
     // https://github.com/altbdoor/blob-worker/blob/master/blobWorker.js
