@@ -85,12 +85,8 @@
   	  			type="file"
   	  		>
           <span class="file-cta">
-            <span class="file-icon">
-              <span v-if="input.file && input.file.name">✓</span>
-              <span v-else>↥</span>
-  	  			</span>
             <span class="file-label">
-              Choose a file…
+              Open
             </span>
           </span>
           <span class="file-name">

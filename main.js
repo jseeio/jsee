@@ -124,6 +124,7 @@ export default class JSEE {
     }
 
     // Set global verbose flag
+    // This check sets verbose to true in all cases except when params.verbose is explicitly set to false
     verbose = !(params.verbose === false)
 
     // Previous naming
@@ -133,7 +134,8 @@ export default class JSEE {
     this.params = params
     this.__version__ = VERSION
 
-    // Get schema then initialize a new environment
+    // Standartize schema then initialize a new environment
+
     switch (typeof params.schema) {
       case 'object':
         log('Received schema as object')
@@ -177,12 +179,12 @@ export default class JSEE {
   }
 
   init (schema) {
-    this.loadCode(schema).then((code) => { // -> code
-      this.initSchema(schema, code) // -> this.schema
-      this.initVue() // -> this.app, this.data
-      this.initWorker() // -> this.worker
-      this.initRender() // -> this.renderFunc
-      this.initModel() // -> this.modelFunc (depends on this.worker)
+    this.loadCode(schema).then((code) => {      // Following inits create:
+      this.initSchema(schema, code)             // -> this.schema
+      this.initVue()                            // -> this.app, this.data
+      this.initWorker()                         // -> this.worker
+      this.initRender()                         // -> this.renderFunc
+      this.initModel()                          // -> this.modelFunc (depends on this.worker)
     })
   }
 

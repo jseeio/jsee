@@ -85,7 +85,7 @@
       justify-content: right;
     }
 
-    .card-footer .run-button:hover,{
+    .card-footer .run-button:hover {
       background-color: transparent !important;
       background: linear-gradient(270deg, #02dbb2 0%, #fff0 80%);
       box-shadow: 5px 0px 5px -2px #48ffd43b;
@@ -93,6 +93,13 @@
 
     .card-footer .run-button.running .run-icon {
       color: #016c5c !important;
+    }
+
+    .example-button {
+      margin-top: 3px;
+      padding: 5px 10px;
+      border-radius: 5px !important;
+      height: auto;
     }
 
     .field {
@@ -129,8 +136,9 @@
           <p v-if="$parent.model.description">{{ $parent.model.description }}</p>
         </div>
       </div>
-      <div class="columns">
+      <div class="columns is-multiline">
         <div class="column" v-bind:class="($parent.design && $parent.design.grid && ($parent.design.grid.length > 0)) ? 'is-' + $parent.design.grid[0] : ''">
+          <!-- Inputs -->
           <div class="card bordered">
             <div class="card-content" id="inputs" v-if="$parent.inputs && $parent.inputs.length > 0">
               <ul>
@@ -160,8 +168,21 @@
               </button>
             </footer>
           </div>
+          <!-- Examples -->
+          <div v-if="$parent.examples">
+            <p style="margin-top: 20px">Examples</p>
+            <div v-for="(example, index) in $parent.examples">
+              <button
+                v-on:click="$parent.reset(example)"
+                class="button is-small example-button"
+              >
+                {{ example }}
+              </button>
+            </div>
+          </div>
         </div>
-        <div class="column" id="outputs">
+        <div class="column" id="outputs" v-bind:class="($parent.design && $parent.design.grid && ($parent.design.grid.length > 1)) ? 'is-' + $parent.design.grid[1] : ''">
+          <!-- Outputs -->
           <div v-if="$parent.outputs">
             <div v-for="(output, index) in $parent.outputs">
               <vue-output v-bind:output="output" v-on:notification="$parent.notify($event)"></vue-output>

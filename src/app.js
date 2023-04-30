@@ -20,9 +20,15 @@ const components = {
 const filtrex = require('filtrex')
 const JsonViewer = require('vue3-json-viewer').default
 
-function resetInputs (inputs) {
-  inputs.forEach(input => {
-    if (input.default) { 
+function resetInputs (inputs, example) {
+  inputs.forEach((input, index) => {
+    if (example && input.name && example[input.name]) {
+      // Object
+      input.value = example[input.name]
+    } else if (example && example[index]) {
+      // Array
+      input.value = example[index]
+    } else if (input.default) { 
       input.value = input.default 
     } else {
       switch (input.type) {
@@ -161,11 +167,13 @@ function createVueApp (env, mountedCallback, logMain) {
     },
     methods: {
       display (index) {
-        const res = displayFunctions[index](this.$data)
+        const res = index < displayFunctions.length ? displayFunctions[index](this.$data) : true
         return res
       },
-      reset () {
-        resetInputs(this.inputs)
+      reset (example) {
+        // Reset input values to default ones
+        // If example is provided, use it as a new default
+        resetInputs(this.inputs, example)
         this.$nextTick(() => {
           this.dataChanged = false
         })
@@ -180,7 +188,7 @@ function createVueApp (env, mountedCallback, logMain) {
       notify (msg) {
         env.notify(msg)
       }
-    },
+    }
   })
 
   if (framework !== false) {
