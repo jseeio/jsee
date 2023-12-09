@@ -1,0 +1,28 @@
+<html>
+  <div id="jsee-container">
+  <script src="/dist/jsee.js"></script>
+  <script>
+
+    new JSEE({
+      schema: {
+        "model": {
+          "name": "kebab",
+          "type": "function",
+          "container": "args",
+          "code": `
+            function kebab (str) {
+              return _.kebabCase(str)
+            }
+          `,
+          "worker": false,
+        },
+        "imports": "lodash@4.17.21/lodash.min.js",
+        "inputs": [
+          { "name": "str", "type": "string", "default": 'FooBar' },
+        ]
+      },
+      container: '#jsee-container',
+      verbose: true
+    })
+  </script>
+</html>

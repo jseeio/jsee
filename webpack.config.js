@@ -16,6 +16,7 @@ module.exports = (env) => {
         export: 'default',
       },
     },
+    // Define loaders
     module: {
       rules: [
         {

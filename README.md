@@ -14,7 +14,8 @@ Minimal example:
 </html>
 ```
 
-↳ [Result](https://jsee.org/test/minimal1.html) (if you see nothing, it's probably because today is Dec 29, and the CDN hasn't updated its cache yet)
+↳ [Result](https://jsee.org/test/minimal1.html)
+
 
 ## JavaScript Execution Environment
 
@@ -51,13 +52,29 @@ JSEE takes a schema object that contains three main blocks:
 - `inputs` - list of inputs and their descriptions
 - `outputs` - list of outputs and their descriptions
 
-Two extra blocks can be provided for further customization
+Extra blocks can be provided for further customization
 - `render` - visualization part (optional). Defines custom rendering code.
 - `design` - overall appearance (optional). Defines how the app looks overwriting defaults.
+- `imports` - a list of urls (optional). Defines a list of scripts to load before the model is initialized.
+  ```json
+  "imports": [
+    "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs",
+    "https://cdn.jsdelivr.net/pyodide/v0.17.0/full/pyodide.js"
+  ]
+  ```
+- `examples` - a list of examples (optional). Defines a list of examples that can be used to overwrite inputs.
+  ```json
+  "examples": [
+    { "input": "My name is Anton and I am" },
+  ]
+  ```
 
 
-### Schema
+## Playground
+- [Codepen](https://codepen.io/jseeio/pen/NWayjJe)
 
+
+## Schema
 - `model` - Contains main parameters of the model/script
   - `url` (string) - URL of a JS/Python script or POST/GET API
   - `code` (function) - It's possible to pass code directly to JSEE instead of using an URL
@@ -79,7 +96,18 @@ Two extra blocks can be provided for further customization
 - `design` - Design parameters
   - `layout` - Layout for the model/input/output blocks. If it's empty and the JSEE container is not, JSEE uses inner HTML as a template. If the container is empty too, it uses the default `blocks` template.
   - `framework` - Design framework to use. If a JavaScript object with the same name is present in a global context, JSEE loads it too (using Vue's `use` method).
-- `inputs` - Inputs definition
+- `inputs` - Inputs definition. 
+  - `name`* - Name of the input
+  - `type`* - Type. Possible types:
+    - `int`, `float` or `number` - Number
+    - `string` - String
+    - `text` - Textarea
+    - `checkbox` or `bool` - Checkbox
+    - `select` or `categorical` - Select (one of many `options`)
+    - `file` - File Input
+    - `action` or `button` - Button (its `name` will be passed as a `caller` to the model)
+  - `default` - Default value
 - `outputs` - Outputs definition
+- `examples` - List of examples
 
 JSEE is a reactive branch of [StatSim](https://statsim.com)'s [Port](https://github.com/statsim/port). It's still work in progress. Expect API changes.

@@ -28,8 +28,8 @@ function resetInputs (inputs, example) {
     } else if (example && example[index]) {
       // Array
       input.value = example[index]
-    } else if (input.default) { 
-      input.value = input.default 
+    } else if (input.default) {
+      input.value = input.default
     } else {
       switch (input.type) {
         case 'int':
@@ -128,7 +128,7 @@ function createVueApp (env, mountedCallback, logMain) {
   let render
   if (
     env.schema.design
-    && env.schema.design.template 
+    && env.schema.design.template
     && (
       typeof env.schema.design.template === 'string'
       || env.schema.design.template === false
@@ -157,7 +157,7 @@ function createVueApp (env, mountedCallback, logMain) {
         handler (v) {
           this.dataChanged = true // Used in the reset button
           if (this.model.autorun) {
-            this.run()
+            this.run('autorun')
           }
         }
       }
@@ -167,7 +167,9 @@ function createVueApp (env, mountedCallback, logMain) {
     },
     methods: {
       display (index) {
-        const res = index < displayFunctions.length ? displayFunctions[index](this.$data) : true
+        const res = index < displayFunctions.length
+          ? displayFunctions[index](this.$data)
+          : true
         return res
       },
       reset (example) {
@@ -178,9 +180,9 @@ function createVueApp (env, mountedCallback, logMain) {
           this.dataChanged = false
         })
       },
-      run () {
+      run (caller) {
         this.clickRun = true
-        env.run()
+        env.run(caller)
         setTimeout(() => {
           this.clickRun = false
         }, 150)

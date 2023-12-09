@@ -115,7 +115,7 @@ export default class JSEE {
   constructor (params, alt1, alt2) {
 
     // Check if JSEE was initialized with args rather than with a params object
-    if (('model' in params) || (typeof params === 'string') || (typeof params === 'function') || !(typeof alt === 'undefined')) {
+    if (('model' in params) || (typeof params === 'string') || (typeof params === 'function') || !(typeof alt1 === 'undefined')) {
       params = {
         'schema': params,
         'container': alt1,
@@ -184,7 +184,11 @@ export default class JSEE {
     this.initVue()                            // -> this.app, this.data
     this.initWorker()                         // -> this.worker
     this.initRender()                         // -> this.renderFunc
-    this.initModel()                          // -> this.modelFunc (depends on this.worker)
+    await this.initModel()                    // -> this.modelFunc (depends on this.worker)
+    if (this.schema.model.autorun) {
+      log('Autorun if enabled. Running the model (init)')
+      this.run('init')
+    }
   }
 
   loadCode (schema) {
@@ -353,11 +357,11 @@ export default class JSEE {
     }
   }
 
-  initModel () {
+  async initModel () {
     log('Initializing a model function')
     switch (this.schema.model.type) {
       case 'py':
-        this.initPython()
+        await this.initPython()
         break
       case 'tf':
         this.initTF()
@@ -366,7 +370,7 @@ export default class JSEE {
       case 'class':
       case 'async-init':
       case 'async-function':
-        this.initJS()
+        await this.initJS()
         break
       case 'get':
       case 'post':
@@ -378,7 +382,7 @@ export default class JSEE {
     }
   }
 
-  initPython () {
+  async initPython () {
     // Add loading indicator
     this.overlay.show()
     let script = document.createElement('script')
@@ -430,6 +434,13 @@ export default class JSEE {
     } else {
       // Main: Initialize model in main window
 
+      // Load imports if defined (before calling the model)
+      if (this.schema.model.imports && this.schema.model.imports.length) {
+        log('Loading imports from schema')
+        await utils.importScripts(...this.schema.model.imports)
+        notyf.success('Loaded: JS imports')
+      }
+
       // Target here represents raw JS object (e.g. class), not the final callable function
       let target
       if (typeof this.schema.model.code === 'string') {
@@ -446,12 +457,6 @@ export default class JSEE {
         }
       } else {
         target = this.schema.model.code
-      }
-
-      if (this.schema.model.imports && this.schema.model.imports.length) {
-        log('Loading imports from schema')
-        await utils.importScripts(...this.schema.model.imports)
-        notyf.success('Loaded: JS imports')
       }
 
       this.modelFunc = await utils.getModelFuncJS(this.schema.model, target, log)
@@ -484,7 +489,11 @@ export default class JSEE {
     document.head.appendChild(script)
   }
 
-  run () {
+  run (caller) {
+    // caller can be:
+    // 1. custom input button name
+    // 2. `run`
+    // 3. `autorun`
     const schema = this.schema
     const data = this.data
     log('Running the model...')
@@ -498,10 +507,13 @@ export default class JSEE {
       log('Pass inputs as object')
       inputValues = {}
       data.inputs.forEach(input => {
-        if (input.name) {
+        // Skip buttons
+        if (input.name && !(input.type == 'action' || input.type == 'button')) {
           inputValues[input.name] = getValue(input)
         }
       })
+      // Add caller to input values so we can change model behavior based on it
+      inputValues.caller = caller
     }
     log('Input values:', inputValues)
     // We have all input values here, pass them to worker, window.modelFunc or tf
@@ -548,13 +560,22 @@ export default class JSEE {
             res = this.modelFunc.apply(null, inputValues)
           } else {
             log('Applying inputs as object')
-            res = this.modelFunc(inputValues)
+            res = this.modelFunc(inputValues, log, async (res) => {
+              const r = await res
+              this.output(r)
+              await utils.delay(1)
+            })
           }
           log('modelFunc results:', res)
           Promise.resolve(res).then(r => { this.output(r) })
         }
         break
     }
+  }
+
+  async outputAsync (res) {
+    this.output(res)
+    await delay(1)
   }
 
   output (res) {
@@ -589,7 +610,7 @@ export default class JSEE {
     } else if (this.renderFunc) {
       // Pass results to a custom render function
       log('Calling a render function...')
-      this.renderFunc(res)
+      this.renderFunc(res, this)
     } else if (Array.isArray(res) && res.length) {
       // Result is array
       if (this.data.outputs && this.data.outputs.length) {

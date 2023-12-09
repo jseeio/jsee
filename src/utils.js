@@ -53,8 +53,13 @@ function importScriptAsync (url, async=true) {
   })
 }
 
-function importScripts (...imports) {
-  return Promise.all(imports.map(importScriptAsync))
+async function importScripts (...imports) {
+  // Load scripts in parallel
+  // return Promise.all(imports.map(importScriptAsync))
+  // Load scripts in sequence. Possible ordering issues.
+  for (const scriptUrl of imports) {
+    await importScriptAsync(scriptUrl);
+  }
 }
 
 function getModelFuncAPI (model, log=console.log) {
@@ -84,9 +89,14 @@ function getModelFuncAPI (model, log=console.log) {
   }
 }
 
+async function delay (ms) {
+  return new Promise(resolve => setTimeout(resolve, ms || 1))
+}
+
 module.exports = {
   getModelFuncJS,
   getModelFuncAPI,
   importScripts,
-  getUrl
+  getUrl,
+  delay
 }

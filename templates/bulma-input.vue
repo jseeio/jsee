@@ -98,6 +98,16 @@
     </div>
   </div>
 
+  <div class="field"  v-if="input.type == 'action' || input.type == 'button'">
+    <button 
+      v-on:click="$parent.$parent.run(input.name.toLowerCase().replace(/ /g, '_'))"
+      class="button is-small"
+      style="width: 100%; padding: 5px 0; margin-top: 8px; text-align: left;"
+    >
+      <span>&nbsp; {{ input.title ? input.title : input.name }} &nbsp;</span>
+    </button>
+  </div>
+
   <div class="field is-horizontal" v-if="input.type == 'group'">
     <div class="field-body">
       <vue-input v-for="(el, index) in input.elements" v-bind:input="el" ></vue-input>

@@ -188,12 +188,36 @@ describe('Imports', () => {
   test('Worker', async () => {
     schema.model.worker = true
     await page.goto(urlQuery(schema))
-    // await 1 sec
-    await (new Promise(resolve => setTimeout(resolve, 1000)))
     await expect(page).toClick('button', { text: 'Run' })
-    await (new Promise(resolve => setTimeout(resolve, 1000)))
     await expect(page).toMatchTextContent('foo-bar')
-    await (new Promise(resolve => setTimeout(resolve, 1000)))
+    // await (new Promise(resolve => setTimeout(resolve, 1000)))
   })
 })
 
+describe('Buttons, button titles and caller', () => {
+  const schema = {
+    'model': {
+      'name': 'callerRepeater',
+      'type': 'function',
+      'code': `function callerRepeater (inputs) {
+        return inputs.caller
+      }`
+    },
+    'inputs': [
+      { 'name': 'test_button', 'type': 'button', 'title': 'Test Button' },
+    ]
+  }
+  test('Window', async () => {
+    schema.model.worker = false  
+    await page.goto(urlQuery(schema))
+    await expect(page).toMatchTextContent('Test Button')
+    await expect(page).toClick('button', { text: 'Test Button' })
+    await expect(page).toMatchTextContent('test_button')
+  })
+  test('Worker', async () => {
+    schema.model.worker = true
+    await page.goto(urlQuery(schema))
+    await expect(page).toClick('button', { text: 'Test Button' })
+    await expect(page).toMatchTextContent('test_button')
+  })
+})

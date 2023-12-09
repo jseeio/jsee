@@ -143,14 +143,18 @@
             <div class="card-content" id="inputs" v-if="$parent.inputs && $parent.inputs.length > 0">
               <ul>
                 <li v-for="(input, index) in $parent.inputs">
-                  <vue-input v-bind:input="input" v-if="$parent.display(index)" v-on:inchange="$parent.run()"></vue-input>
+                  <vue-input
+                    v-bind:input="input"
+                    v-if="input.display !== false && $parent.display(index)"
+                    v-on:inchange="$parent.run()"
+                  ></vue-input>
                 </li>
               </ul>
               <pre v-if="$parent.model.debug">{{ $parent.inputs }}</pre>
               <!-- <button class="button is-primary" id="run"><span>▸</span>&nbsp;&nbsp;Run</button> -->
             </div>
             <footer class="card-footer" v-bind:class="{ reset: $parent.dataChanged }">
-              <button 
+              <button
                 v-on:click="$parent.reset()"
                 v-if="$parent.inputs && $parent.inputs.length > 0 && $parent.dataChanged"
                 class="button reset-button icon card-footer-item is-danger is-small"
@@ -158,8 +162,8 @@
                 <span class="rest-icon has-text-danger-dark">✕</span>
                 <span>&nbsp; Reset</span>
               </button>
-              <button 
-                v-on:click="$parent.run()" 
+              <button
+                v-on:click="$parent.run('run')"
                 class="button run-button icon card-footer-item is-primary is-small"
                 v-bind:class="{ running: $parent.clickRun }"
               >

@@ -43,7 +43,7 @@ function initJS (model) {
 
   // Related:
   // https://stackoverflow.com/questions/37711603/javascript-es6-class-definition-not-accessible-in-window-global
-  const target = model.type === 'class' 
+  const target = model.type === 'class'
     ? eval(model.name)
     : this[model.name]
   // Need promise here in case of async init
@@ -121,7 +121,11 @@ onmessage = function (e) {
       } else {
         // JS object or array
         log('Applying inputs as object/array')
-        res = this.modelFunc(data, log)
+        res = this.modelFunc(data, log, async (res) => {
+          const r = await res
+          postMessage(r)
+          await utils.delay(1)
+        })
       }
       // Return promise value or just regular value
       // Promise.resolve handles both cases
