@@ -113,10 +113,10 @@ function createVueApp (env, mountedCallback, logMain) {
   })
 
   // Determine a container for Vue app
-  const container = env.params.container
-    ? (typeof env.params.container === 'string')
-      ? document.querySelector(env.params.container)
-      : env.params.container
+  const container = env.container
+    ? (typeof env.container === 'string')
+      ? document.querySelector(env.container)
+      : env.container
     : document.body
 
   // Determine a template and GUI framework

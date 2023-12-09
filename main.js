@@ -2,6 +2,7 @@ import { createVueApp } from './src/app'
 import Worker from './src/worker.js'
 
 const utils = require('./src/utils')
+const isObject = utils.isObject
 
 const { Notyf } = require('notyf')
 const notyf = new Notyf({
@@ -42,10 +43,7 @@ function clone (obj) {
   return Object.assign({}, obj)
 }
 
-// https://stackoverflow.com/questions/8511281/check-if-a-value-is-an-object-in-javascript
-function isObject (item) {
-  return (typeof item === 'object' && !Array.isArray(item) && item !== null)
-}
+
 
 function getName (code) {
   switch (typeof code) {
@@ -113,8 +111,11 @@ function getFunctionContainer (target) {
 
 export default class JSEE {
   constructor (params, alt1, alt2) {
-
     // Check if JSEE was initialized with args rather than with a params object
+    // So two ways to init JSEE:
+    // 1. new JSEE({schema: ..., container: ..., verbose: ...}) <- params object
+    // 2. new JSEE(schema, container, verbose) <- args
+    // This check converts args to params object (2 -> 1)
     if (('model' in params) || (typeof params === 'string') || (typeof params === 'function') || !(typeof alt1 === 'undefined')) {
       params = {
         'schema': params,
@@ -126,188 +127,272 @@ export default class JSEE {
     // Set global verbose flag
     // This check sets verbose to true in all cases except when params.verbose is explicitly set to false
     verbose = !(params.verbose === false)
-
-    // Previous naming
-    params.schema = params.schema || params.config
-
-    log('Initializing JSEE with parameters: ', params)
-    this.params = params
+    this.container = params.container
+    this.schema = params.schema || params.config // Previous naming
     this.__version__ = VERSION
 
-    // Standartize schema then initialize a new environment
-
-    switch (typeof params.schema) {
-      case 'object':
-        log('Received schema as object')
-        if (typeof params.schema.model === 'function') {
-          params.schema.model = {
-            code: params.schema.model
-          }
-        }
-        this.init(params.schema)
-        break
-      case 'function':
-        log('Received schema as function')
-        params.schema = {
-          model: {
-            code: params.schema,
-          }
-        }
-        this.init(params.schema)
-        break
-      case 'string':
-        log('Received schema as string')
-        this.schemaUrl = params.schema.indexOf('json') ? params.schema : params.schema + '.json'
-        fetch(this.schemaUrl)
-          .then(res => res.json())
-          .then(res => {
-            log('Loaded schema from url')
-            this.init(res)
-          })
-          .catch((err) => {
-            console.error(err)
-          })
-        break
-      default:
-        log('No schema provided')
-        notyf.error('No schema provided')
+    // Check if schema is provided
+    if (typeof this.schema === 'undefined') {
+      notyf.error('No schema provided')
+      throw new Error('No schema provided')
     }
+
+    // Check if container is provided
+    if (typeof this.container === 'undefined') {
+      // Check if 'jsee-container' exists
+      if (document.querySelector('#jsee-container')) {
+        this.container = '#jsee-container'
+        log(`Using default container: ${this.container}`)
+      } else {
+        notyf.error('No container provided')
+        throw new Error('No container provided')
+      }
+    }
+
+    this.init()
+  }
+
+  log (...args) {
+    log(...args)
   }
 
   notify (txt) {
     notyf.success(txt)
   }
 
-  async init (schema) {
-    const code = await this.loadCode(schema)
-    this.initSchema(schema, code)             // -> this.schema
-    this.initVue()                            // -> this.app, this.data
-    this.initWorker()                         // -> this.worker
-    this.initRender()                         // -> this.renderFunc
-    await this.initModel()                    // -> this.modelFunc (depends on this.worker)
-    if (this.schema.model.autorun) {
-      log('Autorun if enabled. Running the model (init)')
+  async init () {
+    // At this point this.schema is defined but can be in different forms (e.g. string, object, function)
+    await this.initSchema()                   // -> this.schema (object)
+    await this.initModel()
+    await this.initInputs()
+    await this.initVue()                            // -> this.app, this.data
+    await this.initPipeline()
+    if (this.schema.autorun) {
+      log('Autorun is enabled. Running the model')
       this.run('init')
     }
   }
 
-  loadCode (schema) {
-    const initPromise = new Promise((resolve, reject) => {
-      // Unwind this ball of possible cases
-      let url = schema.model.url
-      if (url && (url.includes('.js') || url.includes('.py'))) {
-        // Update model URL if needed
-        if (!url.includes('/') && this.schemaUrl && this.schemaUrl.includes('/')) {
-          url = window.location.protocol + '//' + window.location.host + this.schemaUrl.split('/').slice(0, -1).join('/') + '/' + url
-          log(`Changed the old model URL to ${url} (based on the schema URL)`)
+  async initSchema () {
+    // Check if schema is a string (url to json)
+    if (typeof this.schema === 'string') {
+      this.schemaUrl = this.schema.indexOf('json') ? this.schema : this.schema + '.json'
+      this.schema = await fetch(this.schemaUrl)
+      this.schema = await this.schema.json()
+    }
+
+    // Check if schema is a function (model)
+    if (typeof this.schema === 'function') {
+      this.schema = {
+        model: {
+          code: this.schema,
         }
-        fetch(url)
-          .then(res => res.text())
-          .then(res => {
-            log('Loaded code from:', url)
-            resolve(res)
-          })
-      } else if (!(typeof schema.model.code === 'undefined')) {
-        log('Code is: schema.model.code')
-        resolve(schema.model.code)
-      } else {
-        log('No code. Probably API...')
-        resolve(undefined)
+      }
+    }
+
+    // At this point schema should be an object
+    if (!isObject(this.schema)) {
+      notyf.error('Schema is in a wrong format')
+      throw new Error(`Schema is in a wrong format: ${this.schema}`)
+    }
+  }
+
+  async initModel () {
+    // Model is the main part of the schema that defines all computations
+    // At the end it should be an array of objects that define a sequence of tasks
+    this.model = []
+
+    // Check if model is a function (model)
+    ;[this.schema.model, this.schema.render].forEach(m => {
+      // Function -> {code: Function}
+      if (typeof m === 'function') {
+        this.model.push({
+          code: m
+        })
+      } else if (Array.isArray(m)) {
+        // concatenate
+        this.model = this.model.concat(m)
+      } else if (isObject(m)) {
+        this.model.push(m)
       }
     })
 
-    return initPromise
+    // Check if model is empty
+    if (this.model.length === 0) {
+      notyf.error('Model is in a wrong format')
+      throw new Error(`Model is in a wrong format: ${this.schema.model}`)
+    }
+
+    // Put worker and imports inside model blocks
+    ;['worker', 'imports'].forEach(key => {
+      if (typeof this.schema[key] !== 'undefined') {
+        this.model[0][key] = this.schema[key]
+        delete this.schema[key]
+      }
+    })
+
+    // Check if autorun is defined
+    if (typeof this.model[0]['autorun'] !== 'undefined') {
+      this.schema.autorun = this.model[0]['autorun']
+      delete this.model[0]['autorun']
+    }
+
+    // Async for-loop over this.model
+    for (const [i, m] of this.model.entries()) {
+      if (typeof m.worker === 'undefined') {
+        m.worker = i === 0 // Run first model in a web worker
+      }
+
+      // Load code if url is provided
+      if (m.url && (m.url.includes('.js') || m.url.includes('.py'))) {
+        // Update model URL if needed
+        if (!m.url.includes('/') && this.schemaUrl && this.schemaUrl.includes('/')) {
+          m.url = window.location.protocol + '//' + window.location.host + this.schemaUrl.split('/').slice(0, -1).join('/') + '/' + m.url
+          log(`Changed the old model URL to ${m.url} (based on the schema URL)`)
+        }
+        log('Loaded code from:', m.url)
+        m.code = await fetch(m.url)
+        m.code = await m.code.text()
+      }
+
+      // Update model name if absent
+      if (typeof m.name === 'undefined'){
+        if ((m.url) && (m.url.includes('.js'))) {
+          m.name = m.url.split('/').pop().split('.')[0]
+          log('Use model name from url:', m.name)
+        } else if (m.code) {
+          m.name = getName(m.code)
+          log('Use model name from code:', m.name)
+        }
+      }
+
+      // Check if imports are string -> convert to array
+      if (typeof m.imports === 'string') {
+        m.imports = [m.imports]
+      }
+
+      // Infer model type
+      if (typeof m.type === 'undefined') {
+        m.type = getModelType(m)
+      }
+
+
+    } // end of model-loop
+
+    log('Model is:', this.model)
   }
 
-  initSchema (schema, code) {
-    log('Initializing schema')
-
-    // Check for empty model block
-    if (typeof schema.model === 'undefined') {
-      schema.model = {}
-    }
-
-    schema.model.code = code
-
-    // Check for super minimal config
-    // Check for worker flag
-    if (typeof schema.model.worker === 'undefined') {
-      schema.model.worker = true
-    }
-
+  async initInputs () {
     // Check inputs
     // Relies on model.code
     // So run after possible fetching
-    if (typeof schema.inputs === 'undefined') {
-      schema.model.container = 'args'
-      schema.inputs = getInputs(schema.model)
+    if (typeof this.schema.inputs === 'undefined') {
+      this.model[0].container = 'args'
+      this.schema.inputs = getInputs(this.model[0])
     }
 
     // Relies on input check
     // Set default input type
-    schema.inputs.forEach(input => {
+    this.schema.inputs.forEach(input => {
       if (typeof input.type === 'undefined') {
         input.type = 'string'
       }
     })
-
-    // Infer model type
-    if (typeof schema.model.type === 'undefined') {
-      schema.model.type = getModelType(schema.model)
-    }
-
-    // Update model name if absent
-    if (typeof schema.model.name === 'undefined'){
-      if ((schema.model.url) && (schema.model.url.includes('.js'))) {
-        schema.model.name = schema.model.url.split('/').pop().split('.')[0]
-        log('Use model name from url: ', schema.model.name)
-      } else if (schema.model.code) {
-        schema.model.name = getName(schema.model.code)
-      }
-    }
-
-    // Put autorun, worker and imports inside the model block
-    ['autorun', 'worker', 'imports'].forEach(key => {
-      if (typeof schema[key] !== 'undefined') {
-        schema.model[key] = schema[key]
-        delete schema[key]
-      }
-    })
-
-    // Check if imports are string
-    if (typeof schema.model.imports === 'string') {
-      schema.model.imports = [schema.model.imports]
-    }
-
-    // At this point we have all code in model.code or api
-    this.schema = clone(schema)
+    log('Inputs are:', this.schema.inputs)
   }
 
   initVue () {
-    log('Initializing VUE')
-    this.app = createVueApp(this, (container) => {
-      // Called when the app is mounted
-      // FYI "this" here refers to port object
-      this.outputsContainer = container.querySelector('#outputs')
-      this.inputsContainer = container.querySelector('#inputs')
-      this.modelContainer = container.querySelector('#model')
-      // Init overlay
-      this.overlay = new Overlay(this.inputsContainer ? this.inputsContainer : this.outputsContainer)
-    }, log)
-    this.data = this.app.$data
+    return new Promise((resolve, reject) => {
+      try {
+        log('Initializing VUE')
+        this.app = createVueApp(this, (container) => {
+          // Called when the app is mounted
+          // FYI "this" here refers to port object
+          this.outputsContainer = container.querySelector('#outputs')
+          this.inputsContainer = container.querySelector('#inputs')
+          this.modelContainer = container.querySelector('#model')
+          // Init overlay
+          this.overlay = new Overlay(this.inputsContainer ? this.inputsContainer : this.outputsContainer)
+          resolve()
+        }, log)
+        this.data = this.app.$data
+      } catch (err) {
+        reject(err)
+      }
+    })
   }
 
-  initWorker () {
-    if (this.schema.model.worker) {
-      log('Initializing Worker')
-      this.worker = new Worker()
-      this.worker.onmessage = (e) => {
-        this.overlay.hide()
+  async initPipeline () {
+    // Initial identity operation (just pass the input to output)
+    this.pipeline = (inputs) => inputs
+    // Async for-loop over this.model (again)
+    for (const [i, m] of this.model.entries()) {
+      log('Init model:', i, this.pipeline)
+      let modelFunc
+      if (m.worker) {
+        // Init worker model
+        modelFunc = await this.initWorker(m)
+      } else {
+        // Init specific model types
+        switch (m.type) {
+          case 'py':
+            modelFunc = await this.initPython(m)
+            break
+          case 'tf':
+            modelFunc = await this.initTF(m)
+            break
+          case 'function':
+          case 'class':
+          case 'async-init':
+          case 'async-function':
+            modelFunc = await this.initJS(m)
+            break
+          case 'get':
+          case 'post':
+            modelFunc = await this.initAPI(m)
+            break
+          default:
+            notyf.error('No type information')
+            throw new Error(`No type information: ${m.type}`)
+        }
+      }
+
+      this.pipeline = (p => {
+        return async (inputs) => {
+          const res = await p(inputs)
+          return await modelFunc(res)
+        }
+      })(this.pipeline)
+
+      this.overlay.hide()
+    }
+  }
+
+  async initWorker (model) {
+    // Init worker
+    const worker = new Worker()
+
+    // Init worker with the model
+    if (typeof model.code === 'function') {
+      log('Convert code in schema to string for WebWorker')
+      model.code = model.code.toString()
+    }
+
+    // Wrap anonymous functions
+    if (!model.name) {
+      model.code = `function anon () { return (${model.code})(...arguments) }`
+      model.name = 'anon'
+    }
+
+    const modelFunc = (inputs) => new Promise((resolve, reject) => {
+      worker.onmessage = (e) => {
         const res = e.data
         if ((typeof res === 'object') && (res._status)) {
           switch (res._status) {
             case 'loaded':
-              notyf.success('Loaded: JS model (in worker)')
+              notyf.success('Loaded model (in worker)')
+              log('Loaded model (in worker):', res)
+              resolve(res)
               break
             case 'log':
               log(...res._log)
@@ -315,71 +400,22 @@ export default class JSEE {
           }
         } else {
           log('Response from worker:', res)
-          this.output(res)
+          resolve(res)
         }
       }
-      this.worker.onerror = (e) => {
-        this.overlay.hide()
+      worker.onerror = (e) => {
         notyf.error(e.message)
         log('Error from worker:', e)
+        reject(e)
       }
-    }
-  }
+      worker.postMessage(inputs)
+    })
 
-  initRender () {
-    if (this.schema.render && this.schema.render.url) {
-      log('Initializing a render function')
-      let script = document.createElement('script')
-      script.src = this.schema.render.url
-      script.onload = () => {
-        notyf.success('Loaded: JS render')
-        log('Loaded JS render')
+    // Initial worker call with model definition
+    await modelFunc(model)
 
-        // Initializing the render (same in worker)
-        if (this.schema.render.type === 'class') {
-          log('Init render as class')
-          const renderClass = new window[this.schema.render.name]()
-          this.renderFunc = (...a) => {
-            return renderClass[this.schema.render.method || 'render'](...a)
-          }
-        } else if (this.schema.render.type === 'async-init') {
-          log('Init render function with promise')
-          window[this.schema.render.name]().then((m) => {
-            log('Async rebder init resolved: ', m)
-            this.renderFunc = m
-          })
-        } else {
-          log('Init render as function')
-          this.renderFunc = window[this.schema.render.name]
-        }
-      }
-      document.head.appendChild(script)
-    }
-  }
-
-  async initModel () {
-    log('Initializing a model function')
-    switch (this.schema.model.type) {
-      case 'py':
-        await this.initPython()
-        break
-      case 'tf':
-        this.initTF()
-        break
-      case 'function':
-      case 'class':
-      case 'async-init':
-      case 'async-function':
-        await this.initJS()
-        break
-      case 'get':
-      case 'post':
-        this.initAPI()
-        break
-      default:
-        notyf.error('No type information')
-        break
-    }
+    // Worker will be in the context of each modelFunc
+    return modelFunc
   }
 
   async initPython () {
@@ -409,7 +445,7 @@ export default class JSEE {
     document.head.appendChild(script)
   }
 
-  async initJS () {
+  async initJS (model) {
     // 1. String input <- loaded from url or code(string)
     // 2. Target object (can be function, class or a function with async init <- code(object)
     // 3. Model function
@@ -418,51 +454,39 @@ export default class JSEE {
     // For window execution we go: [1 ->] 2 -> 3
     // For worker: [2 ->] 1 -> Worker
 
-    if (this.schema.model.worker) {
-      // Worker: Initialize worker with the model
-      // 2 -> 1
-      if (typeof this.schema.model.code === 'function') {
-        log('Convert code in schema to string for WebWorker')
-        this.schema.model.code = this.schema.model.code.toString()
-      }
-      // Wrap anonymous functions
-      if (!this.schema.model.name) {
-        this.schema.model.code = `function anon () { return (${this.schema.model.code})(...arguments) }`
-        this.schema.model.name = 'anon'
-      }
-      this.worker.postMessage(this.schema.model)
-    } else {
-      // Main: Initialize model in main window
+    // Main: Initialize model in main window
 
-      // Load imports if defined (before calling the model)
-      if (this.schema.model.imports && this.schema.model.imports.length) {
-        log('Loading imports from schema')
-        await utils.importScripts(...this.schema.model.imports)
-        notyf.success('Loaded: JS imports')
-      }
-
-      // Target here represents raw JS object (e.g. class), not the final callable function
-      let target
-      if (typeof this.schema.model.code === 'string') {
-        // 1 -> 2
-        // Danger zone
-        if (this.schema.model.name) {
-          log('Evaluating code from string (has name)')
-          target = Function(
-            `${this.schema.model.code} ;return ${this.schema.model.name}`
-          )()
-        } else {
-          log('Evaluating code from string (no name)')
-          target = eval(`(${this.schema.model.code})`) // ( ͡° ͜ʖ ͡°) YEAHVAL
-        }
-      } else {
-        target = this.schema.model.code
-      }
-
-      this.modelFunc = await utils.getModelFuncJS(this.schema.model, target, log)
-      this.overlay.hide()
-      notyf.success('Loaded: JS code')
+    // Load imports if defined (before calling the model)
+    if (model.imports && model.imports.length) {
+      log('Loading imports from schema')
+      await utils.importScripts(...model.imports)
+      notyf.success('Loaded: JS imports')
     }
+
+    // Target here represents raw JS object (e.g. class), not the final callable function
+    let target
+    if (typeof model.code === 'string') {
+      // 1 -> 2
+      // Danger zone
+      if (model.name) {
+        log('Evaluating code from string (has name)')
+        target = Function(
+          `${model.code} ;return ${model.name}`
+        )()
+      } else {
+        log('Evaluating code from string (no name)')
+        target = eval(`(${model.code})`) // ( ͡° ͜ʖ ͡°) YEAHVAL
+      }
+    } else {
+      target = model.code
+    }
+
+    const modelFunc = await utils.getModelFuncJS(model, target, this)
+
+    this.overlay.hide()
+    notyf.success('Loaded: JS code')
+
+    return modelFunc
   }
 
   initAPI () {
@@ -489,37 +513,37 @@ export default class JSEE {
     document.head.appendChild(script)
   }
 
-  run (caller) {
+  async run (caller) {
     // caller can be:
     // 1. custom input button name
     // 2. `run`
     // 3. `autorun`
     const schema = this.schema
     const data = this.data
-    log('Running the model...')
-    // Collect input values
-    let inputValues
 
-    if (schema.model && schema.model.container && schema.model.container === 'args') {
-      log('Pass inputs as function arguments')
-      inputValues = data.inputs.map(input => getValue(input))
-    } else {
-      log('Pass inputs as object')
-      inputValues = {}
-      data.inputs.forEach(input => {
-        // Skip buttons
-        if (input.name && !(input.type == 'action' || input.type == 'button')) {
-          inputValues[input.name] = getValue(input)
-        }
-      })
-      // Add caller to input values so we can change model behavior based on it
-      inputValues.caller = caller
-    }
+    log('Running the pipeline...')
+    // Collect input values
+    let inputValues = {}
+    data.inputs.forEach(input => {
+      // Skip buttons
+      if (input.name && !(input.type == 'action' || input.type == 'button')) {
+        inputValues[input.name] = getValue(input)
+      }
+    })
+    // Add caller to input values so we can change model behavior based on it
+    inputValues.caller = caller
+
     log('Input values:', inputValues)
     // We have all input values here, pass them to worker, window.modelFunc or tf
     if (!schema.model.autorun) {
       this.overlay.show()
     }
+
+    const results = await this.pipeline(inputValues)
+    if (typeof results !== 'undefined') {
+      this.output(results)
+    }
+    return
     switch (schema.model.type) {
       case 'tf':
         break

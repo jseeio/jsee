@@ -14,7 +14,7 @@ function initPython (model) {
   throw new Error('Python in worker (not implemented)')
 }
 
-function initJS (model) {
+async function initJS (model) {
   log('Init JS')
   this.container = model.container
 
@@ -30,7 +30,7 @@ function initJS (model) {
   }
 
   if (model.code) {
-    log('Load code as a string')
+    log('Load code as a string', model)
     // https://github.com/altbdoor/blob-worker/blob/master/blobWorker.js
     importScripts(URL.createObjectURL(new Blob([model.code], { type: 'text/javascript' })))
   } else if (model.url) {
@@ -40,26 +40,25 @@ function initJS (model) {
     log('No script provided')
   }
 
-
   // Related:
   // https://stackoverflow.com/questions/37711603/javascript-es6-class-definition-not-accessible-in-window-global
   const target = model.type === 'class'
     ? eval(model.name)
     : this[model.name]
+
   // Need promise here in case of async init
-  Promise.resolve(utils.getModelFuncJS(model, target, log))
-    .then(m => {
-      postMessage({_status: 'loaded'})
-      this.modelFunc = m
-    })
+  let modelFunc = await utils.getModelFuncJS(model, target, { log })
+  postMessage({_status: 'loaded'})
+
+  return modelFunc
 }
 
 function initAPI (model) {
   log('Init API')
-  this.modelFunc = utils.getModelFuncAPI(model, log)
+  return utils.getModelFuncAPI(model, log)
 }
 
-onmessage = function (e) {
+onmessage = async function (e) {
 
   var data = e.data
   log('Received message of type:', typeof data)
@@ -68,30 +67,30 @@ onmessage = function (e) {
     /*
       INIT MESSAGE
     */
-    let model = data
     log('Init...')
-
-    switch (model.type) {
+    let m = data
+    switch (m.type) {
       case 'tf':
-        initTF(model)
+        this.modelFunc = await initTF(m)
         break
       case 'py':
-        initPython(model)
+        this.modelFunc = await initPython(m)
         break
       case 'function':
       case 'class':
       case 'async-init':
       case 'async-function':
-        initJS(model)
+        this.modelFunc = await initJS(m)
         break
       case 'get':
       case 'post':
-        initAPI(model)
+        this.modelFunc = await initAPI(m)
         break
+      default:
+        throw new Error(`No type information: ${m.type}`)
     }
   } else {
     /*
-    :w
     CALL MESSAGE
     */
     var res
@@ -113,23 +112,8 @@ onmessage = function (e) {
         })
       */
     } else {
-      // JavaScript model
-      log('Calling JavaScript model')
-      if (this.container === 'args') {
-        log('Applying inputs as arguments')
-        res = this.modelFunc.apply(null, data)
-      } else {
-        // JS object or array
-        log('Applying inputs as object/array')
-        res = this.modelFunc(data, log, async (res) => {
-          const r = await res
-          postMessage(r)
-          await utils.delay(1)
-        })
-      }
-      // Return promise value or just regular value
-      // Promise.resolve handles both cases
-      Promise.resolve(res).then(r => { postMessage(r) })
+      const results = await this.modelFunc(data)
+      postMessage(results)
     }
   }
 }

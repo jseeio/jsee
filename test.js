@@ -180,7 +180,7 @@ describe('Imports', () => {
     ]
   }
   test('Window', async () => {
-    schema.model.worker = false  
+    schema.model.worker = false
     await page.goto(urlQuery(schema))
     await expect(page).toClick('button', { text: 'Run' })
     await expect(page).toMatchTextContent('foo-bar')
@@ -208,7 +208,7 @@ describe('Buttons, button titles and caller', () => {
     ]
   }
   test('Window', async () => {
-    schema.model.worker = false  
+    schema.model.worker = false
     await page.goto(urlQuery(schema))
     await expect(page).toMatchTextContent('Test Button')
     await expect(page).toClick('button', { text: 'Test Button' })
@@ -219,5 +219,19 @@ describe('Buttons, button titles and caller', () => {
     await page.goto(urlQuery(schema))
     await expect(page).toClick('button', { text: 'Test Button' })
     await expect(page).toMatchTextContent('test_button')
+  })
+})
+
+describe('Pipeline', () => {
+  test('Multiple models', async () => {
+    let a = 3
+    let b = 4
+    await page.goto(urlHTML('pipeline'))
+    await expect(page).toFill('#a', a.toString())
+    await expect(page).toFill('#b', b.toString())
+    await expect(page).toClick('button', { text: 'Run' })
+    await expect(page).toMatchTextContent((Math.pow((a + b), 2) + 1).toString())
+    await expect(page).toClick('button', { text: 'Run' })
+    await expect(page).toMatchTextContent((Math.pow((a + b), 2) + 2).toString())
   })
 })
