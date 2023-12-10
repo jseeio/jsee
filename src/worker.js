@@ -10,8 +10,20 @@ function initTF (model) {
   throw new Error('Tensorflow in worker (not implemented)')
 }
 
-function initPython (model) {
-  throw new Error('Python in worker (not implemented)')
+async function initPython (model) {
+  importScripts("https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js")
+  const pyodide = await loadPyodide()
+  if (model.imports && Array.isArray(model.imports) && model.imports.length) {
+    await pyodide.loadPackage(model.imports)
+  } else {
+    await pyodide.loadPackagesFromImports(model.code)
+  }
+  return async (data) => {
+    for (let key in data) {
+      self[key] = data[key]
+    }
+    return await pyodide.runPythonAsync(model.code);
+  }
 }
 
 async function initJS (model) {
@@ -48,7 +60,6 @@ async function initJS (model) {
 
   // Need promise here in case of async init
   let modelFunc = await utils.getModelFuncJS(model, target, { log })
-  postMessage({_status: 'loaded'})
 
   return modelFunc
 }
@@ -59,61 +70,43 @@ function initAPI (model) {
 }
 
 onmessage = async function (e) {
-
   var data = e.data
   log('Received message of type:', typeof data)
 
   if ((typeof data === 'object') && ((data.url) || (data.code))) {
-    /*
-      INIT MESSAGE
-    */
+    // Init message
     log('Init...')
     let m = data
     switch (m.type) {
       case 'tf':
-        this.modelFunc = await initTF(m)
+        self.modelFunc = await initTF(m)
         break
       case 'py':
-        this.modelFunc = await initPython(m)
+        self.modelFunc = await initPython(m)
         break
       case 'function':
       case 'class':
       case 'async-init':
       case 'async-function':
-        this.modelFunc = await initJS(m)
+        self.modelFunc = await initJS(m)
         break
       case 'get':
       case 'post':
-        this.modelFunc = await initAPI(m)
+        self.modelFunc = await initAPI(m)
         break
       default:
         throw new Error(`No type information: ${m.type}`)
     }
+    postMessage({_status: 'loaded'})
   } else {
-    /*
-    CALL MESSAGE
-    */
-    var res
-    if (typeof this.modelFunc === 'string') {
-      // Python model:
-      log('Calling Python model')
-      /*
-      const keys = Object.keys(data)
-      for (let key of keys) {
-        self[key] = data[key];
-      }
-      self.pyodide.runPythonAsync(this.model, () => {})
-        .then((res) => {
-          console.log('[Worker] Py results: ', typeof res, res)
-	  postMessage(res)
-        })
-        .catch((err) => {
-          // self.postMessage({error : err.message});
-        })
-      */
-    } else {
-      const results = await this.modelFunc(data)
+    // Execution
+    try {
+      log('Run model with data:', data)
+      const results = await self.modelFunc(data)
+      log('Results:', results)
       postMessage(results)
+    } catch (error) {
+      postMessage({ _status: 'error', _error: error })
     }
   }
 }

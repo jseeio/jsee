@@ -1,0 +1,41 @@
+<html>
+  <div id="jsee-container">
+  <script src="/dist/jsee.js"></script>
+  <script>
+    new JSEE({
+      schema: {
+        "model": {
+          "name": "pytest",
+          "type": "py",
+          "description": "Testing pyodide project",
+          "container": "object",
+          "code": `
+            import numpy as np
+            from js import a, b
+            np.mean([a, b])
+          `.replace(/^\s+/gm, ''),
+          "autorun": false,
+          "worker": true,
+          "imports": [
+            "numpy"
+          ]
+        },
+        "inputs": [
+          {
+            "type": "int",
+            "name": "a"
+          },
+          {
+            "type": "int",
+            "name": "b"
+          }
+        ],
+        "outputs": [
+          {
+            "type": "int"
+          }
+        ]
+      }
+    })
+  </script>
+</html>

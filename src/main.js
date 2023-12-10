@@ -1,7 +1,7 @@
-import { createVueApp } from './src/app'
-import Worker from './src/worker.js'
+import { createVueApp } from './app'
+import Worker from './worker.js'
 
-const utils = require('./src/utils')
+const utils = require('./utils')
 const isObject = utils.isObject
 
 const { Notyf } = require('notyf')
@@ -20,8 +20,7 @@ const notyf = new Notyf({
   ]
 })
 
-// const createVueApp = require('./src/app')
-const Overlay = require('./src/overlay')
+const Overlay = require('./overlay')
 
 require('notyf/notyf.min.css')
 
@@ -397,6 +396,11 @@ export default class JSEE {
             case 'log':
               log(...res._log)
               break
+            case 'error':
+              notyf.error(res._error)
+              log('Error from worker:', res._error)
+              reject(res._error)
+              break
           }
         } else {
           log('Response from worker:', res)
@@ -418,31 +422,22 @@ export default class JSEE {
     return modelFunc
   }
 
-  async initPython () {
+  async initPython (model) {
     // Add loading indicator
     this.overlay.show()
-    let script = document.createElement('script')
-    script.src = 'https://cdn.jsdelivr.net/pyodide/v0.18.1/full/pyodide.js'
-    script.onload = async () => {
-      this.pyodide = await loadPyodide({ indexURL : "https://cdn.jsdelivr.net/pyodide/v0.18.1/full/" });
-      notyf.success('Loaded: Python')
-      log('Loaded python code:', res)
-      // Check if micropip is used
-      if (res.includes('micropip')) {
-        await this.pyodide.loadPackage('micropip')
-        log('Loaded micropip')
-      }
-      // Import packages if defined
-      if ('packages' in this.schema.model) {
-        await this.pyodide.loadPackage(this.schema.model.packages)
-        log('Loaded packages from schema')
-      } else {
-        await this.pyodide.loadPackagesFromImports(res)
-        log('Loaded packages from Python code')
-      }
-      this.overlay.hide()
+    await utils.importScripts(['https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js'])
+    const pyodide = await loadPyodide()
+    if (model.imports && Array.isArray(model.imports) && model.imports.length) {
+      await pyodide.loadPackage(model.imports)
+    } else {
+      await pyodide.loadPackagesFromImports(model.code)
     }
-    document.head.appendChild(script)
+    return async (data) => {
+      for (let key in data) {
+        window[key] = data[key]
+      }
+      return await pyodide.runPythonAsync(model.code);
+    }
   }
 
   async initJS (model) {

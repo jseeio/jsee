@@ -11,7 +11,7 @@
     "build": "webpack --mode=production --progress && webpack --mode=production --progress --env RUNTIME",
     "watch": "nodemon --watch . --ignore dist,.git --ext vue,js,css,html --exec 'npm run build-dev && npm test'",
     "prepublishOnly": "npm run build && npm test",
-    "test": "jest test.js --detectOpenHandles",
+    "test": "jest test/test-basic.test.js test/test-python.test.js --detectOpenHandles",
     "test-head": "HEADLESS=false npm test"
   },
   "author": "Anton Zemlyansky",

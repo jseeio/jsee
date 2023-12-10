@@ -6,7 +6,7 @@ const package = require('./package.json')
 
 module.exports = (env) => {
   const config = {
-    entry: './main.js',
+    entry: './src/main.js',
     output: {
       filename: env.RUNTIME ? 'jsee.runtime.js' : 'jsee.js',
       path: path.resolve(__dirname, 'dist'),
