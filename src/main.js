@@ -278,7 +278,7 @@ export default class JSEE {
 
     } // end of model-loop
 
-    log('Model is:', this.model)
+    log('Model initialized, size:', this.model.length)
   }
 
   async initInputs () {
@@ -326,7 +326,7 @@ export default class JSEE {
     this.pipeline = (inputs) => inputs
     // Async for-loop over this.model (again)
     for (const [i, m] of this.model.entries()) {
-      log('Init model:', i, this.pipeline)
+      log('Initilizing the pipeline with model:', i)
       let modelFunc
       if (m.worker) {
         // Init worker model
@@ -363,6 +363,7 @@ export default class JSEE {
         }
       })(this.pipeline)
 
+      notyf.success('Pipeline initialized')
       this.overlay.hide()
     }
   }
@@ -477,10 +478,6 @@ export default class JSEE {
     }
 
     const modelFunc = await utils.getModelFuncJS(model, target, this)
-
-    this.overlay.hide()
-    notyf.success('Loaded: JS code')
-
     return modelFunc
   }
 
@@ -534,62 +531,15 @@ export default class JSEE {
       this.overlay.show()
     }
 
+    // Run pipeline
     const results = await this.pipeline(inputValues)
-    if (typeof results !== 'undefined') {
-      this.output(results)
-    }
-    return
-    switch (schema.model.type) {
-      case 'tf':
-        break
-      case 'py':
-        data.inputs.forEach(input => {
-          this.pyodide.globals.set(input.name, input.value);
-        })
-        this.pyodide.runPythonAsync(this.schema.model.code, () => {})
-          .then((res) => {
-            if (schema.outputs && schema.outputs.length) {
-              const resultObj = {}
-              schema.outputs.forEach(output => {
-                resultObj[output.name] = this.pyodide.globals.get(output.name).toJs()
-              })
-              this.output(resultObj)
-            } else {
-              this.output(res)
-            }
-          })
-          .catch((err) => {
-            log(err)
-            window['M'].toast({html: 'Error in code'})
-          })
-        break
 
-      case 'class':
-      case 'function':
-      case 'async-init':
-      case 'async-function':
-      case 'get':
-      case 'post':
-        if (this.schema.model.worker) {
-          this.worker.postMessage(inputValues)
-        } else {
-          // Run in main window
-          var res
-          if (this.schema.model.container === 'args') {
-            res = this.modelFunc.apply(null, inputValues)
-          } else {
-            log('Applying inputs as object')
-            res = this.modelFunc(inputValues, log, async (res) => {
-              const r = await res
-              this.output(r)
-              await utils.delay(1)
-            })
-          }
-          log('modelFunc results:', res)
-          Promise.resolve(res).then(r => { this.output(r) })
-        }
-        break
-    }
+    // Output results
+    this.output(results)
+
+    // Hide overlay
+    this.overlay.hide()
+    return
   }
 
   async outputAsync (res) {
@@ -600,13 +550,12 @@ export default class JSEE {
   output (res) {
     // TODO: Think about all edge cases
     // * No output field, but reactivity
-    this.overlay.hide()
 
     if (typeof res === 'undefined') {
       return
     }
 
-    log('Got output results of type:', typeof res)
+    log('[Output] Got output results of type:', typeof res)
 
     // Process results (res)
     const inputNames = this.schema.inputs.map(i => i.name)
