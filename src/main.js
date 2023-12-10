@@ -31,6 +31,14 @@ let verbose = true
 function log () {
   if (verbose) {
     console.log(`[JSEE v${VERSION}]`, ...arguments)
+    const logElement = document.querySelector('#log')
+    if (logElement) {
+      logElement.innerHTML += `\n${[...arguments].join(' ')}`
+      logElement.scrollTop = logElement.scrollHeight // auto scroll to bottom
+      if (logElement.innerHTML.length > 10000) {
+        logElement.innerHTML = logElement.innerHTML.slice(-10000)
+      }
+    }
   }
 }
 
@@ -324,6 +332,17 @@ export default class JSEE {
           this.modelContainer = container.querySelector('#model')
           // Init overlay
           this.overlay = new Overlay(this.inputsContainer ? this.inputsContainer : this.outputsContainer)
+          // Add stop button to the overlay if interval is defined
+          if (this.schema.interval) {
+            this.stopElement = document.createElement('button')
+            this.stopElement.innerHTML = 'Stop'
+            this.stopElement.style = 'background: white; color: #333; border: 1px solid #DDD; padding: 10px; border-radius: 5px; cursor: pointer;'
+            this.stopElement.addEventListener('click', () => {
+              this.running = false
+            })
+            this.overlay.element.innerHTML = ''
+            this.overlay.element.appendChild(this.stopElement)
+          }
           resolve()
         }, log)
         this.data = this.app.$data
@@ -370,8 +389,18 @@ export default class JSEE {
 
       this.pipeline = (p => {
         return async (inputs) => {
-          const res = await p(inputs)
-          return await modelFunc(res)
+          const resPrev = await p(inputs)
+          const resNext = await modelFunc(resPrev)
+          if (isObject(resNext) && isObject(resPrev)) {
+            // If both results are objects, merge them
+            return Object.assign({}, resPrev, resNext)
+          } else if (typeof resNext !== 'undefined') {
+            // If next result is defined, return it
+            return resNext
+          } else {
+            // Otherwise return previous result (pass through)
+            return resPrev
+          }
         }
       })(this.pipeline)
 
@@ -520,13 +549,14 @@ export default class JSEE {
     document.head.appendChild(script)
   }
 
-  async run (caller) {
+  async run (caller='run') {
     // caller can be:
     // 1. custom input button name
     // 2. `run`
     // 3. `autorun`
     const schema = this.schema
     const data = this.data
+    this.running = true
 
     log('Running the pipeline...')
     // Collect input values
@@ -551,6 +581,13 @@ export default class JSEE {
 
     // Output results
     this.output(results)
+
+    // Check if interval is defined
+    if (schema.interval && this.running && (caller === 'run')) {
+      log('Interval is defined:', schema.interval)
+      await utils.delay(schema.interval)
+      await this.run(caller)
+    }
 
     // Hide overlay
     this.overlay.hide()
