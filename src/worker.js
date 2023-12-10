@@ -6,6 +6,10 @@ function log () {
   postMessage({_status: 'log', _log: args})
 }
 
+function progress (value) {
+  postMessage({_status: 'progress', _progress: value})
+}
+
 function initTF (model) {
   throw new Error('Tensorflow in worker (not implemented)')
 }
@@ -59,7 +63,7 @@ async function initJS (model) {
     : this[model.name]
 
   // Need promise here in case of async init
-  let modelFunc = await utils.getModelFuncJS(model, target, { log })
+  let modelFunc = await utils.getModelFuncJS(model, target, { log, progress })
 
   return modelFunc
 }

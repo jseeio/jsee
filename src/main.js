@@ -159,6 +159,18 @@ export default class JSEE {
     notyf.success(txt)
   }
 
+  progress (i) {
+    // Check if progress div is defined
+    let progress = document.querySelector('#progress')
+    if (!progress) {
+      progress = document.createElement('div')
+      progress.setAttribute('id', 'progress')
+      progress.style = 'position: fixed; top: 0; left: 0; width: 0; height: 3px; background: #00d1b2; z-index: 1000;'
+      document.body.appendChild(progress)
+    }
+    progress.style.width = `${i}%`
+  }
+
   async init () {
     // At this point this.schema is defined but can be in different forms (e.g. string, object, function)
     await this.initSchema()                   // -> this.schema (object)
@@ -396,6 +408,9 @@ export default class JSEE {
               break
             case 'log':
               log(...res._log)
+              break
+            case 'progress':
+              this.progress(res._progress)
               break
             case 'error':
               notyf.error(res._error)
