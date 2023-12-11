@@ -6,15 +6,31 @@ function log () {
   postMessage({_status: 'log', _log: args})
 }
 
+function progress (value) {
+  postMessage({_status: 'progress', _progress: value})
+}
+
 function initTF (model) {
   throw new Error('Tensorflow in worker (not implemented)')
 }
 
-function initPython (model) {
-  throw new Error('Python in worker (not implemented)')
+async function initPython (model) {
+  importScripts("https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js")
+  const pyodide = await loadPyodide()
+  if (model.imports && Array.isArray(model.imports) && model.imports.length) {
+    await pyodide.loadPackage(model.imports)
+  } else {
+    await pyodide.loadPackagesFromImports(model.code)
+  }
+  return async (data) => {
+    for (let key in data) {
+      self[key] = data[key]
+    }
+    return await pyodide.runPythonAsync(model.code);
+  }
 }
 
-function initJS (model) {
+async function initJS (model) {
   log('Init JS')
   this.container = model.container
 
@@ -30,7 +46,7 @@ function initJS (model) {
   }
 
   if (model.code) {
-    log('Load code as a string')
+    log('Load code as a string', model)
     // https://github.com/altbdoor/blob-worker/blob/master/blobWorker.js
     importScripts(URL.createObjectURL(new Blob([model.code], { type: 'text/javascript' })))
   } else if (model.url) {
@@ -40,96 +56,61 @@ function initJS (model) {
     log('No script provided')
   }
 
-
   // Related:
   // https://stackoverflow.com/questions/37711603/javascript-es6-class-definition-not-accessible-in-window-global
   const target = model.type === 'class'
     ? eval(model.name)
     : this[model.name]
+
   // Need promise here in case of async init
-  Promise.resolve(utils.getModelFuncJS(model, target, log))
-    .then(m => {
-      postMessage({_status: 'loaded'})
-      this.modelFunc = m
-    })
+  let modelFunc = await utils.getModelFuncJS(model, target, { log, progress })
+
+  return modelFunc
 }
 
 function initAPI (model) {
   log('Init API')
-  this.modelFunc = utils.getModelFuncAPI(model, log)
+  return utils.getModelFuncAPI(model, log)
 }
 
-onmessage = function (e) {
-
+onmessage = async function (e) {
   var data = e.data
   log('Received message of type:', typeof data)
 
   if ((typeof data === 'object') && ((data.url) || (data.code))) {
-    /*
-      INIT MESSAGE
-    */
-    let model = data
+    // Init message
     log('Init...')
-
-    switch (model.type) {
+    let m = data
+    switch (m.type) {
       case 'tf':
-        initTF(model)
+        self.modelFunc = await initTF(m)
         break
       case 'py':
-        initPython(model)
+        self.modelFunc = await initPython(m)
         break
       case 'function':
       case 'class':
       case 'async-init':
       case 'async-function':
-        initJS(model)
+        self.modelFunc = await initJS(m)
         break
       case 'get':
       case 'post':
-        initAPI(model)
+        self.modelFunc = await initAPI(m)
         break
+      default:
+        throw new Error(`No type information: ${m.type}`)
     }
+    postMessage({_status: 'loaded'})
   } else {
-    /*
-    :w
-    CALL MESSAGE
-    */
-    var res
-    if (typeof this.modelFunc === 'string') {
-      // Python model:
-      log('Calling Python model')
-      /*
-      const keys = Object.keys(data)
-      for (let key of keys) {
-        self[key] = data[key];
-      }
-      self.pyodide.runPythonAsync(this.model, () => {})
-        .then((res) => {
-          console.log('[Worker] Py results: ', typeof res, res)
-	  postMessage(res)
-        })
-        .catch((err) => {
-          // self.postMessage({error : err.message});
-        })
-      */
-    } else {
-      // JavaScript model
-      log('Calling JavaScript model')
-      if (this.container === 'args') {
-        log('Applying inputs as arguments')
-        res = this.modelFunc.apply(null, data)
-      } else {
-        // JS object or array
-        log('Applying inputs as object/array')
-        res = this.modelFunc(data, log, async (res) => {
-          const r = await res
-          postMessage(r)
-          await utils.delay(1)
-        })
-      }
-      // Return promise value or just regular value
-      // Promise.resolve handles both cases
-      Promise.resolve(res).then(r => { postMessage(r) })
+    // Execution
+    try {
+      log('Run model with data:', data)
+      const results = await self.modelFunc(data)
+      log('Results:', results)
+      postMessage(results)
+    } catch (error) {
+      postMessage({ _status: 'error', _error: error })
     }
   }
 }

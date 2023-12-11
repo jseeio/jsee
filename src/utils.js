@@ -1,21 +1,49 @@
-function getModelFuncJS (model, target, log=console.log) {
+// https://stackoverflow.com/questions/8511281/check-if-a-value-is-an-object-in-javascript
+function isObject (item) {
+  return (typeof item === 'object' && !Array.isArray(item) && item !== null)
+}
+
+async function getModelFuncJS (model, target, app) {
+  let modelFunc
   switch (model.type) {
     case 'class':
-      log('Init class')
+      app.log('Init class')
       const modelClass = new target()
-      return (...a) => {
+      modelFunc = (...a) => {
         return modelClass[model.method || 'predict'](...a)
       }
+      break
     case 'async-init':
-      // TODO: Test this
-      log('Function with async init')
-      return target().then(m => {
-        log('> Async init resolved: ', m)
-        return m
-      })
+      app.log('Function with async init')
+      modelFunc = await target()
+      break
     default:
-      log('Init function')
-      return target
+      app.log('Init function')
+      modelFunc = target
+  }
+
+  // Wrap modelFunc to take into account container
+  // Possible cases:
+  if (model.container === 'args') {
+    return (...a) => {
+      if (Array.isArray(a[0]) && a[0].length && a.length === 1) {
+        return modelFunc(...a[0])
+      } else if (isObject(a[0]) && a.length === 1) {
+        return modelFunc(...Object.values(a[0]))
+      } else {
+        return modelFunc(...a)
+      }
+    }
+  } else {
+    return (...a) => {
+      if (isObject(a[0]) && a.length === 1) {
+        // In case when we have only one input object
+        // Pass log and callback to the model function
+        return modelFunc(a[0], app)
+      } else {
+        return modelFunc(...a)
+      }
+    }
   }
 }
 
@@ -94,6 +122,7 @@ async function delay (ms) {
 }
 
 module.exports = {
+  isObject,
   getModelFuncJS,
   getModelFuncAPI,
   importScripts,

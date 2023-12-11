@@ -1,0 +1,52 @@
+<html>
+  <div id="jsee-container">
+  <script src="/dist/jsee.js"></script>
+  <script>
+    new JSEE({
+      schema: {
+        "model": [
+          {
+            "name": "sum",
+            "type": "function",
+            "container": "args",
+            "code": function sum (a, b) {
+              return a + b
+            },
+            "worker": true
+          },
+          {
+            "name": "square",
+            "type": "function",
+            "container": "args",
+            "code": function square (a) {
+              return a * a
+            }
+          },
+          {
+            "name": "Increment",
+            "type": "class",
+            "method": "step",
+            "container": "args",
+            "code": class Increment {
+              constructor () {
+                this.i = 0
+              }
+              step (a) {
+                this.i += 1
+                return a + this.i
+              }
+            }
+          }
+        ],
+        "inputs": [
+          { "name": "a", "type": "int", "default": 2 },
+          { "name": "b", "type": "int", "default": 3 }
+        ],
+        "outputs": [
+          { "name": "square", "type": "int" }
+        ],
+        "autorun": false
+      }
+    })
+  </script>
+</html>
