@@ -85,12 +85,8 @@
   	  			type="file"
   	  		>
           <span class="file-cta">
-            <span class="file-icon">
-              <span v-if="input.file && input.file.name">✓</span>
-              <span v-else>↥</span>
-  	  			</span>
             <span class="file-label">
-              Choose a file…
+              Open
             </span>
           </span>
           <span class="file-name">
@@ -100,6 +96,16 @@
         </label>
       </div>
     </div>
+  </div>
+
+  <div class="field"  v-if="input.type == 'action' || input.type == 'button'">
+    <button 
+      v-on:click="$parent.$parent.run(input.name.toLowerCase().replace(/ /g, '_'))"
+      class="button is-small"
+      style="width: 100%; padding: 5px 0; margin-top: 8px; text-align: left;"
+    >
+      <span>&nbsp; {{ input.title ? input.title : input.name }} &nbsp;</span>
+    </button>
   </div>
 
   <div class="field is-horizontal" v-if="input.type == 'group'">

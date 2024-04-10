@@ -20,10 +20,16 @@ const components = {
 const filtrex = require('filtrex')
 const JsonViewer = require('vue3-json-viewer').default
 
-function resetInputs (inputs) {
-  inputs.forEach(input => {
-    if (input.default) { 
-      input.value = input.default 
+function resetInputs (inputs, example) {
+  inputs.forEach((input, index) => {
+    if (example && input.name && example[input.name]) {
+      // Object
+      input.value = example[input.name]
+    } else if (example && example[index]) {
+      // Array
+      input.value = example[index]
+    } else if (input.default) {
+      input.value = input.default
     } else {
       switch (input.type) {
         case 'int':
@@ -107,10 +113,10 @@ function createVueApp (env, mountedCallback, logMain) {
   })
 
   // Determine a container for Vue app
-  const container = env.params.container
-    ? (typeof env.params.container === 'string')
-      ? document.querySelector(env.params.container)
-      : env.params.container
+  const container = env.container
+    ? (typeof env.container === 'string')
+      ? document.querySelector(env.container)
+      : env.container
     : document.body
 
   // Determine a template and GUI framework
@@ -122,7 +128,7 @@ function createVueApp (env, mountedCallback, logMain) {
   let render
   if (
     env.schema.design
-    && env.schema.design.template 
+    && env.schema.design.template
     && (
       typeof env.schema.design.template === 'string'
       || env.schema.design.template === false
@@ -151,7 +157,7 @@ function createVueApp (env, mountedCallback, logMain) {
         handler (v) {
           this.dataChanged = true // Used in the reset button
           if (this.model.autorun) {
-            this.run()
+            this.run('autorun')
           }
         }
       }
@@ -161,18 +167,22 @@ function createVueApp (env, mountedCallback, logMain) {
     },
     methods: {
       display (index) {
-        const res = displayFunctions[index](this.$data)
+        const res = index < displayFunctions.length
+          ? displayFunctions[index](this.$data)
+          : true
         return res
       },
-      reset () {
-        resetInputs(this.inputs)
+      reset (example) {
+        // Reset input values to default ones
+        // If example is provided, use it as a new default
+        resetInputs(this.inputs, example)
         this.$nextTick(() => {
           this.dataChanged = false
         })
       },
-      run () {
+      run (caller) {
         this.clickRun = true
-        env.run()
+        env.run(caller)
         setTimeout(() => {
           this.clickRun = false
         }, 150)
@@ -180,7 +190,7 @@ function createVueApp (env, mountedCallback, logMain) {
       notify (msg) {
         env.notify(msg)
       }
-    },
+    }
   })
 
   if (framework !== false) {

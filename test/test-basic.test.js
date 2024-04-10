@@ -1,6 +1,11 @@
 require('expect-puppeteer')
 
-page.setDefaultTimeout(1000)
+page.setDefaultTimeout(10000)
+
+// Tests require a server to be running on port 8080
+// If you have php installed: php -S localhost:8080
+// Python: python -m http.server 8080
+// Node: npm install -g http-server && http-server -p 8080
 
 const port = 8080
 const urlSchema = (name) => `http://localhost:${port}/load/?s=/test/${name}.schema.json`
@@ -12,21 +17,21 @@ describe('Initial test', () => {
     await page.goto(urlSchema('sum'))
   })
   test('Title', async () => {
-    await expect(page).toMatch('title')
+    await expect(page).toMatchTextContent('title')
   })
   test('Description', async () => {
-    await expect(page).toMatch('description')
+    await expect(page).toMatchTextContent('description')
   })
   test('Run button is active', async () => {
     await expect(page).toClick('button', { text: 'Run' })
   })
   test('Default result is right', async () => {
-    await expect(page).toMatch('142')
+    await expect(page).toMatchTextContent('142')
   })
   test('Changing inputs', async () => {
     await expect(page).toFill('#a', '200')
     await expect(page).toClick('button', { text: 'Run' })
-    await expect(page).toMatch('242')
+    await expect(page).toMatchTextContent('242')
     // await jestPuppeteer.debug()
   })
 })
@@ -40,7 +45,7 @@ describe('Initial test (worker)', () => {
     await expect(page).toFill('#a', '8')
     await expect(page).toFill('#b', '7')
     await expect(page).toClick('button', { text: 'Run' })
-    await expect(page).toMatch('15')
+    await expect(page).toMatchTextContent('15')
   })
 })
 
@@ -56,28 +61,28 @@ describe('Minimal examples', () => {
     await expect(page).toFill('#a', '100')
     await expect(page).toFill('#b', '4')
     await expect(page).toClick('button', { text: 'Run' })
-    await expect(page).toMatch('25')
+    await expect(page).toMatchTextContent('25')
   })
   test('Code instead of schema (function)', async () => {
     await page.goto(urlHTML('minimal1'))
     await expect(page).toFill('#a', '100')
     await expect(page).toFill('#b', '4')
     await expect(page).toClick('button', { text: 'Run' })
-    await expect(page).toMatch('400')
+    await expect(page).toMatchTextContent('400')
   })
   test('Code instead of model (function)', async () => {
     await page.goto(urlHTML('minimal2'))
     await expect(page).toFill('#a', '100')
     await expect(page).toFill('#b', '4')
     await expect(page).toClick('button', { text: 'Run' })
-    await expect(page).toMatch('400')
+    await expect(page).toMatchTextContent('400')
   })
   test('Code instead of schema (anonymous function)', async () => {
     await page.goto(urlHTML('minimal3'))
     await expect(page).toFill('#a', '100')
     await expect(page).toFill('#b', '4')
     await expect(page).toClick('button', { text: 'Run' })
-    await expect(page).toMatch('400')
+    await expect(page).toMatchTextContent('400')
   })
 })
 
@@ -87,28 +92,28 @@ describe('Load code directly', () => {
     await expect(page).toFill('#a', '8')
     await expect(page).toFill('#b', '7')
     await expect(page).toClick('button', { text: 'Run' })
-    await expect(page).toMatch('15')
+    await expect(page).toMatchTextContent('15')
   })
   test('Window (string with eval)', async () => {
     await page.goto(urlHTML('string'))
     await expect(page).toFill('#a', '8')
     await expect(page).toFill('#b', '7')
     await expect(page).toClick('button', { text: 'Run' })
-    await expect(page).toMatch('15')
+    await expect(page).toMatchTextContent('15')
   })
   test('Worker', async () => {
     await page.goto(urlHTML('codew'))
     await expect(page).toFill('#a', '8')
     await expect(page).toFill('#b', '7')
     await expect(page).toClick('button', { text: 'Run' })
-    await expect(page).toMatch('15')
+    await expect(page).toMatchTextContent('15')
   })
   test('Worker (string)', async () => {
     await page.goto(urlHTML('stringw'))
     await expect(page).toFill('#a', '8')
     await expect(page).toFill('#b', '7')
     await expect(page).toClick('button', { text: 'Run' })
-    await expect(page).toMatch('15')
+    await expect(page).toMatchTextContent('15')
   })
 })
 
@@ -130,14 +135,14 @@ describe('Classes', () => {
     schema.model.worker = false
     await page.goto(urlQuery(schema))
     await expect(page).toClick('button', { text: 'Run' })
-    await expect(page).toMatch('200')
+    await expect(page).toMatchTextContent('200')
   })
 
   test('Worker', async () => {
     schema.model.worker = true
     await page.goto(urlQuery(schema))
     await expect(page).toClick('button', { text: 'Run' })
-    await expect(page).toMatch('200')
+    await expect(page).toMatchTextContent('200')
   })
 })
 
@@ -153,8 +158,80 @@ describe('Some edge cases', () => {
     await expect(page).toFill('#a', '0')
     await expect(page).toFill('#b', '0')
     await expect(page).toClick('button', { text: 'Run' })
-    await expect(page).toMatch('Copy')
+    await expect(page).toMatchTextContent('Copy')
   })
 })
 
+describe('Imports', () => {
+  const schema = {
+    'model': {
+      'name': 'kebab',
+      'type': 'function',
+      'container': 'args',
+      'code': `
+      function kebab (str) {
+        return _.kebabCase(str)
+      }
+      `
+    },
+    'imports': 'lodash@4.17.21/lodash.min.js',
+    'inputs': [
+      { 'name': 'str', 'type': 'string', 'default': 'FooBar' },
+    ]
+  }
+  test('Window', async () => {
+    schema.model.worker = false
+    await page.goto(urlQuery(schema))
+    await expect(page).toClick('button', { text: 'Run' })
+    await expect(page).toMatchTextContent('foo-bar')
+  })
+  test('Worker', async () => {
+    schema.model.worker = true
+    await page.goto(urlQuery(schema))
+    await expect(page).toClick('button', { text: 'Run' })
+    await expect(page).toMatchTextContent('foo-bar')
+    // await (new Promise(resolve => setTimeout(resolve, 1000)))
+  })
+})
 
+describe('Buttons, button titles and caller', () => {
+  const schema = {
+    'model': {
+      'name': 'callerRepeater',
+      'type': 'function',
+      'code': `function callerRepeater (inputs) {
+        return inputs.caller
+      }`
+    },
+    'inputs': [
+      { 'name': 'test_button', 'type': 'button', 'title': 'Test Button' },
+    ]
+  }
+  test('Window', async () => {
+    schema.model.worker = false
+    await page.goto(urlQuery(schema))
+    await expect(page).toMatchTextContent('Test Button')
+    await expect(page).toClick('button', { text: 'Test Button' })
+    await expect(page).toMatchTextContent('test_button')
+  })
+  test('Worker', async () => {
+    schema.model.worker = true
+    await page.goto(urlQuery(schema))
+    await expect(page).toClick('button', { text: 'Test Button' })
+    await expect(page).toMatchTextContent('test_button')
+  })
+})
+
+describe('Pipeline', () => {
+  test('Multiple models', async () => {
+    let a = 3
+    let b = 4
+    await page.goto(urlHTML('pipeline'))
+    await expect(page).toFill('#a', a.toString())
+    await expect(page).toFill('#b', b.toString())
+    await expect(page).toClick('button', { text: 'Run' })
+    await expect(page).toMatchTextContent((Math.pow((a + b), 2) + 1).toString())
+    await expect(page).toClick('button', { text: 'Run' })
+    await expect(page).toMatchTextContent((Math.pow((a + b), 2) + 2).toString())
+  })
+})

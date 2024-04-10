@@ -21,6 +21,9 @@ const component = {
           this.$emit('inchange')
         }
       }
+    },
+    call (method) {
+      console.log('calling: ', method)
     }
   }
 }

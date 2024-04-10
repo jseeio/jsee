@@ -1,0 +1,22 @@
+
+<html>
+  <div id="jsee-container">
+  <script src="/dist/jsee.js"></script>
+  <script>
+    new JSEE({
+      schema: {
+        'model': {
+          'name': 'Doubler',
+          'method': 'double',
+          'type': 'class',
+          'container': 'args',
+          'url': '/test/example-class.js',
+        },
+        'inputs': [
+          { 'name': 'b', 'type': 'int', 'default': 100 }
+        ]
+      },
+      container: '#jsee-container'
+    })
+  </script>
+</html>

@@ -85,7 +85,7 @@
       justify-content: right;
     }
 
-    .card-footer .run-button:hover,{
+    .card-footer .run-button:hover {
       background-color: transparent !important;
       background: linear-gradient(270deg, #02dbb2 0%, #fff0 80%);
       box-shadow: 5px 0px 5px -2px #48ffd43b;
@@ -93,6 +93,13 @@
 
     .card-footer .run-button.running .run-icon {
       color: #016c5c !important;
+    }
+
+    .example-button {
+      margin-top: 3px;
+      padding: 5px 10px;
+      border-radius: 5px !important;
+      height: auto;
     }
 
     .field {
@@ -129,20 +136,25 @@
           <p v-if="$parent.model.description">{{ $parent.model.description }}</p>
         </div>
       </div>
-      <div class="columns">
+      <div class="columns is-multiline">
         <div class="column" v-bind:class="($parent.design && $parent.design.grid && ($parent.design.grid.length > 0)) ? 'is-' + $parent.design.grid[0] : ''">
+          <!-- Inputs -->
           <div class="card bordered">
             <div class="card-content" id="inputs" v-if="$parent.inputs && $parent.inputs.length > 0">
               <ul>
                 <li v-for="(input, index) in $parent.inputs">
-                  <vue-input v-bind:input="input" v-if="$parent.display(index)" v-on:inchange="$parent.run()"></vue-input>
+                  <vue-input
+                    v-bind:input="input"
+                    v-if="input.display !== false && $parent.display(index)"
+                    v-on:inchange="$parent.run()"
+                  ></vue-input>
                 </li>
               </ul>
               <pre v-if="$parent.model.debug">{{ $parent.inputs }}</pre>
               <!-- <button class="button is-primary" id="run"><span>▸</span>&nbsp;&nbsp;Run</button> -->
             </div>
             <footer class="card-footer" v-bind:class="{ reset: $parent.dataChanged }">
-              <button 
+              <button
                 v-on:click="$parent.reset()"
                 v-if="$parent.inputs && $parent.inputs.length > 0 && $parent.dataChanged"
                 class="button reset-button icon card-footer-item is-danger is-small"
@@ -150,8 +162,8 @@
                 <span class="rest-icon has-text-danger-dark">✕</span>
                 <span>&nbsp; Reset</span>
               </button>
-              <button 
-                v-on:click="$parent.run()" 
+              <button
+                v-on:click="$parent.run('run')"
                 class="button run-button icon card-footer-item is-primary is-small"
                 v-bind:class="{ running: $parent.clickRun }"
               >
@@ -160,8 +172,21 @@
               </button>
             </footer>
           </div>
+          <!-- Examples -->
+          <div v-if="$parent.examples">
+            <p style="margin-top: 20px">Examples</p>
+            <div v-for="(example, index) in $parent.examples">
+              <button
+                v-on:click="$parent.reset(example)"
+                class="button is-small example-button"
+              >
+                {{ example }}
+              </button>
+            </div>
+          </div>
         </div>
-        <div class="column" id="outputs">
+        <div class="column" id="outputs" v-bind:class="($parent.design && $parent.design.grid && ($parent.design.grid.length > 1)) ? 'is-' + $parent.design.grid[1] : ''">
+          <!-- Outputs -->
           <div v-if="$parent.outputs">
             <div v-for="(output, index) in $parent.outputs">
               <vue-output v-bind:output="output" v-on:notification="$parent.notify($event)"></vue-output>
