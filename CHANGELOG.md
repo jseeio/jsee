@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+- [x] Add `download` method to jsee object
+- [x] Add `bin` folder with `cmd.js` for easier project building
+
 ## 0.2.9
 - [x] Add examples
 - [x] Add imports
