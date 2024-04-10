@@ -18,7 +18,7 @@ async function initPython (model) {
   importScripts("https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js")
   const pyodide = await loadPyodide()
   if (model.imports && Array.isArray(model.imports) && model.imports.length) {
-    await pyodide.loadPackage(model.imports)
+    await pyodide.loadPackage(model.imports.map(i => i.url))
   } else {
     await pyodide.loadPackagesFromImports(model.code)
   }
@@ -39,9 +39,13 @@ async function initJS (model) {
     log('Loading imports...')
     for (let imp of model.imports) {
       // Try creating an url
-      const url = utils.getUrl(imp)
-      log('Importing:', url)
-      importScripts(url)
+      if (imp.code) {
+        log('Importing from DOM:', imp.url)
+        importScripts(URL.createObjectURL(new Blob([imp.code], { type: 'text/javascript' })))
+      } else {
+        log('Importing from network:', imp.url)
+        importScripts(imp.url)
+      }
     }
   }
 

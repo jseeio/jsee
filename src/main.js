@@ -136,6 +136,7 @@ export default class JSEE {
     verbose = !(params.verbose === false)
     this.container = params.container
     this.schema = params.schema || params.config // Previous naming
+    this.utils = utils
     this.__version__ = VERSION
 
     // Check if schema is provided
@@ -196,8 +197,20 @@ export default class JSEE {
     // Check if schema is a string (url to json)
     if (typeof this.schema === 'string') {
       this.schemaUrl = this.schema.indexOf('json') ? this.schema : this.schema + '.json'
-      this.schema = await fetch(this.schemaUrl)
-      this.schema = await this.schema.json()
+
+      // Check if schema is present in the hidden DOM element
+      const schema = utils.loadFromDOM(this.schemaUrl)
+      if (schema) {
+        // Schema block found in the hidden element, use its content
+        this.schema = JSON.parse(schema);
+        log(`Loaded schema from the hidden DOM element for ${this.schemaUrl}:`, this.schema);
+      } else {
+        // Fetch schema from the URL
+        log('Fetching schema from:', this.schemaUrl)
+        this.schema = await fetch(this.schemaUrl)
+        this.schema = await this.schema.json()
+        log('Loaded schema from URL:', this.schema)
+      }
     }
 
     // Check if schema is a function (model)
@@ -264,14 +277,22 @@ export default class JSEE {
 
       // Load code if url is provided
       if (m.url && (m.url.includes('.js') || m.url.includes('.py'))) {
-        // Update model URL if needed
-        if (!m.url.includes('/') && this.schemaUrl && this.schemaUrl.includes('/')) {
-          m.url = window.location.protocol + '//' + window.location.host + this.schemaUrl.split('/').slice(0, -1).join('/') + '/' + m.url
-          log(`Changed the old model URL to ${m.url} (based on the schema URL)`)
+        // Try to get the code from a hidden DOM element first
+        const modelCode = utils.loadFromDOM(m.url)
+        if (modelCode) {
+          // Code block found in the hidden element, use its content
+          m.code = modelCode
+          log(`Loaded code from the hidden DOM element for ${m.url}`);
+        } else {
+          // Update model URL if needed
+          if (!m.url.includes('/') && this.schemaUrl && this.schemaUrl.includes('/')) {
+            m.url = window.location.protocol + '//' + window.location.host + this.schemaUrl.split('/').slice(0, -1).join('/') + '/' + m.url
+            log(`Changed the old model URL to ${m.url} (based on the schema URL)`)
+          }
+          log('Loaded code from:', m.url)
+          m.code = await fetch(m.url)
+          m.code = await m.code.text()
         }
-        log('Loaded code from:', m.url)
-        m.code = await fetch(m.url)
-        m.code = await m.code.text()
       }
 
       // Update model name if absent
@@ -295,10 +316,26 @@ export default class JSEE {
         m.type = getModelType(m)
       }
 
-
+      // Load imports from hidden DOM element
+      if (m.imports && Array.isArray(m.imports) && m.imports.length) {
+        for (let [i, imp] of m.imports.entries()) {
+          if (typeof imp === 'string') {
+            // Convert string to object
+            m.imports[i] = {
+              url: imp
+            }
+            imp = m.imports[i]
+          }
+          if (!m.type.includes('py')) {
+            imp.url = utils.getUrl(imp.url) 
+            imp.code = utils.loadFromDOM(imp.url)
+          }
+        }
+      }
+      console.log('Imports:', m.imports)
     } // end of model-loop
 
-    log('Model initialized, size:', this.model.length)
+    log('Models initialized:', this.model.length)
   }
 
   async initInputs () {
@@ -473,7 +510,7 @@ export default class JSEE {
     await utils.importScripts(['https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js'])
     const pyodide = await loadPyodide()
     if (model.imports && Array.isArray(model.imports) && model.imports.length) {
-      await pyodide.loadPackage(model.imports)
+      await pyodide.loadPackage(model.imports.url)
     } else {
       await pyodide.loadPackagesFromImports(model.code)
     }
@@ -532,7 +569,7 @@ export default class JSEE {
       this.worker.postMessage(this.schema.model)
     } else {
       // Main:
-      this.modelFunc = utils.getModelFuncAPI(model, log)
+      return utils.getModelFuncAPI(this.schema.model, log)
     }
   }
 
@@ -674,5 +711,95 @@ export default class JSEE {
         'value': res
       }]
     }
+  }
+
+  async download (title='output') {
+    // Cache the model
+    const clone = document.cloneNode(true)
+
+    // Change #download-btn to 'Offline: version'
+    const downloadBtn = clone.getElementById('download-btn')
+    downloadBtn.textContent = 'Offline: latest'
+    downloadBtn.disabled = true
+    downloadBtn.style.cursor = 'not-allowed'
+
+    let hiddenElement = clone.getElementById('hidden-storage');
+    if (!hiddenElement) {
+      hiddenElement = clone.createElement('div');
+      hiddenElement.style.display = 'none'; // Make it hidden
+      hiddenElement.id = 'hidden-storage'; // Assign an ID
+      clone.body.prepend(hiddenElement)
+    }
+
+    function storeInHiddenElement (url, value) {
+      const element = clone.createElement('script')
+      element.type = 'text/plain' // Make it non-executable
+      element.style.display = 'none' // Make it hidden
+      element.setAttribute('data-src', url) // Use data attribute for key
+      element.textContent = typeof value === 'object' ? JSON.stringify(value) : value
+      hiddenElement.appendChild(element)
+      console.log('[Hidden store] Stored:', url)
+    }
+
+    // Remove Google Analytics script tags
+    try {
+      clone.getElementById('ga-src').remove()
+      clone.getElementById('ga-body').remove()
+    } catch (error) {
+      console.error('Error removing GA script tags:', error.message)
+    }
+
+    console.log('Caching schema:', env.schema)
+    storeInHiddenElement(env.schemaUrl, env.schema)
+
+    console.log('Caching models:', env.model)
+    for (const model of env.model) {
+      storeInHiddenElement(model.url, model.code)
+      // Iterate over imports
+      if (model.imports) {
+        for (let imp of model.imports) {
+          // Store the import
+          const response = await fetch(imp.url)
+          const content = await response.text()
+          storeInHiddenElement(imp.url, content)
+          // Remove any src-based script tags with the same URL
+          const script = clone.querySelector('script[src="' + imp.url + '"]')
+          if (script) {
+            script.remove()
+          }
+        }
+      }
+    }
+
+    // append dummy src script for webpack fix
+    // const dummyScript = document.createElement('script')
+    // dummyScript.src = 'https://example.com/dummy.js'
+    // clone.body.appendChild(dummyScript)
+
+    // Find all external script tags and replace them with inline script tags
+    const externalScripts = Array.from(clone.querySelectorAll('script[src]'))
+    for (const script of externalScripts) {
+      try {
+        const response = await fetch(script.src);
+        if (!response.ok) throw new Error('Network response was not ok for script:' + script.src);
+        const content = await response.text()
+        const inlineScript = document.createElement('script')
+        inlineScript.textContent = content
+        inlineScript.setAttribute('data-src', script.src)
+        script.parentNode.replaceChild(inlineScript, script)
+      } catch (error) {
+        console.error("Error fetching script:", error.message);
+      }
+    }
+    // Prepare the HTML for download and trigger the download
+    const html = '<!DOCTYPE html>\n' + clone.documentElement.outerHTML
+    console.log(html)
+    const blob = new Blob([html], { type: 'text/html' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = title + '.html'
+    a.click()
+    URL.revokeObjectURL(url)
   }
 }

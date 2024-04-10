@@ -57,24 +57,49 @@ function getUrl (url) {
   return newUrl
 }
 
-function importScriptAsync (url, async=true) {
-  url = getUrl(url)
+function loadFromDOM (url) {
+  const scriptElement = document.querySelector(`script[data-src="${url}"]`)
+  if (scriptElement) {
+    return scriptElement.textContent
+  } else {
+    return null
+  }
+}
+
+function importScriptAsync (imp, async=true) {
   return new Promise((resolve, reject) => {
     try {
       const scriptElement = document.createElement('script')
       scriptElement.type = 'text/javascript'
-      scriptElement.async = async
-      scriptElement.src = url
-      scriptElement.addEventListener('load', (ev) => {
-        resolve({ status: true })
-      })
-      scriptElement.addEventListener('error', (ev) => {
-        reject({
-          status: false,
-          message: `Failed to import ＄{url}`
+      if (imp.code) {
+        // Create script element from import.code
+        scriptElement.textContent = imp.code
+        // Create event element to notify about script load
+        const eventElement = document.createElement('script')
+        eventElement.type = 'text/javascript'
+        eventElement.textContent = `document.dispatchEvent(new CustomEvent('${imp.url}', {detail: {url: '${imp.url}'}}));`
+        document.addEventListener(imp.url, (ev) => {
+          console.log('Script loaded from cache:', ev.detail.url)
+          resolve({ status: true })
         })
-      })
-      document.body.appendChild(scriptElement);
+        document.body.appendChild(scriptElement);console.log('1')
+        document.body.appendChild(eventElement)
+      } else {
+        // Create script element from import.url
+        scriptElement.async = async
+        scriptElement.src = imp.url
+        scriptElement.addEventListener('load', (ev) => {
+          console.log('Script loaded:', imp.url)
+          resolve({ status: true })
+        })
+        scriptElement.addEventListener('error', (ev) => {
+          reject({
+            status: false,
+            message: `Failed to import ＄{imp.url}`
+          })
+        })
+        document.body.appendChild(scriptElement);
+      }
     } catch (error) {
       reject(error)
     }
@@ -85,8 +110,8 @@ async function importScripts (...imports) {
   // Load scripts in parallel
   // return Promise.all(imports.map(importScriptAsync))
   // Load scripts in sequence. Possible ordering issues.
-  for (const scriptUrl of imports) {
-    await importScriptAsync(scriptUrl);
+  for (const imp of imports) {
+    await importScriptAsync(imp);
   }
 }
 
@@ -103,8 +128,8 @@ function getModelFuncAPI (model, log=console.log) {
       }
     case 'post':
       return (data) => {
-        log('Sending POST request to', this.schema.model.url)
-        const resPromise = fetch(this.schema.model.url, {
+        log('Sending POST request to', model.url)
+        const resPromise = fetch(model.url, {
           method: 'POST',
           headers: {
             'Accept': 'application/json',
@@ -123,6 +148,7 @@ async function delay (ms) {
 
 module.exports = {
   isObject,
+  loadFromDOM,
   getModelFuncJS,
   getModelFuncAPI,
   importScripts,
