@@ -1,6 +1,6 @@
 {
   "name": "@jseeio/jsee",
-  "version": "0.3.1",
+  "version": "0.3.3",
   "description": "JavaScript Execution Environment",
   "main": "dist/jsee.js",
   "unpkg": "dist/jsee.js",
@@ -10,14 +10,14 @@
     "build-dev": "webpack --mode=development --progress --stats-children --env DEVELOPMENT",
     "build": "webpack --mode=production --progress && webpack --mode=production --progress --env RUNTIME && npm test",
     "watch": "nodemon --watch . --ignore dist,.git --ext vue,js,css,html --exec 'npm run build-dev && npm run test:basic'",
-    "prepublishOnly": "npm run build && npm test",
+    "prepublishOnly": "npm run build",
     "test": "npm run test:basic && npm run test:python",
     "test:basic": "jest test/test-basic.test.js --detectOpenHandles",
     "test:python": "jest test/test-python.test.js --detectOpenHandles",
     "test-head": "HEADLESS=false npm test"
   },
   "bin": {
-    "jsee": "bin/cmd.js"
+    "jsee": "./bin/jsee"
   },
   "author": "Anton Zemlyansky",
   "license": "MIT",
