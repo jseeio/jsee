@@ -1,11 +1,26 @@
 #!/usr/bin/env node
 
-const minimist = require('minimist')
 const fs = require('fs')
 const path = require('path')
+const os = require('os')
+const crypto = require('crypto')
+
+const minimist = require('minimist')
 const jsdoc2md = require('jsdoc-to-markdown')
 const showdown = require('showdown')
-const converter = new showdown.Converter()
+const showdownKatex = require('showdown-katex')
+const converter = new showdown.Converter({
+  extensions: [
+    showdownKatex({
+      throwOnError: true,
+      displayMode: true,
+      errorColor: '#1500ff',
+      output: 'mathml'
+    }),
+  ],
+  tables: true
+})
+showdown.setFlavor('github')
 
 // left padding of multiple lines
 function pad (str, len, start=0) {
@@ -25,10 +40,12 @@ const argv = minimist(process.argv.slice(2), {
     port: 'p',
     version: 'v',
     fetch: 'f',
+    execute: 'e'
   },
   default: {
-    inputs: '',
+    execute: false, // execute the model code on the server
     fetch: false,
+    inputs: '',
     port: 3000,
     version: 'latest'
   }
@@ -42,13 +59,18 @@ gen(argv)
 
 // Adding async here breaks express. TODO: investigate
 async function gen (argv, returnHtml=false) {
+  // print all folders (file location, cwd, etc.)
+  console.log('Current working directory:', process.cwd())
+  console.log('Script location:', __dirname)
+  console.log('argv:', argv)
   let cwd = process.cwd()
   let inputs = argv.inputs
   let outputs = argv.outputs
-  let imports = argv.imports
   let description = argv.description
+  let version = argv.version
   let ga = argv.ga
   let schema
+  let descriptionTxt = ''
   let descriptionHtml = ''
   let jsdocMarkdown = ''
 
@@ -62,6 +84,12 @@ async function gen (argv, returnHtml=false) {
   // if outputs is a string with js file names, split it into an array
   if (typeof outputs === 'string') {
     outputs = outputs.split(',')
+  }
+
+  // Check for schema.json in the current working directory
+  if (inputs.length === 0 && fs.existsSync(path.join(cwd, 'schema.json'))) {
+    console.log('Using schema.json from the current working directory')
+    inputs = ['schema.json']
   }
 
   if (inputs.length === 0) {
@@ -88,38 +116,47 @@ async function gen (argv, returnHtml=false) {
   if (description) {
     const descriptionMd = fs.readFileSync(path.join(cwd, description), 'utf8')
     descriptionHtml = converter.makeHtml(descriptionMd)
+
+    if (descriptionMd.includes('---')) {
+      descriptionTxt = descriptionMd
+        .split('---')[0]
+        .replace(/\n/g, ' ')
+        .replace(/\s+/g, ' ')
+        .replace(/#/g, '')
+        .replace(/\*/g, '')
+        .trim()
+    }
   }
 
   descriptionHtml += genHtmlFromSchema(schema)
 
-  // Generate google analytics code
-  let gaHtml = ga ? `
-    <script id="ga-src" async src="https://www.googletagmanager.com/gtag/js?id=${blocks.ga}"></script>
-    <script id="ga-body">
-      window['ga-disable-${ga}'] = window.doNotTrack === "1" || navigator.doNotTrack === "1" || navigator.doNotTrack === "yes" || navigator.msDoNotTrack === "1";
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){dataLayer.push(arguments);}
-      gtag('js', new Date());
-      gtag('config', '${ga}');
-    </script>
-  ` : ``
+
 
   // Generate jsee code
   let jseeHtml = ''
   let hiddenElementHtml = ''
   if (argv.fetch) {
-    // Fetch the jsee runtime from the CDN or local server
-    if (argv.version === 'latest') {
-      const jseeCode = fs.readFileSync(path.join(__dirname, '..', 'dist', 'jsee.runtime.js'), 'utf8')
-      jseeHtml = `<script>${jseeCode}</script>`
+    // Fetch jsee code from the CDN or local server
+    let jseeCode
+    if (argv.version === 'dev') {
+      jseeCode = fs.readFileSync(path.join(__dirname, '..', 'dist', 'jsee.js'), 'utf8')
+    } else if (argv.version === 'latest') {
+      jseeCode = fs.readFileSync(path.join(__dirname, '..', 'dist', 'jsee.runtime.js'), 'utf8')
     } else {
       // Pre-fetch the jsee runtime from the CDN https://cdn.jsdelivr.net/npm/@jseeio/jsee@${argv.version}/dist/jsee.runtime.js
-      let jseeCode = await fetch(`https://cdn.jsdelivr.net/npm/@jseeio/jsee@${argv.version}/dist/jsee.runtime.js`)
+      jseeCode = await fetch(`https://cdn.jsdelivr.net/npm/@jseeio/jsee@${argv.version}/dist/jsee.runtime.js`)
       jseeCode = await jseeCode.text()
-      jseeHtml = `<script>${jseeCode}</script>`
     }
+    jseeHtml = `<script>${jseeCode}</script>`
     // Fetch model files and store them in hidden elements
     hiddenElementHtml += '<div id="hidden-storage" style="display: none;">'
+    if (!schema.model) {
+      console.error('No model found in schema')
+      process.exit(1)
+    }
+    if (!Array.isArray(schema.model)) {
+      schema.model = [schema.model]
+    }
     for (let m of schema.model) {
       if (m.url) {
         const modelCode = fs.readFileSync(path.join(cwd, m.url), 'utf8')
@@ -128,8 +165,42 @@ async function gen (argv, returnHtml=false) {
       if (m.imports) {
         for (let i of m.imports) {
           const importUrl = i.includes('.js') ? i : `https://cdn.jsdelivr.net/npm/${i}`
-          let importCode = await fetch(importUrl)
-          importCode = await importCode.text()
+
+          // Create cache directory if it doesn't exist
+          const cacheDir = path.join(os.homedir(), '.cache', 'jsee')
+          fs.mkdirSync(cacheDir, { recursive: true })
+
+          // Create a hash of the importUrl
+          const hash = crypto.createHash('sha256').update(importUrl).digest('hex')
+          const cacheFilePath = path.join(cacheDir, `${hash}.js`)
+
+          let importCode
+          let useCache = false
+
+          // Check if cache file exists and is less than 1 day old
+          if (fs.existsSync(cacheFilePath)) {
+            const stats = fs.statSync(cacheFilePath)
+            const mtime = new Date(stats.mtime)
+            const now = new Date()
+            const ageInDays = (now - mtime) / (1000 * 60 * 60 * 24)
+
+            if (ageInDays < 1) {
+              console.log('Using cached import:', importUrl)
+              importCode = fs.readFileSync(cacheFilePath, 'utf8');
+              useCache = true;
+            }
+          }
+
+          if (!useCache) {
+            const response = await fetch(importUrl);
+            if (!response.ok) {
+              console.error(`Failed to fetch ${importUrl}: ${response.statusText}`);
+              process.exit(1);
+            }
+            importCode = await response.text()
+            fs.writeFileSync(cacheFilePath, importCode, 'utf8')
+            console.log('Fetched and stored to cache:', importUrl)
+          }
           hiddenElementHtml += `<script type="text/plain" style="display: none;" data-src="${importUrl}">${importCode}</script>`
         }
       }
@@ -141,11 +212,74 @@ async function gen (argv, returnHtml=false) {
       : `<script src="http://localhost:${argv.port}/dist/jsee.runtime.js"></script>` 
   }
 
+  let socialHtml = ''
+  let gaHtml = ''
+  let orgHtml = ''
+
+  if (schema.page) {
+    if (schema.page.title) {
+      title = schema.page.title
+    }
+    if (schema.page.ga) {
+      gaHtml = `
+        <script id="ga-src" async src="https://www.googletagmanager.com/gtag/js?id=${schema.page.ga}"></script>
+        <script id="ga-body">
+          window['ga-disable-${schema.page.ga}'] = window.doNotTrack === "1" || navigator.doNotTrack === "1" || navigator.doNotTrack === "yes" || navigator.msDoNotTrack === "1";
+          window.dataLayer = window.dataLayer || [];
+          function gtag(){dataLayer.push(arguments);}
+          gtag('js', new Date());
+          gtag('config', '${schema.page.ga}');
+        </script>
+      `
+    }
+
+    // Social media links
+    if (schema.page.social) {
+      // iterate over dict with k, v pairs
+      for (let [name, url] of Object.entries(schema.page.social)) {
+        switch (name) {
+          case 'twitter':
+            socialHtml += `<li><a rel="me" href="https://twitter.com/${url}">Twitter</a></li>`
+            break
+          case 'github':
+            socialHtml += `<li><a rel="me" href="https://github.com/${url}">GitHub</a></li>`
+            break
+          case 'facebook':
+            socialHtml += `<li><a rel="me" href="https://www.facebook.com/${url}">Facebook</a></li>`
+            break
+          case 'linkedin':
+            socialHtml += `<li><a rel="me" href="https://www.linkedin.com/company/${url}">LinkedIn</a></li>`
+            break
+          case 'instagram':
+            socialHtml += `<li><a rel="me" href="https://www.instagram.com/${url}">Instagram</a></li>`
+            break
+          case 'youtube':
+            socialHtml += `<li><a rel="me" href="https://www.youtube.com/${url}">YouTube</a></li>`
+            break
+          default:
+            socialHtml += `<li><a rel="me" href="${s.url}">${s.name}</a></li>`
+        }
+      }
+    }
+
+    if (schema.page.org) {
+      orgHtml = `<div class="footer-org"><h4 class="footer-heading"><a href="${schema.page.org.url}">${schema.page.org.name}</a></h4>`
+      if (schema.page.org.description) {
+        orgHtml += `<p>${schema.page.org.description}</p>`
+      }
+      orgHtml += '</div>'
+    }
+
+  }
+
   const html = template(schema, {
     descriptionHtml: pad(descriptionHtml, 8, 1),
+    descriptionTxt: descriptionTxt,
     gaHtml: pad(gaHtml, 2, 1),
     jseeHtml: jseeHtml,
-    hiddenElementHtml: hiddenElementHtml
+    hiddenElementHtml: hiddenElementHtml,
+    socialHtml: pad(socialHtml, 2, 1),
+    orgHtml: pad(orgHtml, 2, 1),
   })
 
   if (returnHtml) {
@@ -171,6 +305,18 @@ async function gen (argv, returnHtml=false) {
     // Serve the html
     const express = require('express')
     const app = express()
+    if (argv.execute) {
+      // Create post endpoint for executing the model
+      console.log(schema.model)
+      schema.model.forEach(m => {
+        m.type = 'post'
+        m.url = `/${m.name}`
+        app.post(m.url, (req, res) => {
+          console.log(`Executing model: ${m.name}`)
+        })
+      })
+      console.log('Updated models for execution:', schema.model)
+    }
     app.get('/', async (req, res) => {
       console.log('Serving index.html')
       res.send(await gen(argv, true))
@@ -359,8 +505,12 @@ function genMarkdownFromSchema(schema) {
 
 function template(schema, blocks) {
   let title = 'jsee'
+  // let url = schema.page && schema.page.url ? schema.page.url : ''
+  let url = ('page' in schema && 'url' in schema.page) ? schema.page.url : ''
   if (schema.title) {
     title = schema.title
+  } else if (schema.page && schema.page.title) {
+    title = schema.page.title
   } else if (schema.model) {
     if (Array.isArray(schema.model)) {
       title = schema.model[0].name
@@ -370,28 +520,50 @@ function template(schema, blocks) {
   }
 
   return `<!DOCTYPE html>
+
+<!-- Generated by JSEE (https://jsee.org) -->
+<!-- Do not edit this file directly. Edit the source files and run jsee to generate this file. -->
+<!-- Source: ${argv.inputs} -->
+<!-- License: MIT (https://opensource.org/licenses/MIT) -->
+
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${title}</title>
-  <meta name="generator" content="Jekyll v4.3.3" />
-  <meta property="og:title" content="hashr" />
+  <meta name="description" content="${blocks.descriptionTxt}">
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="${title}" />
+  <meta property="og:description" content="${blocks.descriptionTxt}" />
   <meta property="og:locale" content="en_US" />
-  <meta property="og:site_name" content="hashr" />
+  <meta property="og:url" content="${url}" />
+  <meta property="og:site_name" content="${title}" />
   <meta property="og:type" content="website" />
+
+  <!-- Twitter Card -->
   <meta name="twitter:card" content="summary" />
-  <meta property="twitter:title" content="hashr" />
-  <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","headline":"${title}","name":"${title}","url":"/"}</script>
+  <meta name="twitter:title" content="${title}" />
+  <meta name="twitter:description" content="${blocks.descriptionTxt}" />
+
+  <!-- Structured Data -->
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","headline":"${title}","name":"${title}","url":"${url}", "description":"${blocks.descriptionTxt}"}</script>
+
+  <!-- Canonical Link -->
+  <link rel="canonical" href="${url}" />
+
+  <!-- Favicon -->
   <link href="data:image/x-icon;base64,AAABAAEAEBAQAAEABAAoAQAAFgAAACgAAAAQAAAAIAAAAAEABAAAAAAAgAAAAAAAAAAAAAAAEAAAAAAAAAD9/f0AAAAAAPj4+AAMDAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEQAAAAAAABERAAAAAAAAEREAAAAAAAAREQABERESABERAAETMzAAEREAARAAAAAREQABEAAAABERAAEQARAAEREAARABEAAREQABEAAAABERAAEQAAAAEREAAREREAAREQABEREQABERAAAAAAAAEREAAAAAAAAREQAAAAAAABHAAwAAwAMAAMADAADAAwAAwAMAAMADAADAAwAAwAMAAMADAADAAwAAwAMAAMADAADAAwAAwAMAAMADAADAAwAA" rel="icon" type="image/x-icon" />
+
+  <!-- Styles -->
   <style>
     /** Main */
     html { font-size: 16px; }
     body, h1, h2, h3, h4, h5, h6, p, blockquote, pre, hr, dl, dd, ol, ul, figure { margin: 0; padding: 0; }
     body { font: 400 16px/1.5 -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", "Segoe UI Symbol", "Segoe UI Emoji", "Apple Color Emoji", Roboto, Helvetica, Arial, sans-serif; color: #111111; background-color: #fdfdfd; -webkit-text-size-adjust: 100%; -webkit-font-feature-settings: "kern" 1; -moz-font-feature-settings: "kern" 1; -o-font-feature-settings: "kern" 1; font-feature-settings: "kern" 1; font-kerning: normal; display: flex; min-height: 100vh; flex-direction: column; overflow-wrap: break-word; }
     h1, h2, h3, h4, h5, h6, p, blockquote, pre, ul, ol, dl, figure, .highlight { margin-bottom: 15px; }
-    hr { margin-top: 30px; margin-bottom: 30px; }
+    hr { margin-top: 30px; margin-bottom: 30px; border: 0; border-top: 1px solid #ececec; }
     main { display: block; /* Default value of display of main element is 'inline' in IE 11. */ }
     img { max-width: 100%; vertical-align: middle; }
     figure > img { display: block; }
@@ -438,7 +610,10 @@ function template(schema, blocks) {
     .site-nav .page-link:not(:last-child) { margin-right: 0; }
     @media screen and (min-width: 600px) { .site-nav { position: static; float: right; border: none; background-color: inherit; } .site-nav label[for="nav-trigger"] { display: none; } .site-nav .menu-icon { display: none; } .site-nav input ~ .trigger { display: block; } .site-nav .page-link { display: inline; padding: 0; margin-left: auto; } .site-nav .page-link:not(:last-child) { margin-right: 20px; } }
     .site-footer { border-top: 1px solid #e8e8e8; padding: 30px 0; }
-    .footer-heading { font-size: 1.125rem; margin-bottom: 15px; }
+    .footer-heading { font-size: 1.7rem; line-height: 1.7rem; font-weight: 200; margin-bottom: 5px;}
+    .footer-heading a { color: #a2a2a2; text-decoration: none; }
+    .footer-heading a:hover { color: #828282; }
+    .footer-org p { font-size: 0.65rem; color: #828282; }
     .feed-subscribe .svg-icon { padding: 5px 5px 2px 0; }
     .contact-list, .social-media-list, .pagination { list-style: none; margin-left: 0; }
     .footer-col-wrapper, .social-links { font-size: 0.9375rem; color: #828282; }
@@ -502,7 +677,7 @@ function template(schema, blocks) {
   <header class="site-header">
     <div class="wrapper">
       <span class="site-title">${title}</span>
-      <button id="download-btn" title="Bundled HTML without external dependencies">Download HTML</button>
+      <button id="download-btn" title="Download bundled HTML file without external dependencies to use offline">Download bundle (html)</button>
     </div>
   </header>
   <div class="page-content app-container">
@@ -524,32 +699,12 @@ function template(schema, blocks) {
     <div class="wrapper">
       <div class="footer-col-wrapper">
         <div class="footer-col">
-          <p>
-            <a href="https://jsee.io/" class="logo_footer">
-              <svg width="29mm" height="13mm" viewBox="0 0 29 13" version="1.1" id="svg1274" xmlns="http://www.w3.org/2000/svg" xmlns:svg="http://www.w3.org/2000/svg" style="width: 50px;">
-                <defs id="defs1271"/>
-                <g id="layer1">
-                  <path id="path53650-9-7-8-7-5" style="fill:#000000;fill-opacity:1;stroke-width:0.033443" d="m 15.085048,2.2627646 v 1.7268189 6.9073135 h 1.726792 1.726873 1.726871 V 9.1700919 H 18.538713 16.81184 V 3.9895835 h 1.726873 1.726871 V 2.2627646 H 18.538713 16.81184 Z m 3.453665,3.453624 v 1.7268716 h 1.726871 V 5.7163886 Z"/>
-                  <path id="path53647-5-5-3-6-1" style="fill:#000000;fill-opacity:1;stroke-width:0.033443" d="m 22.001709,2.2627517 v 1.7268184 6.9073269 h 1.726793 1.726871 1.726872 V 9.1700919 H 25.455373 23.728502 V 3.9895701 h 1.726871 1.726872 V 2.2627517 h -1.726872 -1.726871 z m 3.453664,3.4536369 v 1.7268716 h 1.726872 V 5.7163886 Z"/>
-                  <g aria-label="JS" transform="matrix(0.05545656,0,0,0.05597005,-218.22149,96.848185)" id="text9866-2-7-20-0-9-1-4-1" style="font-size:241.925px;fill:#000000;stroke:#0024ee;stroke-width:3.31154">
-                    <g id="path52502-6-4-6-8-3-0" style="fill:#000000">
-                      <path id="path53644-8-2-9-0-8" style="color:#000000;-inkscape-font-specification:'Ubuntu Mono Bold';fill:#000000;stroke:none;stroke-width:3.31155;-inkscape-stroke:none" d="m 4057.5092,-1689.778 -33.3113,-0.027 v 99.6732 c 0,10.8886 -2.3949,18.0118 -6.6855,21.7303 -4.3348,3.7352 -10.0924,5.6444 -17.5448,5.6444 -4.9004,0 -9.717,-1.1428 -14.514,-3.4628 h -0.011 c -4.7842,-2.393 -9.1636,-4.8607 -13.1345,-7.4021 l -1.5765,-1.0103 -12.7499,26.5883 1.0351,0.822 c 4.8358,3.8352 10.7133,7.0544 17.6154,9.6838 7.0314,2.6785 15.6913,3.9804 25.9924,3.9804 9.8334,0 18.2685,-1.3898 25.2967,-4.2345 l 0.016,-0.01 0.016,-0.01 c 6.955,-2.9809 12.6568,-6.9906 17.029,-12.0274 l 0.011,-0.01 c 4.5181,-5.0224 7.7113,-10.908 9.5488,-17.5823 1.98,-6.6083 2.9669,-13.6189 2.9669,-21.0153 z"/>
-                    </g>
-                    <g id="path52504-2-7-1-6-3-5" transform="translate(95.989089,-84.950886)" style="fill:#000000">
-                      <path id="path53638-1-7-4-0-0" style="color:#000000;-inkscape-font-specification:'Ubuntu Mono Bold';fill:#000000;stroke:none;stroke-width:12.5161;-inkscape-stroke:none" d="m 14820.902,-7165.5098 c -61.098,0 -110.108,15.3477 -146.047,46.5274 l -0.04,0.039 h -0.04 c -35.354,31.2211 -53.095,75.0334 -53.095,129.6602 0,27.7074 4.995,51.4357 15.298,70.9336 l 0.04,0.039 0.04,0.045 c 10.052,18.3884 22.693,34.038 37.871,46.8027 l 0.05,0.037 0.05,0.047 c 15.605,12.5992 32.778,22.9927 51.471,31.168 18.277,7.9934 35.956,15.0668 53.053,21.2324 12.58,4.837 25.165,10.284 37.761,16.3379 l 0.116,0.053 0.109,0.053 c 12.38,5.3549 23.522,11.5723 33.449,18.6446 l 0.102,0.076 0.101,0.072 c 9.746,6.3641 17.645,13.7908 23.844,22.3223 5.933,8.165 8.811,17.0897 8.811,27.5117 0,8.4874 -1.396,16.9808 -4.233,25.5703 l -0.05,0.127 -0.04,0.1328 c -2.09,7.3855 -6.277,14.3394 -12.873,21.0312 -6.408,5.904 -15.549,11.0389 -27.597,15.1055 -11.28,3.4051 -26.177,5.2285 -44.551,5.2285 -32.227,0 -59.425,-4.2332 -81.584,-12.4726 -22.161,-8.4662 -41.245,-17.504 -57.227,-27.0625 l -6.488,-3.877 -37.041,103.8457 4.35,2.6699 c 14.574,8.9537 35.758,18.5092 63.875,28.9961 l 0.06,0.037 0.06,0.039 c 28.93,10.1558 66.843,15.0469 113.996,15.0469 70.627,0 124.053,-14.4999 159.64,-44.6446 36.005,-30.6002 54.096,-74.1656 54.096,-128.8164 0,-31.9205 -5.252,-58.6401 -16.158,-80.0176 -10.645,-21.4715 -24.527,-39.3432 -41.582,-53.3886 -16.251,-14.4867 -34.421,-25.8642 -54.418,-34.0684 0,0 -0.04,9e-4 -0.04,-0.037 -18.835,-8.58 -37.086,-16.2605 -54.742,-23.0195 h -0.04 -0.04 c -11.438,-4.253 -23.183,-8.8126 -35.232,-13.6758 -11.18,-4.7508 -21.427,-10.0803 -30.781,-15.9668 -8.553,-6.3562 -15.604,-13.2064 -21.213,-20.541 -5.304,-7.5192 -7.906,-15.8372 -7.906,-25.668 0,-20.2937 6.46,-34.1264 19.728,-43.8281 13.269,-9.7017 34.264,-15.1055 63.244,-15.1055 23.752,0 44.321,3.0022 61.737,8.8614 h 0.04 0.04 c 18.467,6.0121 35.07,13.2006 49.834,21.5449 l 6.312,3.5664 37.239,-99.1895 -4.733,-2.6328 c -18.112,-10.0852 -40.336,-19.0958 -66.734,-27.1504 -26.237,-8.1912 -56.862,-12.2129 -91.906,-12.2129 z" transform="matrix(0.26580544,0,0,0.26336684,98.529211,278.95254)"/>
-                    </g>
-                  </g>
-                </g>
-              </svg>
-            </a>
-          </p>
+          ${blocks.orgHtml}
         </div>
         <div class="footer-col">
           <div class="social-links">
             <ul class="social-media-list">
-              <li><a rel="me" href="https://github.com/jseeio/hash" title="jseeio/hash">GitHub</a></li>
-              <li><a rel="me" href="https://twitter.com/jseeio" title="jseeio">Twitter</a></li>
-              <li><a rel="me" href="https://www.facebook.com/jseeio" title="jseeio">Facebook</a></li>
+              ${blocks.socialHtml}
             </ul>
           </div>
         </div>
