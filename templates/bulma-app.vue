@@ -26,6 +26,21 @@
       justify-content: center;
     }
 
+    .column {
+      box-sizing: border-box;
+    }
+
+    .card {
+      box-sizing: content-box;
+    }
+
+    #inputs .column {
+      padding: 0 10px;
+    }
+
+    #outputs .column {
+      padding: 0 10px;
+    }
 
     .card-header {
       box-shadow: none;
@@ -140,16 +155,24 @@
         <div class="column" v-bind:class="($parent.design && $parent.design.grid && ($parent.design.grid.length > 0)) ? 'is-' + $parent.design.grid[0] : ''">
           <!-- Inputs -->
           <div class="card bordered">
-            <div class="card-content" id="inputs" v-if="$parent.inputs && $parent.inputs.length > 0">
-              <ul>
-                <li v-for="(input, index) in $parent.inputs">
-                  <vue-input
-                    v-bind:input="input"
-                    v-if="input.display !== false && $parent.display(index)"
-                    v-on:inchange="$parent.run()"
-                  ></vue-input>
-                </li>
-              </ul>
+            <div class="card-content columns is-multiline" id="inputs" v-if="$parent.inputs && $parent.inputs.length > 0">
+              <div 
+                v-for="(input, index) in $parent.inputs"
+                :key="index"
+                v-bind:class="[
+                  'column',
+                  input.columns ? 'is-' + input.columns : 'is-12',
+                  input.columnsMobile ? 'is-' + input.columnsMobile + '-mobile' : '',
+                  input.columnsTablet ? 'is-' + input.columnsTablet + '-tablet' : '',
+                  input.columnsDesktop ? 'is-' + input.columnsDesktop + '-desktop' : '',
+                ]"
+              >
+                <vue-input
+                  v-bind:input="input"
+                  v-if="input.display !== false && $parent.display(index)"
+                  v-on:inchange="$parent.run()"
+                ></vue-input>
+              </div>
               <pre v-if="$parent.model.debug">{{ $parent.inputs }}</pre>
               <!-- <button class="button is-primary" id="run"><span>▸</span>&nbsp;&nbsp;Run</button> -->
             </div>
@@ -188,10 +211,25 @@
         <div class="column" id="outputs" v-bind:class="($parent.design && $parent.design.grid && ($parent.design.grid.length > 1)) ? 'is-' + $parent.design.grid[1] : ''">
           <!-- Outputs -->
           <div v-if="$parent.outputs">
-            <div v-for="(output, index) in $parent.outputs">
-              <vue-output v-bind:output="output" v-on:notification="$parent.notify($event)"></vue-output>
+            <div class="columns is-multiline">
+              <div
+                v-for="(output, index) in $parent.outputs"
+                :key="index"
+                v-bind:class="[
+                  'column',
+                  output.columns ? 'is-' + output.columns : 'is-12',
+                  output.columnsMobile ? 'is-' + output.columnsMobile + '-mobile' : '',
+                  output.columnsTablet ? 'is-' + output.columnsTablet + '-tablet' : '',
+                  output.columnsDesktop ? 'is-' + output.columnsDesktop + '-desktop' : '',
+                ]"
+              >
+                <vue-output 
+                  v-bind:output="output"
+                  v-on:notification="$parent.notify($event)"
+                ></vue-output>
+              </div>
             </div>
-            <pre v-if="$parent.model.debug">{{ $parent.outputs }}</pre>
+            <pre v-if="$parent.debug">{{ $parent.outputs }}</pre>
           </div>
         </div>
       </div>

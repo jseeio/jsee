@@ -9,6 +9,7 @@
         v-bind:placeholder="input.placeholder ? input.placeholder : input.name"
         v-bind:min="input.min"
         v-bind:max="input.max"
+        v-bind:disabled="input.disabled"
         v-on:change="changeHandler"
         class="input"
         type="number"
@@ -76,13 +77,14 @@
   <div class="field" v-if="input.type == 'file'">
     <label v-bind:for="input.name" class="is-size-7">{{ input.name }}</label>
     <div class="control">
-      <div class="file has-name is-fullwidth" v-bind:class="{ 'is-primary': !input.file }">
+      <div class="file has-name is-fullwidth" v-bind:class="{ 'is-primary': !input.file }" v-if="!input.disabled">
         <label class="file-label">
           <input
             v-bind:id="input.name"
             v-on:change="loadFile"
   	  			class="file-input"
   	  			type="file"
+            v-bind:disabled="input.disabled"
   	  		>
           <span class="file-cta">
             <span class="file-label">
@@ -94,6 +96,14 @@
             <span v-else>No file selected</span>
           </span>
         </label>
+      </div>
+      <div class="file has-name is-fullwidth" v-bind:class="{ 'is-primary': !input.file }" v-else>
+        <input 
+          class="input"
+          v-bind:id="input.name"
+          v-bind:value="input.default"
+          disabled
+        >
       </div>
     </div>
   </div>

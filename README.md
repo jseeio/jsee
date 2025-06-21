@@ -109,8 +109,56 @@ Extra blocks can be provided for further customization
     - `action` or `button` - Button (its `name` will be passed as a `caller` to the model)
   - `default` - Default value
 - `outputs` - Outputs definition
+  - `name`* - Name of the output
+  - `type`* - Type. Possible types:
+    - `object` - JavaScript Object
+    - `html` or `svg` - SVG element
+    - `code` - Code block
+    - `function` - Render function. Rather than returning a value, a model returns a function that JSEE will call passing the container element.
 - `examples` - List of examples
 - `autorun` (boolean, default: `false`) - Defines if the script should be evaluated on each input change event
 - `interval` (number, default: `0`) - Defines the interval between script evaluations (in milliseconds). If set to `0`, the script is evaluated only once.
 
 JSEE is a reactive branch of [StatSim](https://statsim.com)'s [Port](https://github.com/statsim/port). It's still work in progress. Expect API changes.
+
+# Changelog
+
+## 0.3.4
+### JSEE:
+- [x] Add `columns` parameter to the `inputs`, `outputs` blocks (making it possible to create multi-column layouts, like simple dashboards)
+- [x] Add `function` output type (for custom renderers which take a container element as an argument)
+- [x] Add `dom-to-image` library for exporting dynamic output blocks to PNG
+- [x] Support for inputs to be set with url parameters (e.g. `?input1=1&input2=2`)
+### HTML Generator:
+- [x] Add `latex` and table output in the markdown renderer
+- [x] Cache `import` scripts to avoid multiple loads when `--fetch` is used
+- [x] Infer `description` from the markdown and update html `<head>` with it
+- [x] Update `social`, `org`, `ga` blocks
+- [x] Small layout fixes
+
+## 0.3.1
+- [x] Add `download` method to jsee object
+- [x] Add `bin` folder with `cmd.js` for easier project building
+
+## 0.2.9
+- [x] Add examples
+- [x] Add imports
+- [x] Add `caller` field to the model input (can be: `run`, `autorun` or a button name)
+- [x] Add `title` field (for buttons rn)
+- [x] If `display` field is `false` the input is not shown
+- [x] If `autorun` is true, then actually autorun the model initially
+
+## 0.2.8
+- [x] Fix no input case
+
+## 0.2.7
+- [x] Show output when result is `0`
+- [x] Updated style for buttons and inputs
+
+## 0.2.6
+- [x] Tests
+- [x] Load schema from query (loader)
+- [x] Reset button appears only after data change
+- [x] Default input type (`string`)
+- [x] Directly load code when running in a window (not code to text)
+- [x] Passing code directly
