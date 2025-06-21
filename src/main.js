@@ -347,11 +347,56 @@ export default class JSEE {
       this.schema.inputs = getInputs(this.model[0])
     }
 
-    // Relies on input check
-    // Set default input type
+    // Read URL params, e.g. ?input1=1&input2=2
+    const urlParams = new URLSearchParams(window.location.search)
+    log('URL params:', urlParams)
+
+    // Iterate over inputs and set values from URL
     this.schema.inputs.forEach(input => {
+      // Set default input type
       if (typeof input.type === 'undefined') {
         input.type = 'string'
+      }
+
+      // Get input value from URL params
+      let paramValue = null
+      if (urlParams.has(input.name)) {
+        paramValue = urlParams.get(input.name);
+      } else if (input.alias) {
+        // Handle alias as either a string or an array of strings
+        if (Array.isArray(input.alias)) {
+          for (let alias of input.alias) {
+            if (urlParams.has(alias)) {
+              paramValue = urlParams.get(alias);
+              break;
+            }
+          }
+        } else if (typeof input.alias === 'string' && urlParams.has(input.alias)) {
+          paramValue = urlParams.get(input.alias);
+        }
+      }
+      log(`Param value for ${input.name}:`, paramValue)
+
+      // Set input value from URL param with type conversion
+      if (paramValue !== null) {
+        switch (input.type) {
+          case 'number':
+            paramValue = Number(paramValue);
+            break;
+          case 'boolean':
+            paramValue = paramValue === 'true';
+            break;
+          case 'json':
+            try {
+              paramValue = JSON.parse(paramValue);
+            } catch (e) {
+              console.error(`Failed to parse JSON for input ${input.name}:`, e);
+            }
+            break;
+          default:
+            break;
+        }
+        input.default = paramValue
       }
     })
     log('Inputs are:', this.schema.inputs)
@@ -374,7 +419,8 @@ export default class JSEE {
             this.stopElement = document.createElement('button')
             this.stopElement.innerHTML = 'Stop'
             this.stopElement.style = 'background: white; color: #333; border: 1px solid #DDD; padding: 10px; border-radius: 5px; cursor: pointer;'
-            this.stopElement.addEventListener('click', () => {
+            this.stopElement.addEventListener('hover', () => {
+              log('Stopping the pipeline')
               this.running = false
             })
             this.overlay.element.innerHTML = ''
@@ -394,13 +440,15 @@ export default class JSEE {
     this.pipeline = (inputs) => inputs
     // Async for-loop over this.model (again)
     for (const [i, m] of this.model.entries()) {
-      log('Initilizing the pipeline with model:', i)
+      log('Initilizing the pipeline with model:', i, m.type)
       let modelFunc
       if (m.worker) {
         // Init worker model
+        log('Initializing model in a worker:', m.name || m.url)
         modelFunc = await this.initWorker(m)
       } else {
         // Init specific model types
+        log('Initializing model in the main thread:', m.name || m.url)
         switch (m.type) {
           case 'py':
             modelFunc = await this.initPython(m)
@@ -416,6 +464,7 @@ export default class JSEE {
             break
           case 'get':
           case 'post':
+            log('Initializing API model')
             modelFunc = await this.initAPI(m)
             break
           default:
@@ -562,14 +611,15 @@ export default class JSEE {
     return modelFunc
   }
 
-  initAPI () {
+  initAPI (model) {
+    log('Initializing API model:', model)
     this.overlay.hide()
-    if (this.schema.model.worker) {
+    if (model.worker) {
       // Worker:
-      this.worker.postMessage(this.schema.model)
+      this.worker.postMessage(model)
     } else {
       // Main:
-      return utils.getModelFuncAPI(this.schema.model, log)
+      return utils.getModelFuncAPI(model, log)
     }
   }
 
@@ -664,10 +714,6 @@ export default class JSEE {
           }
         }
       })
-    } else if (this.renderFunc) {
-      // Pass results to a custom render function
-      log('Calling a render function...')
-      this.renderFunc(res, this)
     } else if (Array.isArray(res) && res.length) {
       // Result is array
       if (this.data.outputs && this.data.outputs.length) {
@@ -688,7 +734,7 @@ export default class JSEE {
           'value': res
         }]
       }
-    } else if (typeof res === 'object') {
+    } else if (isObject(res)) {
       if (this.data.outputs && this.data.outputs.length) {
         this.data.outputs.forEach((output, i) => {
           if (output.name && (typeof res[output.name] !== 'undefined')) {
@@ -697,10 +743,17 @@ export default class JSEE {
           }
         })
       } else {
-        this.data.outputs = [{
-          'type': 'object',
-          'value': res
-        }]
+        const inputNames = this.schema.inputs ? this.schema.inputs.map(i => i.name) : []
+        this.data.outputs = Object.keys(res)
+          .filter(key => !inputNames.includes(key))
+          .filter(key => key !== 'caller') // Filter out caller
+          .map(key => {
+            return {
+              'name': key,
+              'type': typeof res[key],
+              'value': res[key]
+            }
+          })
       }
     } else if (this.schema.outputs && this.schema.outputs.length === 1) {
       // One output value passed as raw js object
