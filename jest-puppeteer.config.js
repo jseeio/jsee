@@ -1,8 +1,9 @@
 module.exports = {
   launch: {
     dumpio: false, // dump browser errors to jest
-    headless: process.env.HEADLESS !== 'false',
+    headless: process.env.HEADLESS === 'false' ? false : 'new', // Use new headless mode by default
     product: 'chrome',
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
   },
   // server: {
   //   command: 'http-server',
