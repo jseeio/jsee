@@ -57,10 +57,14 @@ function getName (code) {
     case 'function':
       return code.name
     case 'string':
+      // Match 'function name', 'async function name', etc.
+      // Arrow functions and anonymous functions return undefined (handled by caller)
       const words = code.split(' ')
-      const functionIndex = words.findIndex((word) => word == 'function')
+      const functionIndex = words.findIndex((word) => word === 'function')
+      if (functionIndex === -1) return undefined
       const name = words[functionIndex + 1]
-      return name.includes('(') ? undefined : name
+      if (!name || name.includes('(')) return undefined
+      return name
     default:
       return undefined
   }
