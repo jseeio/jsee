@@ -68,9 +68,13 @@ function getValue (input) {
 }
 
 function getModelType (model) {
-  if (model.code && typeof model.code === 'string' && model.code.split(' ').map(v => v.trim()).includes('def')) {
-    return 'py'
-  } else if (model.url) {
+  if (typeof model.code === 'string' && model.code.trim().length > 0) {
+    if (model.code.split(' ').map(v => v.trim()).includes('def')) {
+      return 'py'
+    }
+    return 'function'
+  }
+  if (model.url) {
     return 'post'
   }
   return 'function'

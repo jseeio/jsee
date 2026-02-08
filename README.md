@@ -88,6 +88,7 @@ Extra blocks can be provided for further customization
     - `async-init`
     - `py`
     - `tf`
+    - Inference note: when `code` is present (including code loaded from a `.js` URL), JSEE treats the model as `function` unless `type` is explicitly set
   - `method` (string) - If `type` is `class`, `method` defines the name of the class method to call during evaluation
   - `container` (string) - How input values are passed to the function/method:
     - `object` (default) - Pass inputs wrapped in an object, i.e. `{'x': 1, 'y': 2}`

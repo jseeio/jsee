@@ -118,6 +118,42 @@ describe('Load code directly', () => {
     await expect(page).toClick('button', { text: 'Run' })
     await expect(page).toMatchTextContent('15')
   })
+
+  test('Window infers function type for URL-loaded JS when type is omitted', async () => {
+    const schema = {
+      model: {
+        name: 'sum',
+        container: 'args',
+        url: '/test/example-sum.js',
+        worker: false
+      },
+      inputs: [
+        { name: 'a', type: 'int', default: 8 },
+        { name: 'b', type: 'int', default: 7 }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    await expect(page).toClick('button', { text: 'Run' })
+    await expect(page).toMatchTextContent('15')
+  })
+
+  test('Worker infers function type for URL-loaded JS when type is omitted', async () => {
+    const schema = {
+      model: {
+        name: 'sum',
+        container: 'args',
+        url: '/test/example-sum.js',
+        worker: true
+      },
+      inputs: [
+        { name: 'a', type: 'int', default: 8 },
+        { name: 'b', type: 'int', default: 7 }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    await expect(page).toClick('button', { text: 'Run' })
+    await expect(page).toMatchTextContent('15')
+  })
 })
 
 describe('Classes', () => {

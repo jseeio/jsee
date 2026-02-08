@@ -3,6 +3,7 @@
 ## Unreleased
 ### Bug fixes:
 - Gate worker initialization with an `initialized` flag: only the first `{url|code}` payload initializes the worker, all later payloads are treated as execution input
+- Fix model type inference for URL-loaded JS: when `code` is present, infer `function` instead of treating `url` as API `post`
 ### Features:
 - Allow `progress(null)` to render an indeterminate top progress bar for stream-like tasks where total size is unknown
 - Add `cancelCurrentRun()` runtime entrypoint and wire overlay Stop button with proper `click` handling for any active run
