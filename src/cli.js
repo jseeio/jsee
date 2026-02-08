@@ -31,6 +31,19 @@ function depad (str, len) {
   return str.split('\n').map(s => s.slice(len)).join('\n')
 }
 
+function toArray (value) {
+  if (!value) return []
+  return Array.isArray(value) ? value : [value]
+}
+
+function collectFetchBundleBlocks (schema) {
+  return []
+    .concat(toArray(schema.model))
+    .concat(toArray(schema.view))
+    .concat(toArray(schema.render))
+    .filter(Boolean)
+}
+
 function getDataFromArgv (schema, argv, loadFiles=true) {
   let data = {}
   if (schema.inputs) {
@@ -695,7 +708,8 @@ async function gen (pargv, returnHtml=false) {
     // Fetch model files and store them in hidden elements
     hiddenElementHtml += '<div id="hidden-storage" style="display: none;">'
 
-    for (let m of schema.model) {
+    const bundleBlocks = collectFetchBundleBlocks(schema)
+    for (let m of bundleBlocks) {
       if (m.type === 'get' || m.type === 'post') {
         continue
       }
@@ -898,3 +912,4 @@ async function gen (pargv, returnHtml=false) {
 }
 
 module.exports = gen
+module.exports.collectFetchBundleBlocks = collectFetchBundleBlocks
