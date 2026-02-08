@@ -192,7 +192,8 @@ export default class JSEE {
       // 2. Server-side inputs: If there are inputs with disabled and reactive flags
       // (we assume that they are set by the server and trigger the model run)
       log('[Init] First run of the model due to autorun or reactive inputs')
-      this.run('init')
+      // Catch here to prevent unhandled rejection from init-time run
+      this.run('init').catch(err => log('Init run error:', err))
     }
   }
 
@@ -539,40 +540,57 @@ export default class JSEE {
       model.name = 'anon'
     }
 
-    const modelFunc = (inputs) => new Promise((resolve, reject) => {
-      worker.onmessage = (e) => {
-        const res = e.data
-        if ((typeof res === 'object') && (res._status)) {
-          switch (res._status) {
-            case 'loaded':
-              notyf.success('Loaded model (in worker)')
-              log('Loaded model (in worker):', res)
-              resolve(res)
-              break
-            case 'log':
-              log(...res._log)
-              break
-            case 'progress':
-              this.progress(res._progress)
-              break
-            case 'error':
-              notyf.error(res._error)
-              log('Error from worker:', res._error)
-              reject(res._error)
-              break
+    // Timeout prevents permanently frozen UI if worker hangs (default 30s, configurable via model.timeout)
+    const timeoutMs = model.timeout || 30000
+
+    const modelFunc = (inputs) => {
+      const workerPromise = new Promise((resolve, reject) => {
+        worker.onmessage = (e) => {
+          const res = e.data
+          if ((typeof res === 'object') && (res._status)) {
+            switch (res._status) {
+              case 'loaded':
+                notyf.success('Loaded model (in worker)')
+                log('Loaded model (in worker):', res)
+                resolve(res)
+                break
+              case 'log':
+                log(...res._log)
+                break
+              case 'progress':
+                this.progress(res._progress)
+                break
+              case 'error':
+                notyf.error(res._error)
+                log('Error from worker:', res._error)
+                reject(res._error)
+                break
+            }
+          } else {
+            log('Response from worker:', res)
+            resolve(res)
           }
-        } else {
-          log('Response from worker:', res)
-          resolve(res)
         }
-      }
-      worker.onerror = (e) => {
-        notyf.error(e.message)
-        log('Error from worker:', e)
-        reject(e)
-      }
-      worker.postMessage(inputs)
-    })
+        worker.onerror = (e) => {
+          notyf.error(e.message)
+          log('Error from worker:', e)
+          reject(e)
+        }
+        worker.postMessage(inputs)
+      })
+
+      // Skip timeout for init call (loading model can be slow); apply to execution calls
+      const isInitCall = inputs && inputs.code !== undefined
+      if (isInitCall) return workerPromise
+
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => {
+          worker.terminate()
+          reject(new Error(`Worker timed out after ${timeoutMs}ms`))
+        }, timeoutMs)
+      })
+      return Promise.race([workerPromise, timeoutPromise])
+    }
 
     // Initial worker call with model definition
     await modelFunc(model)
@@ -673,40 +691,46 @@ export default class JSEE {
     const data = this.data
     this.running = true
 
-    log('Running the pipeline...')
-    // Collect input values
-    let inputValues = {}
-    data.inputs.forEach(input => {
-      // Skip buttons
-      if (input.name && !(input.type == 'action' || input.type == 'button')) {
-        inputValues[input.name] = getValue(input)
+    try {
+      log('Running the pipeline...')
+      // Collect input values
+      let inputValues = {}
+      data.inputs.forEach(input => {
+        // Skip buttons
+        if (input.name && !(input.type == 'action' || input.type == 'button')) {
+          inputValues[input.name] = getValue(input)
+        }
+      })
+      // Add caller to input values so we can change model behavior based on it
+      inputValues.caller = caller
+
+      log('Input values:', inputValues)
+      // Show overlay for non-autorun models (autorun shows no overlay to avoid flicker)
+      if (!schema.model.autorun) {
+        this.overlay.show()
       }
-    })
-    // Add caller to input values so we can change model behavior based on it
-    inputValues.caller = caller
 
-    log('Input values:', inputValues)
-    // We have all input values here, pass them to worker, window.modelFunc or tf
-    if (!schema.model.autorun) {
-      this.overlay.show()
+      // Run pipeline
+      const results = await this.pipeline(inputValues)
+
+      // Output results
+      this.output(results)
+
+      // Check if interval is defined
+      if (schema.interval && this.running && (caller === 'run')) {
+        log('Interval is defined:', schema.interval)
+        await utils.delay(schema.interval)
+        await this.run(caller)
+      }
+    } catch (err) {
+      // Surface pipeline/worker errors so they don't silently swallow failures
+      log('Pipeline error:', err)
+      notyf.error(typeof err === 'string' ? err : (err.message || 'Pipeline error'))
+    } finally {
+      // Always clean up UI state so overlay and running flag don't get stuck
+      this.overlay.hide()
+      this.running = false
     }
-
-    // Run pipeline
-    const results = await this.pipeline(inputValues)
-
-    // Output results
-    this.output(results)
-
-    // Check if interval is defined
-    if (schema.interval && this.running && (caller === 'run')) {
-      log('Interval is defined:', schema.interval)
-      await utils.delay(schema.interval)
-      await this.run(caller)
-    }
-
-    // Hide overlay
-    this.overlay.hide()
-    return
   }
 
   async outputAsync (res) {

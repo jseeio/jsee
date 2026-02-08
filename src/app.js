@@ -203,7 +203,8 @@ function createVueApp (env, mountedCallback, logMain) {
       },
       run (caller) {
         this.clickRun = true
-        env.run(caller)
+        // Catch to prevent unhandled rejection from button/autorun clicks
+        env.run(caller).catch(err => console.error('Run error:', err))
         setTimeout(() => {
           this.clickRun = false
         }, 150)
