@@ -127,6 +127,7 @@ export default class JSEE {
     this.utils = utils
     this.__version__ = VERSION
     this.cancelled = false
+    this._cancelWorkerRun = null
 
     // Check if schema is provided
     if (typeof this.schema === 'undefined') {
@@ -160,6 +161,9 @@ export default class JSEE {
   cancelCurrentRun () {
     log('Stopping current run')
     this.cancelled = true
+    if (typeof this._cancelWorkerRun === 'function') {
+      this._cancelWorkerRun()
+    }
   }
 
   isCancelled () {
@@ -578,6 +582,7 @@ export default class JSEE {
 
     // Timeout prevents permanently frozen UI if worker hangs (default 30s, configurable via model.timeout)
     const timeoutMs = model.timeout || 30000
+    this._cancelWorkerRun = () => worker.postMessage({ _cmd: 'cancel' })
 
     const modelFunc = (inputs) => {
       const workerPromise = new Promise((resolve, reject) => {

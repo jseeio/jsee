@@ -11,6 +11,11 @@ function progress (value) {
 }
 
 let initialized = false
+let cancelled = false
+
+function isCancelled () {
+  return cancelled === true
+}
 
 function initTF (model) {
   throw new Error('Tensorflow in worker (not implemented)')
@@ -69,7 +74,7 @@ async function initJS (model) {
     : this[model.name]
 
   // Need promise here in case of async init
-  let modelFunc = await utils.getModelFuncJS(model, target, { log, progress })
+  let modelFunc = await utils.getModelFuncJS(model, target, { log, progress, isCancelled })
 
   return modelFunc
 }
@@ -82,6 +87,12 @@ function initAPI (model) {
 onmessage = async function (e) {
   var data = e.data
   log('Received message of type:', typeof data)
+
+  if ((typeof data === 'object') && (data._cmd === 'cancel')) {
+    cancelled = true
+    log('Cancel command received')
+    return
+  }
 
   if (utils.isWorkerInitMessage(data, initialized)) {
     // Init message
@@ -112,6 +123,7 @@ onmessage = async function (e) {
   } else {
     // Execution
     try {
+      cancelled = false
       log('Run model with data:', data)
       const results = await self.modelFunc(data)
       log('Results:', results)
