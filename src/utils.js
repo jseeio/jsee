@@ -61,6 +61,10 @@ function getProgressState (value) {
   }
 }
 
+function shouldContinueInterval (interval, running, cancelled, caller) {
+  return Boolean(interval) && running && !cancelled && caller === 'run'
+}
+
 async function getModelFuncJS (model, target, app) {
   let modelFunc
   switch (model.type) {
@@ -346,6 +350,7 @@ module.exports = {
   sanitizeName,
   isWorkerInitMessage,
   getProgressState,
+  shouldContinueInterval,
   getName,
   validateSchema
 }
