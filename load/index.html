@@ -30,10 +30,15 @@
           schema = schemaStr.includes('/') ? schemaStr : '/apps/' + schemaStr + '/schema.json'
         }
         console.log('[Loader] Schema:', schemaStr, schema)
-        const env = new JSEE({
-          container: document.getElementById('jsee-container'),
-          schema: schema
-        })
+        try {
+          const env = new JSEE({
+            container: document.getElementById('jsee-container'),
+            schema: schema
+          })
+        } catch (error) {
+          console.error('[Loader] Failed to initialize JSEE:', error)
+          document.getElementById('jsee-container').innerHTML = '<pre style="color:#f14668;padding:16px;border:1px solid #f14668;border-radius:6px;">Failed to initialize schema. Check browser console for details.</pre>'
+        }
       }
     </script>
   </body>

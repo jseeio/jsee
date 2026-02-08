@@ -3,6 +3,34 @@ function isObject (item) {
   return (typeof item === 'object' && !Array.isArray(item) && item !== null)
 }
 
+const VALID_INPUT_TYPES = [
+  'int',
+  'float',
+  'number',
+  'string',
+  'color',
+  'text',
+  'categorical',
+  'select',
+  'bool',
+  'checkbox',
+  'file',
+  'group',
+  'action',
+  'button'
+]
+
+const VALID_MODEL_TYPES = [
+  'function',
+  'class',
+  'async-init',
+  'async-function',
+  'get',
+  'post',
+  'py',
+  'tf'
+]
+
 function sanitizeName (inputName) {
   return inputName.toLowerCase().replace(/[^a-z0-9_]/g, '_')
 }
@@ -177,6 +205,109 @@ function getName (code) {
   }
 }
 
+function validateInputSchema (input, path, report) {
+  if (!isObject(input)) {
+    report.errors.push(`${path} should be an object`)
+    return
+  }
+
+  if ((typeof input.name !== 'undefined') && (typeof input.name !== 'string')) {
+    report.warnings.push(`${path}.name should be a string`)
+  }
+
+  if ((typeof input.type !== 'undefined') && !VALID_INPUT_TYPES.includes(input.type)) {
+    report.warnings.push(`${path}.type '${input.type}' is not recognized`)
+  }
+
+  if (input.type === 'group') {
+    if (!Array.isArray(input.elements)) {
+      report.warnings.push(`${path}.elements should be an array for group inputs`)
+    } else {
+      input.elements.forEach((element, index) => {
+        validateInputSchema(element, `${path}.elements[${index}]`, report)
+      })
+    }
+  }
+
+  if (typeof input.alias !== 'undefined') {
+    const validAlias = (
+      typeof input.alias === 'string'
+      || (Array.isArray(input.alias) && input.alias.every(alias => typeof alias === 'string'))
+    )
+    if (!validAlias) {
+      report.warnings.push(`${path}.alias should be a string or an array of strings`)
+    }
+  }
+}
+
+function validateModelSchema (model, path, report) {
+  if (typeof model === 'function') {
+    return
+  }
+
+  if (!isObject(model)) {
+    report.errors.push(`${path} should be an object or function`)
+    return
+  }
+
+  if ((typeof model.type !== 'undefined') && !VALID_MODEL_TYPES.includes(model.type)) {
+    report.warnings.push(`${path}.type '${model.type}' is not recognized`)
+  }
+
+  if ((typeof model.worker !== 'undefined') && (typeof model.worker !== 'boolean')) {
+    report.warnings.push(`${path}.worker should be a boolean`)
+  }
+
+  if (typeof model.timeout !== 'undefined') {
+    const timeoutValid = (typeof model.timeout === 'number') && !Number.isNaN(model.timeout) && (model.timeout > 0)
+    if (!timeoutValid) {
+      report.warnings.push(`${path}.timeout should be a positive number`)
+    }
+  }
+}
+
+function validateSchema (schema) {
+  const report = {
+    errors: [],
+    warnings: []
+  }
+
+  if (!isObject(schema)) {
+    report.errors.push('Schema should be an object')
+    return report
+  }
+
+  const hasModel = typeof schema.model !== 'undefined'
+  const hasView = (typeof schema.view !== 'undefined') || (typeof schema.render !== 'undefined')
+
+  if (!hasModel && !hasView) {
+    report.errors.push('Schema should define `model` (or `view`/`render`)')
+  } else if (!hasModel && hasView) {
+    report.warnings.push('Schema has no `model`, using `view`/`render` only')
+  }
+
+  if (typeof schema.inputs !== 'undefined') {
+    if (!Array.isArray(schema.inputs)) {
+      report.errors.push('`inputs` should be an array')
+    } else {
+      schema.inputs.forEach((input, index) => {
+        validateInputSchema(input, `inputs[${index}]`, report)
+      })
+    }
+  }
+
+  if (hasModel) {
+    const models = Array.isArray(schema.model)
+      ? schema.model
+      : [schema.model]
+    models.forEach((model, index) => {
+      validateModelSchema(model, `model[${index}]`, report)
+    })
+  }
+
+  return report
+}
+
 module.exports = {
   isObject,
   loadFromDOM,
@@ -187,5 +318,6 @@ module.exports = {
   delay,
   debounce,
   sanitizeName,
-  getName
+  getName,
+  validateSchema
 }

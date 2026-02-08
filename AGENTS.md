@@ -27,6 +27,7 @@ Use **2-space indentation** and **semicolon-free** syntax. Use **single quotes**
 - Don’t add new production dependencies without asking.
 - Update the `README.md`, `CHANGELOG.md` and `index.html` with any user-facing changes or new features.
 - Commit messages should be clear and descriptive, following the format: `feature|fix|test|docs: short description` (e.g., `feature: add new column type classification`).
+- Each change: for non-trivial changes, add comments, update docs (features, changelog), run tests, commit with a clear message. For trivial changes (e.g., fixing typos), you can skip some steps but still ensure the change is well-documented in the commit message.
 
 ## Conventions
 - Formatting: no formatter is configured; preserve existing style (2-space indentation, semicolon-free, single quotes)
