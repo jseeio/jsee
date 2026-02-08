@@ -104,6 +104,32 @@ function resolveFetchImport (importValue, modelUrl, cwd) {
   }
 }
 
+function resolveRuntimeMode (runtime, fetchEnabled, outputs) {
+  const requestedRuntime = runtime || 'auto'
+  const availableModes = ['auto', 'local', 'cdn', 'inline']
+  if (!availableModes.includes(requestedRuntime)) {
+    throw new Error(`Invalid runtime mode: ${requestedRuntime}. Use one of: ${availableModes.join(', ')}`)
+  }
+  if (requestedRuntime !== 'auto') {
+    return requestedRuntime
+  }
+  if (fetchEnabled) {
+    return 'inline'
+  }
+  return outputs ? 'cdn' : 'local'
+}
+
+async function loadRuntimeCode (version) {
+  if (version === 'dev') {
+    return fs.readFileSync(path.join(__dirname, '..', 'dist', 'jsee.js'), 'utf8')
+  }
+  if (version === 'latest') {
+    return fs.readFileSync(path.join(__dirname, '..', 'dist', 'jsee.runtime.js'), 'utf8')
+  }
+  const response = await fetch(`https://cdn.jsdelivr.net/npm/@jseeio/jsee@${version}/dist/jsee.runtime.js`)
+  return response.text()
+}
+
 function getDataFromArgv (schema, argv, loadFiles=true) {
   let data = {}
   if (schema.inputs) {
@@ -550,6 +576,7 @@ async function gen (pargv, returnHtml=false) {
     fetch: 'f',
     execute: 'e',
     cdn: 'c',
+    runtime: 'r',
   }
   const argvDefault = {
     execute: false, // execute the model code on the server
@@ -559,6 +586,7 @@ async function gen (pargv, returnHtml=false) {
     version: 'latest', // default version of JSEE runtime to use
     verbose: false, // verbose mode
     cdn: false,
+    runtime: 'auto'
   }
   let argv = minimist(pargv, {
     alias: argvAlias,
@@ -752,18 +780,11 @@ async function gen (pargv, returnHtml=false) {
   // Generate jsee code
   let jseeHtml = ''
   let hiddenElementHtml = ''
+  const hasOutputs = Array.isArray(outputs) ? outputs.length > 0 : Boolean(outputs)
+  const runtimeMode = resolveRuntimeMode(argv.runtime, argv.fetch, hasOutputs)
   if (argv.fetch) {
     // Fetch jsee code from the CDN or local server
-    let jseeCode
-    if (argv.version === 'dev') {
-      jseeCode = fs.readFileSync(path.join(__dirname, '..', 'dist', 'jsee.js'), 'utf8')
-    } else if (argv.version === 'latest') {
-      jseeCode = fs.readFileSync(path.join(__dirname, '..', 'dist', 'jsee.runtime.js'), 'utf8')
-    } else {
-      // Pre-fetch the jsee runtime from the CDN https://cdn.jsdelivr.net/npm/@jseeio/jsee@${argv.version}/dist/jsee.runtime.js
-      jseeCode = await fetch(`https://cdn.jsdelivr.net/npm/@jseeio/jsee@${argv.version}/dist/jsee.runtime.js`)
-      jseeCode = await jseeCode.text()
-    }
+    const jseeCode = await loadRuntimeCode(argv.version)
     jseeHtml = `<script>${jseeCode}</script>`
     // Fetch model files and store them in hidden elements
     hiddenElementHtml += '<div id="hidden-storage" style="display: none;">'
@@ -837,11 +858,16 @@ async function gen (pargv, returnHtml=false) {
     }
     hiddenElementHtml += '</div>'
   } else {
-    jseeHtml = outputs
-      ? `<script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@${argv.version}/dist/jsee.runtime.js"></script>`
-      : argv.version === 'dev' 
-        ? `<script src="http://localhost:${argv.port}/dist/jsee.js"></script>` 
-        : `<script src="http://localhost:${argv.port}/dist/jsee.runtime.js"></script>` 
+    if (runtimeMode === 'inline') {
+      const jseeCode = await loadRuntimeCode(argv.version)
+      jseeHtml = `<script>${jseeCode}</script>`
+    } else if (runtimeMode === 'cdn') {
+      jseeHtml = `<script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@${argv.version}/dist/jsee.runtime.js"></script>`
+    } else {
+      jseeHtml = argv.version === 'dev'
+        ? `<script src="http://localhost:${argv.port}/dist/jsee.js"></script>`
+        : `<script src="http://localhost:${argv.port}/dist/jsee.runtime.js"></script>`
+    }
   }
 
   let socialHtml = ''
@@ -987,3 +1013,4 @@ async function gen (pargv, returnHtml=false) {
 module.exports = gen
 module.exports.collectFetchBundleBlocks = collectFetchBundleBlocks
 module.exports.resolveFetchImport = resolveFetchImport
+module.exports.resolveRuntimeMode = resolveRuntimeMode

@@ -1,5 +1,5 @@
 const path = require('path')
-const { collectFetchBundleBlocks, resolveFetchImport } = require('../../src/cli')
+const { collectFetchBundleBlocks, resolveFetchImport, resolveRuntimeMode } = require('../../src/cli')
 
 describe('collectFetchBundleBlocks', () => {
   test('collects model, view and render blocks', () => {
@@ -63,5 +63,28 @@ describe('resolveFetchImport', () => {
     expect(result.importUrl).toBe('https://cdn.jsdelivr.net/npm/apps/qrcode/helpers/math.js')
     expect(result.localFilePath).toBe(path.join('/tmp/jsee-workspace', 'apps/qrcode/helpers/math.js'))
     expect(result.remoteUrl).toBeNull()
+  })
+})
+
+describe('resolveRuntimeMode', () => {
+  test('defaults to cdn for generated output when fetch is disabled', () => {
+    expect(resolveRuntimeMode('auto', false, true)).toBe('cdn')
+  })
+
+  test('defaults to local for served apps when fetch is disabled', () => {
+    expect(resolveRuntimeMode('auto', false, false)).toBe('local')
+  })
+
+  test('uses inline mode when fetch is enabled', () => {
+    expect(resolveRuntimeMode('auto', true, true)).toBe('inline')
+  })
+
+  test('honors explicit runtime mode', () => {
+    expect(resolveRuntimeMode('local', true, true)).toBe('local')
+    expect(resolveRuntimeMode('inline', false, false)).toBe('inline')
+  })
+
+  test('throws on invalid runtime mode', () => {
+    expect(() => resolveRuntimeMode('invalid', false, false)).toThrow('Invalid runtime mode')
   })
 })
