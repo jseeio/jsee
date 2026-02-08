@@ -150,6 +150,15 @@ async function delay (ms) {
   return new Promise(resolve => setTimeout(resolve, ms || 1))
 }
 
+// Simple debounce to prevent rapid-fire calls (e.g. autorun on every keystroke)
+function debounce (fn, ms) {
+  let timer
+  return function (...args) {
+    clearTimeout(timer)
+    timer = setTimeout(() => fn.apply(this, args), ms)
+  }
+}
+
 module.exports = {
   isObject,
   loadFromDOM,
@@ -158,5 +167,6 @@ module.exports = {
   importScripts,
   getUrl,
   delay,
+  debounce,
   sanitizeName
 }
