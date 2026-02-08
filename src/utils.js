@@ -3,6 +3,40 @@ function isObject (item) {
   return (typeof item === 'object' && !Array.isArray(item) && item !== null)
 }
 
+function shouldPreserveWorkerValue (value) {
+  if (!value || typeof value !== 'object') {
+    return true
+  }
+  if ((typeof File !== 'undefined') && (value instanceof File)) {
+    return true
+  }
+  if ((typeof Blob !== 'undefined') && (value instanceof Blob)) {
+    return true
+  }
+  if ((typeof ArrayBuffer !== 'undefined') && (value instanceof ArrayBuffer)) {
+    return true
+  }
+  if ((typeof ArrayBuffer !== 'undefined') && ArrayBuffer.isView && ArrayBuffer.isView(value)) {
+    return true
+  }
+  if ((typeof Date !== 'undefined') && (value instanceof Date)) {
+    return true
+  }
+  if ((typeof RegExp !== 'undefined') && (value instanceof RegExp)) {
+    return true
+  }
+  if ((typeof URL !== 'undefined') && (value instanceof URL)) {
+    return true
+  }
+  if ((typeof Map !== 'undefined') && (value instanceof Map)) {
+    return true
+  }
+  if ((typeof Set !== 'undefined') && (value instanceof Set)) {
+    return true
+  }
+  return false
+}
+
 const VALID_INPUT_TYPES = [
   'int',
   'float',
@@ -63,6 +97,325 @@ function getProgressState (value) {
 
 function shouldContinueInterval (interval, running, cancelled, caller) {
   return Boolean(interval) && running && !cancelled && caller === 'run'
+}
+
+function createAbortError (message='Operation aborted') {
+  const error = new Error(message)
+  error.name = 'AbortError'
+  return error
+}
+
+function isAbortRequested (signal, isCancelled) {
+  return !!(
+    (signal && signal.aborted)
+    || (typeof isCancelled === 'function' && isCancelled())
+  )
+}
+
+function isFileLikeSource (source) {
+  return !!source
+    && (typeof source === 'object')
+    && (typeof source.slice === 'function')
+    && (typeof source.size === 'number')
+}
+
+function getUrlFromSource (source) {
+  if (typeof source === 'string') {
+    return source
+  }
+  if (source && source.kind === 'url' && (typeof source.url === 'string')) {
+    return source.url
+  }
+  return null
+}
+
+// Async channel with backpressure for streaming chunks
+function createChunkChannel () {
+  const queue = []
+  let waitingConsumer = null  // resolve fn when consumer awaits data
+  let waitingProducer = null  // resolve fn when producer awaits drain
+  let done = false
+  let error = null
+  const HIGH_WATER = 4
+
+  return {
+    async push (chunk) {
+      if (done || error) return
+      queue.push(chunk)
+      if (waitingConsumer) {
+        const resolve = waitingConsumer
+        waitingConsumer = null
+        resolve()
+      }
+      if (queue.length >= HIGH_WATER) {
+        await new Promise(resolve => { waitingProducer = resolve })
+      }
+    },
+    close () {
+      done = true
+      if (waitingConsumer) {
+        const resolve = waitingConsumer
+        waitingConsumer = null
+        resolve()
+      }
+    },
+    fail (err) {
+      error = err
+      done = true
+      if (waitingConsumer) {
+        const resolve = waitingConsumer
+        waitingConsumer = null
+        resolve()
+      }
+    },
+    [Symbol.asyncIterator] () {
+      return {
+        async next () {
+          while (queue.length === 0 && !done) {
+            await new Promise(resolve => { waitingConsumer = resolve })
+          }
+          if (queue.length > 0) {
+            const value = queue.shift()
+            if (waitingProducer && queue.length < HIGH_WATER) {
+              const resolve = waitingProducer
+              waitingProducer = null
+              resolve()
+            }
+            return { value, done: false }
+          }
+          if (error) {
+            throw error
+          }
+          return { value: undefined, done: true }
+        }
+      }
+    }
+  }
+}
+
+// Lightweight async-iterable reader for chunked data (File or fetch)
+class ChunkedReader {
+  constructor (channel) {
+    this._channel = channel
+  }
+
+  [Symbol.asyncIterator] () {
+    return this._channel[Symbol.asyncIterator]()
+  }
+
+  async text () {
+    const decoder = new TextDecoder('utf-8')
+    let result = ''
+    for await (const chunk of this) {
+      result += decoder.decode(chunk, { stream: true })
+    }
+    result += decoder.decode()
+    return result
+  }
+
+  async bytes () {
+    const parts = []
+    let totalLength = 0
+    for await (const chunk of this) {
+      parts.push(chunk)
+      totalLength += chunk.byteLength
+    }
+    const result = new Uint8Array(totalLength)
+    let offset = 0
+    for (const part of parts) {
+      result.set(part, offset)
+      offset += part.byteLength
+    }
+    return result
+  }
+
+  async * lines () {
+    const decoder = new TextDecoder('utf-8')
+    let remainder = ''
+    for await (const chunk of this) {
+      remainder += decoder.decode(chunk, { stream: true })
+      const parts = remainder.split('\n')
+      remainder = parts.pop()
+      for (const line of parts) {
+        yield line
+      }
+    }
+    remainder += decoder.decode()
+    if (remainder.length > 0) {
+      yield remainder
+    }
+  }
+}
+
+function createChunkedReader (producer) {
+  const channel = createChunkChannel()
+
+  Promise.resolve()
+    .then(() => producer(
+      chunk => channel.push(chunk),
+      () => channel.close(),
+      err => channel.fail(err)
+    ))
+    .catch(err => channel.fail(err))
+
+  return new ChunkedReader(channel)
+}
+
+function createFileStream (source, options={}) {
+  const onProgress = options.onProgress
+  const signal = options.signal
+  const isCancelled = options.isCancelled
+  const chunkSize = (typeof options.chunkSize === 'number') && options.chunkSize > 0
+    ? Math.floor(options.chunkSize)
+    : (256 * 1024)
+
+  return createChunkedReader(async (pushChunk, closeStream, failStream) => {
+    const totalBytes = source.size
+    let loadedBytes = 0
+
+    const reportProgress = async (value) => {
+      if (typeof onProgress === 'function') {
+        await onProgress(value)
+      }
+    }
+
+    try {
+      await reportProgress(totalBytes > 0 ? 0 : null)
+      while (loadedBytes < totalBytes) {
+        if (isAbortRequested(signal, isCancelled)) {
+          throw createAbortError('createFileStream: aborted')
+        }
+        const nextOffset = Math.min(loadedBytes + chunkSize, totalBytes)
+        const blob = source.slice(loadedBytes, nextOffset)
+        const value = new Uint8Array(await blob.arrayBuffer())
+        loadedBytes = nextOffset
+        if (value.byteLength > 0) {
+          await pushChunk(value)
+        }
+        const progressValue = totalBytes > 0
+          ? Math.round((loadedBytes / totalBytes) * 100)
+          : null
+        await reportProgress(progressValue)
+      }
+      await reportProgress(totalBytes > 0 ? 100 : null)
+      closeStream()
+    } catch (error) {
+      failStream(error)
+    }
+  })
+}
+
+function createFetchStream (source, options={}) {
+  const sourceUrl = getUrlFromSource(source)
+  if (!sourceUrl) {
+    throw new Error('createFetchStream: unsupported source type')
+  }
+  const onProgress = options.onProgress
+  const signal = options.signal
+  const isCancelled = options.isCancelled
+  const fetchImpl = options.fetch || (typeof fetch === 'function' ? fetch : null)
+  if (!fetchImpl) {
+    throw new Error('createFetchStream: fetch is not available')
+  }
+
+  return createChunkedReader(async (pushChunk, closeStream, failStream) => {
+    const reportProgress = async (value) => {
+      if (typeof onProgress === 'function') {
+        await onProgress(value)
+      }
+    }
+
+    const abortController = typeof AbortController !== 'undefined'
+      ? new AbortController()
+      : null
+    const fetchSignal = abortController ? abortController.signal : signal
+    if (signal && abortController) {
+      if (signal.aborted) {
+        abortController.abort()
+      } else {
+        signal.addEventListener('abort', () => abortController.abort(), { once: true })
+      }
+    }
+
+    let reader
+    try {
+      if (isAbortRequested(signal, isCancelled)) {
+        throw createAbortError('createFetchStream: aborted before fetch')
+      }
+      const response = await fetchImpl(sourceUrl, fetchSignal ? { signal: fetchSignal } : {})
+      if (!response.ok) {
+        throw new Error(`createFetchStream: failed to fetch ${sourceUrl} (${response.status})`)
+      }
+      if (!response.body) {
+        throw new Error(`createFetchStream: empty response body for ${sourceUrl}`)
+      }
+
+      const totalBytesHeader = response.headers.get('content-length')
+      const totalBytes = totalBytesHeader ? Number(totalBytesHeader) : null
+      const hasKnownLength = !!totalBytes && !Number.isNaN(totalBytes) && totalBytes > 0
+      let loadedBytes = 0
+      reader = response.body.getReader()
+
+      await reportProgress(hasKnownLength ? 0 : null)
+      while (true) {
+        if (isAbortRequested(signal, isCancelled)) {
+          if (abortController) {
+            abortController.abort()
+          }
+          throw createAbortError('createFetchStream: aborted during read')
+        }
+        const { done, value } = await reader.read()
+        if (done) {
+          break
+        }
+        loadedBytes += value.byteLength
+        if (value.byteLength > 0) {
+          await pushChunk(value)
+        }
+        const progressValue = hasKnownLength
+          ? Math.round((loadedBytes / totalBytes) * 100)
+          : null
+        await reportProgress(progressValue)
+      }
+      await reportProgress(hasKnownLength ? 100 : null)
+      closeStream()
+    } catch (error) {
+      failStream(error)
+    } finally {
+      if (reader) {
+        reader.releaseLock()
+      }
+    }
+  })
+}
+
+function wrapStreamInputs (inputs, streamConfig={}, options={}) {
+  if (!isObject(inputs)) {
+    return inputs
+  }
+
+  const wrapped = Object.assign({}, inputs)
+  Object.keys(streamConfig).forEach((inputName) => {
+    const config = streamConfig[inputName]
+    if (!config || config.stream !== true) {
+      return
+    }
+    if (typeof wrapped[inputName] === 'undefined' || wrapped[inputName] === null) {
+      return
+    }
+
+    const source = wrapped[inputName]
+    if (isFileLikeSource(source)) {
+      wrapped[inputName] = createFileStream(source, options)
+      return
+    }
+
+    const sourceUrl = getUrlFromSource(source)
+    if (sourceUrl) {
+      wrapped[inputName] = createFetchStream(sourceUrl, options)
+    }
+  })
+  return wrapped
 }
 
 async function getModelFuncJS (model, target, app) {
@@ -208,6 +561,26 @@ async function delay (ms) {
   return new Promise(resolve => setTimeout(resolve, ms || 1))
 }
 
+function toWorkerSerializable (value) {
+  if (shouldPreserveWorkerValue(value)) {
+    return value
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(item => toWorkerSerializable(item))
+  }
+
+  if (!isObject(value)) {
+    return value
+  }
+
+  const copy = {}
+  Object.keys(value).forEach(key => {
+    copy[key] = toWorkerSerializable(value[key])
+  })
+  return copy
+}
+
 // Simple debounce to prevent rapid-fire calls (e.g. autorun on every keystroke)
 function debounce (fn, ms) {
   let timer
@@ -251,6 +624,13 @@ function validateInputSchema (input, path, report) {
 
   if ((typeof input.raw !== 'undefined') && (typeof input.raw !== 'boolean')) {
     report.warnings.push(`${path}.raw should be a boolean`)
+  }
+
+  if ((typeof input.stream !== 'undefined') && (typeof input.stream !== 'boolean')) {
+    report.warnings.push(`${path}.stream should be a boolean`)
+  }
+  if ((input.stream === true) && (input.type !== 'file')) {
+    report.warnings.push(`${path}.stream is supported only for file inputs`)
   }
 
   if (input.type === 'group') {
@@ -355,6 +735,10 @@ module.exports = {
   isWorkerInitMessage,
   getProgressState,
   shouldContinueInterval,
+  createFileStream,
+  createFetchStream,
+  wrapStreamInputs,
   getName,
-  validateSchema
+  validateSchema,
+  toWorkerSerializable
 }

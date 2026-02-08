@@ -71,6 +71,7 @@ module.exports = (env) => {
           ? 'vue/dist/vue.runtime.esm-bundler.js'
           : 'vue/dist/vue.esm-bundler'
       },
+      fallback: {}
     },
     // Update recommended size limit
     performance: {

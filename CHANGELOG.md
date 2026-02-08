@@ -8,6 +8,7 @@
 - Add `cancelCurrentRun()` runtime entrypoint and wire overlay Stop button with proper `click` handling for any active run
 - Add worker cooperative cancel signal: `_cmd: 'cancel'` updates worker state and JS model context now exposes `ctx.isCancelled()`
 - Add end-to-end `raw` file input mode: schema `inputs[].raw` now passes `File` objects / URL handles instead of loading full text into memory
+- Add file input stream mode (`inputs[].stream: true`) that wraps raw file/URL sources into async iterable `ChunkedReader` objects (zero-dep, supports `for await`, `.text()`, `.bytes()`, `.lines()`) in both worker and main-thread execution
 
 ## 0.3.8
 ### Bug fixes:
