@@ -44,6 +44,50 @@ function collectFetchBundleBlocks (schema) {
     .filter(Boolean)
 }
 
+function isHttpUrl (value) {
+  return /^https?:\/\//i.test(value)
+}
+
+function toRuntimeUrl (value) {
+  try {
+    return (new URL(value)).href
+  } catch (error) {
+    return (new URL(value, 'https://cdn.jsdelivr.net/npm/')).href
+  }
+}
+
+function isLocalJsImport (value) {
+  if (typeof value !== 'string') return false
+  const lower = value.toLowerCase()
+  if (!lower.endsWith('.js') && !lower.includes('.js?')) return false
+  if (isHttpUrl(value)) return false
+  return value.startsWith('./') || value.startsWith('../') || value.startsWith('/') || value.startsWith('file://')
+}
+
+function resolveFetchImport (importValue, modelUrl, cwd) {
+  if (isLocalJsImport(importValue)) {
+    const modelDir = modelUrl && !isHttpUrl(modelUrl) ? path.dirname(modelUrl) : '.'
+    const localSchemaPath = path.normalize(path.join(modelDir, importValue))
+    const schemaImport = localSchemaPath.split(path.sep).join('/')
+    return {
+      schemaImport: schemaImport,
+      importUrl: toRuntimeUrl(schemaImport),
+      localFilePath: path.resolve(cwd, localSchemaPath),
+      remoteUrl: null
+    }
+  }
+
+  const remoteUrl = isHttpUrl(importValue)
+    ? importValue
+    : `https://cdn.jsdelivr.net/npm/${importValue}`
+  return {
+    schemaImport: importValue,
+    importUrl: toRuntimeUrl(importValue),
+    localFilePath: null,
+    remoteUrl: remoteUrl
+  }
+}
+
 function getDataFromArgv (schema, argv, loadFiles=true) {
   let data = {}
   if (schema.inputs) {
@@ -719,46 +763,56 @@ async function gen (pargv, returnHtml=false) {
         const modelCode = fs.readFileSync(path.join(cwd, m.url), 'utf8')
         hiddenElementHtml += `<script type="text/plain" style="display: none;" data-src="${m.url}">${modelCode}</script>`
       }
-      if (m.imports) {
-        for (let i of m.imports) {
-          const importUrl = i.includes('.js') ? i : `https://cdn.jsdelivr.net/npm/${i}`
-
-          // Create cache directory if it doesn't exist
-          const cacheDir = path.join(os.homedir(), '.cache', 'jsee')
-          fs.mkdirSync(cacheDir, { recursive: true })
-
-          // Create a hash of the importUrl
-          const hash = crypto.createHash('sha256').update(importUrl).digest('hex')
-          const cacheFilePath = path.join(cacheDir, `${hash}.js`)
+      const imports = toArray(m.imports)
+      if (imports.length) {
+        m.imports = imports
+        for (let [index, i] of imports.entries()) {
+          if (typeof i !== 'string') {
+            continue
+          }
+          const importMeta = resolveFetchImport(i, m.url, cwd)
+          m.imports[index] = importMeta.schemaImport
 
           let importCode
-          let useCache = false
+          if (importMeta.localFilePath) {
+            importCode = fs.readFileSync(importMeta.localFilePath, 'utf8')
+          } else {
+            // Create cache directory if it doesn't exist
+            const cacheDir = path.join(os.homedir(), '.cache', 'jsee')
+            fs.mkdirSync(cacheDir, { recursive: true })
 
-          // Check if cache file exists and is less than 1 day old
-          if (fs.existsSync(cacheFilePath)) {
-            const stats = fs.statSync(cacheFilePath)
-            const mtime = new Date(stats.mtime)
-            const now = new Date()
-            const ageInDays = (now - mtime) / (1000 * 60 * 60 * 24)
+            // Create a hash of the importUrl
+            const hash = crypto.createHash('sha256').update(importMeta.importUrl).digest('hex')
+            const cacheFilePath = path.join(cacheDir, `${hash}.js`)
 
-            if (ageInDays < 1) {
-              log('Using cached import:', importUrl)
-              importCode = fs.readFileSync(cacheFilePath, 'utf8');
-              useCache = true;
+            let useCache = false
+
+            // Check if cache file exists and is less than 1 day old
+            if (fs.existsSync(cacheFilePath)) {
+              const stats = fs.statSync(cacheFilePath)
+              const mtime = new Date(stats.mtime)
+              const now = new Date()
+              const ageInDays = (now - mtime) / (1000 * 60 * 60 * 24)
+
+              if (ageInDays < 1) {
+                log('Using cached import:', importMeta.importUrl)
+                importCode = fs.readFileSync(cacheFilePath, 'utf8')
+                useCache = true
+              }
+            }
+
+            if (!useCache) {
+              const response = await fetch(importMeta.remoteUrl)
+              if (!response.ok) {
+                console.error(`Failed to fetch ${importMeta.remoteUrl}: ${response.statusText}`)
+                process.exit(1)
+              }
+              importCode = await response.text()
+              fs.writeFileSync(cacheFilePath, importCode, 'utf8')
+              log('Fetched and stored to cache:', importMeta.importUrl)
             }
           }
-
-          if (!useCache) {
-            const response = await fetch(importUrl);
-            if (!response.ok) {
-              console.error(`Failed to fetch ${importUrl}: ${response.statusText}`);
-              process.exit(1);
-            }
-            importCode = await response.text()
-            fs.writeFileSync(cacheFilePath, importCode, 'utf8')
-            log('Fetched and stored to cache:', importUrl)
-          }
-          hiddenElementHtml += `<script type="text/plain" style="display: none;" data-src="${importUrl}">${importCode}</script>`
+          hiddenElementHtml += `<script type="text/plain" style="display: none;" data-src="${importMeta.importUrl}">${importCode}</script>`
         }
       }
     }
@@ -913,3 +967,4 @@ async function gen (pargv, returnHtml=false) {
 
 module.exports = gen
 module.exports.collectFetchBundleBlocks = collectFetchBundleBlocks
+module.exports.resolveFetchImport = resolveFetchImport

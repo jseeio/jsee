@@ -1,4 +1,5 @@
-const { collectFetchBundleBlocks } = require('../../src/cli')
+const path = require('path')
+const { collectFetchBundleBlocks, resolveFetchImport } = require('../../src/cli')
 
 describe('collectFetchBundleBlocks', () => {
   test('collects model, view and render blocks', () => {
@@ -25,5 +26,26 @@ describe('collectFetchBundleBlocks', () => {
     const blocks = collectFetchBundleBlocks(schema)
 
     expect(blocks.map(b => b.name)).toEqual(['m1', 'm2', 'v1'])
+  })
+})
+
+describe('resolveFetchImport', () => {
+  test('resolves local relative import paths against model location', () => {
+    const cwd = '/tmp/jsee-workspace'
+    const result = resolveFetchImport('./helpers/math.js', 'apps/qrcode/model.js', cwd)
+
+    expect(result.schemaImport).toBe('apps/qrcode/helpers/math.js')
+    expect(result.importUrl).toBe('https://cdn.jsdelivr.net/npm/apps/qrcode/helpers/math.js')
+    expect(result.localFilePath).toBe(path.join(cwd, 'apps/qrcode/helpers/math.js'))
+    expect(result.remoteUrl).toBeNull()
+  })
+
+  test('keeps package imports as remote URLs', () => {
+    const result = resolveFetchImport('chart.js', 'apps/qrcode/model.js', '/tmp/jsee-workspace')
+
+    expect(result.schemaImport).toBe('chart.js')
+    expect(result.importUrl).toBe('https://cdn.jsdelivr.net/npm/chart.js')
+    expect(result.localFilePath).toBeNull()
+    expect(result.remoteUrl).toBe('https://cdn.jsdelivr.net/npm/chart.js')
   })
 })
