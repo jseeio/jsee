@@ -7,6 +7,7 @@
 - Allow `progress(null)` to render an indeterminate top progress bar for stream-like tasks where total size is unknown
 - Add `cancelCurrentRun()` runtime entrypoint and wire overlay Stop button with proper `click` handling for any active run
 - Add worker cooperative cancel signal: `_cmd: 'cancel'` updates worker state and JS model context now exposes `ctx.isCancelled()`
+- Add end-to-end `raw` file input mode: schema `inputs[].raw` now passes `File` objects / URL handles instead of loading full text into memory
 
 ## 0.3.8
 ### Bug fixes:
