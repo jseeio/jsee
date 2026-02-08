@@ -5,6 +5,7 @@ const {
   delay,
   debounce,
   getName,
+  isWorkerInitMessage,
   getModelFuncJS,
   getModelFuncAPI,
   validateSchema
@@ -122,6 +123,24 @@ describe('getName', () => {
     expect(getName(42)).toBeUndefined()
     expect(getName(null)).toBeUndefined()
     expect(getName(undefined)).toBeUndefined()
+  })
+})
+
+describe('isWorkerInitMessage', () => {
+  test('returns true for first model payload with code', () => {
+    expect(isWorkerInitMessage({ code: 'function run () {}' }, false)).toBe(true)
+  })
+
+  test('returns true for first model payload with url', () => {
+    expect(isWorkerInitMessage({ url: '/apps/test/model.js' }, false)).toBe(true)
+  })
+
+  test('returns false after worker was initialized', () => {
+    expect(isWorkerInitMessage({ url: '/apps/test/input.csv' }, true)).toBe(false)
+  })
+
+  test('returns false for non-model execution payloads', () => {
+    expect(isWorkerInitMessage({ input: 1, caller: 'run' }, false)).toBe(false)
   })
 })
 

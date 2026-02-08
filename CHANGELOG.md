@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+### Bug fixes:
+- Gate worker initialization with an `initialized` flag: only the first `{url|code}` payload initializes the worker, all later payloads are treated as execution input
+
 ## 0.3.8
 ### Bug fixes:
 - Fix `run()` error handling: wrap in try/catch/finally so overlay and running state always reset on failure

@@ -35,6 +35,13 @@ function sanitizeName (inputName) {
   return inputName.toLowerCase().replace(/[^a-z0-9_]/g, '_')
 }
 
+function isWorkerInitMessage (data, initialized=false) {
+  if (initialized || !isObject(data)) {
+    return false
+  }
+  return (typeof data.url !== 'undefined') || (typeof data.code !== 'undefined')
+}
+
 async function getModelFuncJS (model, target, app) {
   let modelFunc
   switch (model.type) {
@@ -318,6 +325,7 @@ module.exports = {
   delay,
   debounce,
   sanitizeName,
+  isWorkerInitMessage,
   getName,
   validateSchema
 }

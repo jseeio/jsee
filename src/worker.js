@@ -10,6 +10,8 @@ function progress (value) {
   postMessage({_status: 'progress', _progress: value})
 }
 
+let initialized = false
+
 function initTF (model) {
   throw new Error('Tensorflow in worker (not implemented)')
 }
@@ -81,7 +83,7 @@ onmessage = async function (e) {
   var data = e.data
   log('Received message of type:', typeof data)
 
-  if ((typeof data === 'object') && ((data.url) || (data.code))) {
+  if (utils.isWorkerInitMessage(data, initialized)) {
     // Init message
     log('Init...')
     let m = data
@@ -105,6 +107,7 @@ onmessage = async function (e) {
       default:
         throw new Error(`No type information: ${m.type}`)
     }
+    initialized = true
     postMessage({_status: 'loaded'})
   } else {
     // Execution
