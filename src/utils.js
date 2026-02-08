@@ -86,7 +86,7 @@ function importScriptAsync (imp, async=true) {
           console.log('Script loaded from cache:', ev.detail.url)
           resolve({ status: true })
         })
-        document.body.appendChild(scriptElement);console.log('1')
+        document.body.appendChild(scriptElement)
         document.body.appendChild(eventElement)
       } else {
         // Create script element from import.url
@@ -99,7 +99,7 @@ function importScriptAsync (imp, async=true) {
         scriptElement.addEventListener('error', (ev) => {
           reject({
             status: false,
-            message: `Failed to import ＄{imp.url}`
+            message: `Failed to import ${imp.url}`
           })
         })
         document.body.appendChild(scriptElement);
