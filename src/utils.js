@@ -37,6 +37,58 @@ function shouldPreserveWorkerValue (value) {
   return false
 }
 
+function containsBinaryPayload (value, seen=new WeakSet()) {
+  if (!value || (typeof value !== 'object')) {
+    return false
+  }
+  if ((typeof File !== 'undefined') && (value instanceof File)) {
+    return true
+  }
+  if ((typeof Blob !== 'undefined') && (value instanceof Blob)) {
+    return true
+  }
+  if ((typeof ArrayBuffer !== 'undefined') && (value instanceof ArrayBuffer)) {
+    return true
+  }
+  if ((typeof ArrayBuffer !== 'undefined') && ArrayBuffer.isView && ArrayBuffer.isView(value)) {
+    return true
+  }
+
+  if (seen.has(value)) {
+    return false
+  }
+  seen.add(value)
+
+  if (Array.isArray(value)) {
+    return value.some(item => containsBinaryPayload(item, seen))
+  }
+
+  if ((typeof Map !== 'undefined') && (value instanceof Map)) {
+    for (const [key, item] of value.entries()) {
+      if (containsBinaryPayload(key, seen) || containsBinaryPayload(item, seen)) {
+        return true
+      }
+    }
+    return false
+  }
+
+  if ((typeof Set !== 'undefined') && (value instanceof Set)) {
+    for (const item of value.values()) {
+      if (containsBinaryPayload(item, seen)) {
+        return true
+      }
+    }
+    return false
+  }
+
+  for (const key of Object.keys(value)) {
+    if (containsBinaryPayload(value[key], seen)) {
+      return true
+    }
+  }
+  return false
+}
+
 const VALID_INPUT_TYPES = [
   'int',
   'float',
@@ -129,6 +181,59 @@ function getUrlFromSource (source) {
   return null
 }
 
+function isChunkedReaderSource (source) {
+  return !!source
+    && (typeof source === 'object')
+    && (typeof source[Symbol.asyncIterator] === 'function')
+    && (typeof source.text === 'function')
+    && (typeof source.bytes === 'function')
+    && (typeof source.lines === 'function')
+}
+
+function getNameFromUrl (sourceUrl) {
+  if ((typeof sourceUrl !== 'string') || (sourceUrl.length === 0)) {
+    return undefined
+  }
+
+  try {
+    const baseUrl = (typeof location !== 'undefined' && location.href)
+      ? location.href
+      : 'http://localhost/'
+    const parsed = new URL(sourceUrl, baseUrl)
+    const fileName = parsed.pathname.split('/').pop()
+    return fileName || undefined
+  } catch (error) {
+    const noQuery = sourceUrl.split('?')[0].split('#')[0]
+    const fileName = noQuery.split('/').pop()
+    return fileName || undefined
+  }
+}
+
+function getStreamMetadata (source, sourceUrl) {
+  const metadata = {}
+
+  if (source && (typeof source === 'object')) {
+    if (typeof source.name === 'string') {
+      metadata.name = source.name
+    }
+    if ((typeof source.size === 'number') && !Number.isNaN(source.size)) {
+      metadata.size = source.size
+    }
+    if (typeof source.type === 'string') {
+      metadata.type = source.type
+    }
+  }
+
+  if (!metadata.name) {
+    const inferredName = getNameFromUrl(sourceUrl)
+    if (typeof inferredName === 'string') {
+      metadata.name = inferredName
+    }
+  }
+
+  return metadata
+}
+
 // Async channel with backpressure for streaming chunks
 function createChunkChannel () {
   const queue = []
@@ -195,8 +300,17 @@ function createChunkChannel () {
 
 // Lightweight async-iterable reader for chunked data (File or fetch)
 class ChunkedReader {
-  constructor (channel) {
+  constructor (channel, metadata={}) {
     this._channel = channel
+    if (typeof metadata.name === 'string') {
+      this.name = metadata.name
+    }
+    if ((typeof metadata.size === 'number') && !Number.isNaN(metadata.size)) {
+      this.size = metadata.size
+    }
+    if (typeof metadata.type === 'string') {
+      this.type = metadata.type
+    }
   }
 
   [Symbol.asyncIterator] () {
@@ -247,18 +361,20 @@ class ChunkedReader {
   }
 }
 
-function createChunkedReader (producer) {
+function createChunkedReader (producer, metadata={}) {
   const channel = createChunkChannel()
+  const reader = new ChunkedReader(channel, metadata)
 
   Promise.resolve()
     .then(() => producer(
       chunk => channel.push(chunk),
       () => channel.close(),
-      err => channel.fail(err)
+      err => channel.fail(err),
+      reader
     ))
     .catch(err => channel.fail(err))
 
-  return new ChunkedReader(channel)
+  return reader
 }
 
 function createFileStream (source, options={}) {
@@ -268,6 +384,8 @@ function createFileStream (source, options={}) {
   const chunkSize = (typeof options.chunkSize === 'number') && options.chunkSize > 0
     ? Math.floor(options.chunkSize)
     : (256 * 1024)
+
+  const readerMetadata = getStreamMetadata(source, null)
 
   return createChunkedReader(async (pushChunk, closeStream, failStream) => {
     const totalBytes = source.size
@@ -302,7 +420,7 @@ function createFileStream (source, options={}) {
     } catch (error) {
       failStream(error)
     }
-  })
+  }, readerMetadata)
 }
 
 function createFetchStream (source, options={}) {
@@ -318,7 +436,9 @@ function createFetchStream (source, options={}) {
     throw new Error('createFetchStream: fetch is not available')
   }
 
-  return createChunkedReader(async (pushChunk, closeStream, failStream) => {
+  const readerMetadata = getStreamMetadata(source, sourceUrl)
+
+  return createChunkedReader(async (pushChunk, closeStream, failStream, streamReader) => {
     const reportProgress = async (value) => {
       if (typeof onProgress === 'function') {
         await onProgress(value)
@@ -337,7 +457,7 @@ function createFetchStream (source, options={}) {
       }
     }
 
-    let reader
+    let bodyReader
     try {
       if (isAbortRequested(signal, isCancelled)) {
         throw createAbortError('createFetchStream: aborted before fetch')
@@ -353,8 +473,15 @@ function createFetchStream (source, options={}) {
       const totalBytesHeader = response.headers.get('content-length')
       const totalBytes = totalBytesHeader ? Number(totalBytesHeader) : null
       const hasKnownLength = !!totalBytes && !Number.isNaN(totalBytes) && totalBytes > 0
+      if ((typeof streamReader.size !== 'number') && hasKnownLength) {
+        streamReader.size = totalBytes
+      }
+      const contentTypeHeader = response.headers.get('content-type')
+      if ((!streamReader.type) && contentTypeHeader) {
+        streamReader.type = contentTypeHeader.split(';')[0].trim()
+      }
       let loadedBytes = 0
-      reader = response.body.getReader()
+      bodyReader = response.body.getReader()
 
       await reportProgress(hasKnownLength ? 0 : null)
       while (true) {
@@ -364,7 +491,7 @@ function createFetchStream (source, options={}) {
           }
           throw createAbortError('createFetchStream: aborted during read')
         }
-        const { done, value } = await reader.read()
+        const { done, value } = await bodyReader.read()
         if (done) {
           break
         }
@@ -382,11 +509,11 @@ function createFetchStream (source, options={}) {
     } catch (error) {
       failStream(error)
     } finally {
-      if (reader) {
-        reader.releaseLock()
+      if (bodyReader) {
+        bodyReader.releaseLock()
       }
     }
-  })
+  }, readerMetadata)
 }
 
 function wrapStreamInputs (inputs, streamConfig={}, options={}) {
@@ -405,6 +532,9 @@ function wrapStreamInputs (inputs, streamConfig={}, options={}) {
     }
 
     const source = wrapped[inputName]
+    if (isChunkedReaderSource(source)) {
+      return
+    }
     if (isFileLikeSource(source)) {
       wrapped[inputName] = createFileStream(source, options)
       return
@@ -412,7 +542,7 @@ function wrapStreamInputs (inputs, streamConfig={}, options={}) {
 
     const sourceUrl = getUrlFromSource(source)
     if (sourceUrl) {
-      wrapped[inputName] = createFetchStream(sourceUrl, options)
+      wrapped[inputName] = createFetchStream(source, options)
     }
   })
   return wrapped
@@ -740,5 +870,6 @@ module.exports = {
   wrapStreamInputs,
   getName,
   validateSchema,
-  toWorkerSerializable
+  toWorkerSerializable,
+  containsBinaryPayload
 }

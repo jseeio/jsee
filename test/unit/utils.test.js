@@ -12,7 +12,8 @@ const {
   getModelFuncAPI,
   validateSchema,
   toWorkerSerializable,
-  wrapStreamInputs
+  wrapStreamInputs,
+  containsBinaryPayload
 } = require('../../src/utils')
 
 describe('isObject', () => {
@@ -107,6 +108,25 @@ describe('toWorkerSerializable', () => {
   })
 })
 
+describe('containsBinaryPayload', () => {
+  test('returns true for nested binary payloads', () => {
+    const payload = {
+      file: {
+        blob: new Uint8Array([1, 2, 3])
+      }
+    }
+    expect(containsBinaryPayload(payload)).toBe(true)
+  })
+
+  test('returns false for plain JSON-like payloads', () => {
+    const payload = {
+      file: { kind: 'url', url: 'http://localhost:8080/test.csv' },
+      rows: [{ a: 1 }, { b: 2 }]
+    }
+    expect(containsBinaryPayload(payload)).toBe(false)
+  })
+})
+
 describe('wrapStreamInputs', () => {
   test('wraps file-like source into async iterable chunked reader', async () => {
     const content = new TextEncoder().encode('name,age\n1,2\n')
@@ -133,6 +153,28 @@ describe('wrapStreamInputs', () => {
 
     const text = await wrapped.file.text()
     expect(text).toBe('name,age\n1,2\n')
+  })
+
+  test('copies file metadata to chunked reader', () => {
+    const fakeFile = {
+      name: 'input.csv',
+      size: 4,
+      type: 'text/csv',
+      slice () {
+        return {
+          async arrayBuffer () {
+            return new Uint8Array([1, 2, 3, 4]).buffer
+          }
+        }
+      }
+    }
+    const wrapped = wrapStreamInputs(
+      { file: fakeFile },
+      { file: { stream: true } }
+    )
+    expect(wrapped.file.name).toBe('input.csv')
+    expect(wrapped.file.size).toBe(4)
+    expect(wrapped.file.type).toBe('text/csv')
   })
 
   test('wraps URL handle into async iterable chunked reader', async () => {
@@ -167,6 +209,75 @@ describe('wrapStreamInputs', () => {
     expect(text).toBe('name,age\n')
     expect(fetchMock).toHaveBeenCalled()
     expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:8080/test.csv')
+  })
+
+  test('copies URL metadata to chunked reader', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      headers: {
+        get: (name) => {
+          if (name === 'content-length') return '9'
+          if (name === 'content-type') return 'text/csv; charset=utf-8'
+          return null
+        }
+      },
+      body: {
+        getReader () {
+          let readCount = 0
+          return {
+            async read () {
+              readCount += 1
+              if (readCount === 1) {
+                return { done: false, value: new TextEncoder().encode('a,b\n1,2\n') }
+              }
+              return { done: true, value: undefined }
+            },
+            releaseLock () {}
+          }
+        }
+      }
+    })
+
+    const wrapped = wrapStreamInputs(
+      {
+        file: {
+          kind: 'url',
+          url: 'http://localhost:8080/files/upload-sample.csv'
+        }
+      },
+      { file: { stream: true } },
+      { fetch: fetchMock }
+    )
+    expect(wrapped.file.name).toBe('upload-sample.csv')
+
+    const text = await wrapped.file.text()
+    expect(text).toBe('a,b\n1,2\n')
+    expect(wrapped.file.size).toBe(9)
+    expect(wrapped.file.type).toBe('text/csv')
+  })
+
+  test('does not re-wrap chunked readers on downstream stages', () => {
+    const content = new TextEncoder().encode('hello')
+    const fakeFile = {
+      size: content.byteLength,
+      slice (start, end) {
+        const chunk = content.slice(start, end)
+        return {
+          async arrayBuffer () {
+            return chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength)
+          }
+        }
+      }
+    }
+    const onceWrapped = wrapStreamInputs(
+      { file: fakeFile },
+      { file: { stream: true } }
+    )
+    const twiceWrapped = wrapStreamInputs(
+      onceWrapped,
+      { file: { stream: true } }
+    )
+    expect(twiceWrapped.file).toBe(onceWrapped.file)
   })
 
   test('lines() yields individual lines from chunked input', async () => {
