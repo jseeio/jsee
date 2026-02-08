@@ -93,6 +93,10 @@ Extra blocks can be provided for further customization
     - `object` (default) - Pass inputs wrapped in an object, i.e. `{'x': 1, 'y': 2}`
     - `args` - Pass inputs as separate arguments
   - `worker` (boolean) - If `true`, JSEE initializes a Web Worker to run the script
+    - For `container: 'object'`, model functions receive a second runtime context argument (`ctx`)
+    - `ctx.log(...args)` - Write runtime logs
+    - `ctx.progress(value)` - Report progress (`0..100` or `null` for indeterminate)
+    - `ctx.isCancelled()` - Check cooperative cancellation state (useful in long loops/streams)
 - `render` - Custom rendering script. Instead of relying on JSEE for output visualization, you can provide a custom script that visualizes the results. That can be useful if you rely on custom libs for plotting.
 - `design` - Design parameters
   - `layout` - Layout for the model/input/output blocks. If it's empty and the JSEE container is not, JSEE uses inner HTML as a template. If the container is empty too, it uses the default `blocks` template.
@@ -121,6 +125,7 @@ Extra blocks can be provided for further customization
 - `autorun` (boolean, default: `false`) - Run the model automatically on first load
 - `reactive` (boolean, default: `false`) - Re-run the model on any input change (debounced). For per-input reactivity, set `reactive: true` on individual inputs instead
 - `interval` (number, default: `0`) - Defines the interval between script evaluations (in milliseconds). If set to `0`, the script is evaluated only once.
+- Runtime cancellation: call `jsee.cancelCurrentRun()` on the JSEE instance to request stop of the active run. Long-running models should check `ctx.isCancelled()` and return early.
 - Schema validation - JSEE validates schema structure during initialization and logs warnings for non-critical issues (e.g. unknown input types, malformed aliases)
 
 JSEE is a reactive branch of [StatSim](https://statsim.com)'s [Port](https://github.com/statsim/port). It's still work in progress. Expect API changes.

@@ -208,6 +208,17 @@ describe('getModelFuncJS', () => {
     expect(wrapped({ a: 10, b: 20 })).toBe(30)
   })
 
+  test('passes app context for object container', async () => {
+    const ctxApp = {
+      log: jest.fn(),
+      isCancelled: jest.fn(() => true)
+    }
+    const target = (inputs, ctx) => ({ value: inputs.a, cancelled: ctx.isCancelled() })
+    const wrapped = await getModelFuncJS({ type: 'function' }, target, ctxApp)
+    expect(wrapped({ a: 7 })).toEqual({ value: 7, cancelled: true })
+    expect(ctxApp.isCancelled).toHaveBeenCalledTimes(1)
+  })
+
   test('wraps class type', async () => {
     class Calculator {
       predict (inputs) { return inputs.x * 2 }
