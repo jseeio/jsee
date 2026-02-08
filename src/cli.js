@@ -64,25 +64,41 @@ function isLocalJsImport (value) {
   return value.startsWith('./') || value.startsWith('../') || value.startsWith('/') || value.startsWith('file://')
 }
 
+function getImportUrlValue (importValue) {
+  if (typeof importValue === 'string') return importValue
+  if (importValue && typeof importValue === 'object' && typeof importValue.url === 'string') {
+    return importValue.url
+  }
+  return null
+}
+
 function resolveFetchImport (importValue, modelUrl, cwd) {
-  if (isLocalJsImport(importValue)) {
+  const importUrlValue = getImportUrlValue(importValue)
+  if (!importUrlValue) {
+    return null
+  }
+  const importIsObject = importValue && typeof importValue === 'object'
+
+  if (isLocalJsImport(importUrlValue)) {
     const modelDir = modelUrl && !isHttpUrl(modelUrl) ? path.dirname(modelUrl) : '.'
-    const localSchemaPath = path.normalize(path.join(modelDir, importValue))
+    const localSchemaPath = path.normalize(path.join(modelDir, importUrlValue))
     const schemaImport = localSchemaPath.split(path.sep).join('/')
     return {
       schemaImport: schemaImport,
+      schemaEntry: importIsObject ? { ...importValue, url: schemaImport } : schemaImport,
       importUrl: toRuntimeUrl(schemaImport),
       localFilePath: path.resolve(cwd, localSchemaPath),
       remoteUrl: null
     }
   }
 
-  const remoteUrl = isHttpUrl(importValue)
-    ? importValue
-    : `https://cdn.jsdelivr.net/npm/${importValue}`
+  const remoteUrl = isHttpUrl(importUrlValue)
+    ? importUrlValue
+    : `https://cdn.jsdelivr.net/npm/${importUrlValue}`
   return {
-    schemaImport: importValue,
-    importUrl: toRuntimeUrl(importValue),
+    schemaImport: importUrlValue,
+    schemaEntry: importIsObject ? { ...importValue, url: importUrlValue } : importUrlValue,
+    importUrl: toRuntimeUrl(importUrlValue),
     localFilePath: null,
     remoteUrl: remoteUrl
   }
@@ -771,7 +787,10 @@ async function gen (pargv, returnHtml=false) {
             continue
           }
           const importMeta = resolveFetchImport(i, m.url, cwd)
-          m.imports[index] = importMeta.schemaImport
+          if (!importMeta) {
+            continue
+          }
+          m.imports[index] = importMeta.schemaEntry
 
           let importCode
           if (importMeta.localFilePath) {

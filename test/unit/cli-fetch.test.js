@@ -48,4 +48,20 @@ describe('resolveFetchImport', () => {
     expect(result.localFilePath).toBeNull()
     expect(result.remoteUrl).toBe('https://cdn.jsdelivr.net/npm/chart.js')
   })
+
+  test('supports object imports and preserves extra fields', () => {
+    const result = resolveFetchImport(
+      { url: './helpers/math.js', integrity: 'sha-123' },
+      'apps/qrcode/model.js',
+      '/tmp/jsee-workspace'
+    )
+
+    expect(result.schemaEntry).toEqual({
+      url: 'apps/qrcode/helpers/math.js',
+      integrity: 'sha-123'
+    })
+    expect(result.importUrl).toBe('https://cdn.jsdelivr.net/npm/apps/qrcode/helpers/math.js')
+    expect(result.localFilePath).toBe(path.join('/tmp/jsee-workspace', 'apps/qrcode/helpers/math.js'))
+    expect(result.remoteUrl).toBeNull()
+  })
 })
