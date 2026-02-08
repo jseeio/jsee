@@ -157,15 +157,45 @@ export default class JSEE {
   }
 
   progress (i) {
+    const progressState = utils.getProgressState(i)
+    if (!progressState) {
+      return
+    }
+
     // Check if progress div is defined
     let progress = document.querySelector('#progress')
+    if (!progress && progressState.mode === 'determinate' && progressState.value === 0) {
+      return
+    }
+
     if (!progress) {
       progress = document.createElement('div')
       progress.setAttribute('id', 'progress')
       progress.style = 'position: fixed; top: 0; left: 0; width: 0; height: 3px; background: #00d1b2; z-index: 1000;'
       document.body.appendChild(progress)
     }
-    progress.style.width = `${i}%`
+
+    let progressStyle = document.querySelector('#jsee-progress-style')
+    if (!progressStyle) {
+      progressStyle = document.createElement('style')
+      progressStyle.setAttribute('id', 'jsee-progress-style')
+      progressStyle.textContent = `
+      @keyframes jsee-progress-indeterminate {
+        0% { transform: translateX(-120%); }
+        100% { transform: translateX(360%); }
+      }
+      `
+      document.head.appendChild(progressStyle)
+    }
+
+    if (progressState.mode === 'indeterminate') {
+      progress.style.width = '30%'
+      progress.style.animation = 'jsee-progress-indeterminate 1.2s ease-in-out infinite'
+    } else {
+      progress.style.animation = 'none'
+      progress.style.transform = 'none'
+      progress.style.width = `${progressState.value}%`
+    }
   }
 
   async init () {
@@ -552,6 +582,7 @@ export default class JSEE {
               case 'loaded':
                 notyf.success('Loaded model (in worker)')
                 log('Loaded model (in worker):', res)
+                this.progress(0)
                 resolve(res)
                 break
               case 'log':
@@ -563,17 +594,20 @@ export default class JSEE {
               case 'error':
                 notyf.error(res._error)
                 log('Error from worker:', res._error)
+                this.progress(0)
                 reject(res._error)
                 break
             }
           } else {
             log('Response from worker:', res)
+            this.progress(0)
             resolve(res)
           }
         }
         worker.onerror = (e) => {
           notyf.error(e.message)
           log('Error from worker:', e)
+          this.progress(0)
           reject(e)
         }
         worker.postMessage(inputs)
