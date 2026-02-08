@@ -802,7 +802,8 @@ export default class JSEE {
           .map(key => {
             return {
               'name': key,
-              'type': typeof res[key],
+              // typeof returns 'object' for arrays; distinguish them for proper rendering
+              'type': Array.isArray(res[key]) ? 'array' : typeof res[key],
               'value': res[key]
             }
           })
