@@ -1,5 +1,8 @@
+const fs = require('fs')
+const os = require('os')
 const path = require('path')
-const { collectFetchBundleBlocks, resolveFetchImport, resolveRuntimeMode } = require('../../src/cli')
+const gen = require('../../src/cli')
+const { collectFetchBundleBlocks, resolveFetchImport, resolveRuntimeMode } = gen
 
 describe('collectFetchBundleBlocks', () => {
   test('collects model, view and render blocks', () => {
@@ -86,5 +89,38 @@ describe('resolveRuntimeMode', () => {
 
   test('throws on invalid runtime mode', () => {
     expect(() => resolveRuntimeMode('invalid', false, false)).toThrow('Invalid runtime mode')
+  })
+})
+
+describe('output writes', () => {
+  test('writes absolute output paths and keeps json output intact', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-cli-output-'))
+    const schemaPath = path.join(tmpDir, 'schema.json')
+    const jsonOutputPath = path.join(tmpDir, 'result.json')
+    const htmlOutputPath = path.join(tmpDir, 'result.html')
+
+    fs.writeFileSync(schemaPath, JSON.stringify({
+      model: [
+        {
+          name: 'demo',
+          type: 'function',
+          code: 'function demo () { return 1 }'
+        }
+      ],
+      inputs: [],
+      outputs: []
+    }, null, 2))
+
+    try {
+      await gen(['--inputs', schemaPath, '--outputs', `${jsonOutputPath},${htmlOutputPath}`])
+
+      const jsonContent = fs.readFileSync(jsonOutputPath, 'utf8')
+      const htmlContent = fs.readFileSync(htmlOutputPath, 'utf8')
+
+      expect(() => JSON.parse(jsonContent)).not.toThrow()
+      expect(htmlContent).toContain('<!DOCTYPE html>')
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
   })
 })

@@ -119,6 +119,13 @@ function resolveRuntimeMode (runtime, fetchEnabled, outputs) {
   return outputs ? 'cdn' : 'local'
 }
 
+function resolveOutputPath (cwd, outputPath) {
+  if (path.isAbsolute(outputPath)) {
+    return outputPath
+  }
+  return path.join(cwd, outputPath)
+}
+
 async function loadRuntimeCode (version) {
   if (version === 'dev') {
     return fs.readFileSync(path.join(__dirname, '..', 'dist', 'jsee.js'), 'utf8')
@@ -949,16 +956,15 @@ async function gen (pargv, returnHtml=false) {
       if (o === 'stdout') {
         log(html)
       } else if (o.includes('.html')) {
-        fs.writeFileSync(path.join(cwd, o), html)
+        fs.writeFileSync(resolveOutputPath(cwd, o), html)
       } else if (o.includes('.json')) {
-        fs.writeFileSync(path.join(cwd, o), JSON.stringify(schema, null, 2))
+        fs.writeFileSync(resolveOutputPath(cwd, o), JSON.stringify(schema, null, 2))
       } else if (o.includes('.md')) {
-        fs.writeFileSync(path.join(cwd, o), genMarkdownFromSchema(schema))
+        fs.writeFileSync(resolveOutputPath(cwd, o), genMarkdownFromSchema(schema))
       } else {
         console.error('Invalid output file:', o)
       }
     }
-    fs.writeFileSync(path.join(cwd, outputs[0]), html)
   } else {
     // Serve the html
     const express = require('express')
@@ -1014,3 +1020,4 @@ module.exports = gen
 module.exports.collectFetchBundleBlocks = collectFetchBundleBlocks
 module.exports.resolveFetchImport = resolveFetchImport
 module.exports.resolveRuntimeMode = resolveRuntimeMode
+module.exports.resolveOutputPath = resolveOutputPath
