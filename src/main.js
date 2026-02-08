@@ -200,7 +200,8 @@ export default class JSEE {
   async initSchema () {
     // Check if schema is a string (url to json)
     if (typeof this.schema === 'string') {
-      this.schemaUrl = this.schema.indexOf('json') ? this.schema : this.schema + '.json'
+      // indexOf returns -1 (truthy) when not found, so use includes instead
+      this.schemaUrl = this.schema.includes('.json') ? this.schema : this.schema + '.json'
 
       // Check if schema is present in the hidden DOM element
       const schema = utils.loadFromDOM(this.schemaUrl)
