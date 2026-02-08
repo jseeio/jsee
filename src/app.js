@@ -19,7 +19,7 @@ const components = {
 
 const filtrex = require('filtrex')
 const JsonViewer = require('vue3-json-viewer').default
-const { sanitizeName } = require('./utils.js')
+const { sanitizeName, debounce } = require('./utils.js')
 
 function setInputValue (input, value) {
   if (input.type === 'file') {
@@ -175,12 +175,14 @@ function createVueApp (env, mountedCallback, logMain) {
       inputs: {
         deep: true,
         immediate: false,
-        handler (v) {
-          this.dataChanged = true // Used in the reset button
-          if (this.model.autorun) {
-            this.run('autorun')
+        // schema.reactive enables global re-run on any input change (debounced).
+        // Per-input reactivity uses the 'inchange' event from inputs with reactive: true.
+        handler: debounce(function (v) {
+          this.dataChanged = true
+          if (env.schema.reactive) {
+            this.run('reactive')
           }
-        }
+        }, 300)
       }
     },
     mounted () {

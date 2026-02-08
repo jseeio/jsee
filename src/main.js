@@ -688,9 +688,21 @@ export default class JSEE {
     // 1. custom input button name
     // 2. `run`
     // 3. `autorun`
+
+    // Prevent overlapping runs: autorun skips, manual clicks queue
+    // Prevent overlapping runs: reactive/autorun calls are dropped, manual clicks queue
+    if (this.running) {
+      if (caller === 'autorun' || caller === 'reactive') return
+      log('Run already in progress, queuing', caller)
+      this._pendingRun = caller
+      return
+    }
+
     const schema = this.schema
     const data = this.data
     this.running = true
+    // Run token to detect stale results when worker.onmessage gets rebound
+    const runToken = this._runToken = {}
 
     try {
       log('Running the pipeline...')
@@ -706,13 +718,16 @@ export default class JSEE {
       inputValues.caller = caller
 
       log('Input values:', inputValues)
-      // Show overlay for non-autorun models (autorun shows no overlay to avoid flicker)
-      if (!schema.model.autorun) {
+      // Skip overlay for reactive runs to avoid flicker on rapid input changes
+      if (caller !== 'reactive') {
         this.overlay.show()
       }
 
       // Run pipeline
       const results = await this.pipeline(inputValues)
+
+      // Drop stale results if a newer run started (e.g. worker.onmessage rebound race)
+      if (this._runToken !== runToken) return
 
       // Output results
       this.output(results)
@@ -731,6 +746,13 @@ export default class JSEE {
       // Always clean up UI state so overlay and running flag don't get stuck
       this.overlay.hide()
       this.running = false
+
+      // Drain queued run if a manual click arrived while we were running
+      if (this._pendingRun) {
+        const pending = this._pendingRun
+        this._pendingRun = null
+        this.run(pending).catch(err => log('Queued run error:', err))
+      }
     }
   }
 

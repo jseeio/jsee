@@ -118,7 +118,8 @@ Extra blocks can be provided for further customization
     - `function` - Render function. Rather than returning a value, a model returns a function that JSEE will call passing the container element.
     - `blank` - Blank block (can be alternative to `function` and useful for custom renderers)
 - `examples` - List of examples
-- `autorun` (boolean, default: `false`) - Defines if the script should be evaluated on each input change event
+- `autorun` (boolean, default: `false`) - Run the model automatically on first load
+- `reactive` (boolean, default: `false`) - Re-run the model on any input change (debounced). For per-input reactivity, set `reactive: true` on individual inputs instead
 - `interval` (number, default: `0`) - Defines the interval between script evaluations (in milliseconds). If set to `0`, the script is evaluated only once.
 
 JSEE is a reactive branch of [StatSim](https://statsim.com)'s [Port](https://github.com/statsim/port). It's still work in progress. Expect API changes.
