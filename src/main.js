@@ -220,6 +220,17 @@ export default class JSEE {
       notyf.error('Schema is in a wrong format')
       throw new Error(`Schema is in a wrong format: ${this.schema}`)
     }
+
+    // Validate schema shape early so init stages fail fast on critical issues
+    const schemaValidation = utils.validateSchema(this.schema)
+    schemaValidation.warnings.forEach(warning => {
+      log('[Schema validation warning]', warning)
+    })
+    if (schemaValidation.errors.length) {
+      const firstError = schemaValidation.errors[0]
+      notyf.error(firstError)
+      throw new Error(`Schema validation failed: ${schemaValidation.errors.join('; ')}`)
+    }
   }
 
   async initModel () {

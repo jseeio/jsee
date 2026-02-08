@@ -6,7 +6,8 @@ const {
   debounce,
   getName,
   getModelFuncJS,
-  getModelFuncAPI
+  getModelFuncAPI,
+  validateSchema
 } = require('../../src/utils')
 
 describe('isObject', () => {
@@ -193,5 +194,59 @@ describe('getModelFuncAPI', () => {
       headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify({ x: 10 })
     })
+  })
+})
+
+describe('validateSchema', () => {
+  test('returns empty report for valid minimal schema', () => {
+    const report = validateSchema({
+      model: {
+        code: 'function sum (a, b) { return a + b }'
+      },
+      inputs: [
+        { name: 'a', type: 'int' },
+        { name: 'b', type: 'int' }
+      ]
+    })
+    expect(report.errors).toEqual([])
+    expect(report.warnings).toEqual([])
+  })
+
+  test('returns error when schema has no model and no view/render', () => {
+    const report = validateSchema({
+      inputs: [{ name: 'x', type: 'int' }]
+    })
+    expect(report.errors.length).toBeGreaterThan(0)
+    expect(report.errors.join(' ')).toContain('model')
+  })
+
+  test('returns warning when schema uses view/render without model', () => {
+    const report = validateSchema({
+      render: {
+        type: 'function',
+        code: 'function render () {}'
+      }
+    })
+    expect(report.errors).toEqual([])
+    expect(report.warnings.length).toBeGreaterThan(0)
+  })
+
+  test('returns error for non-array inputs', () => {
+    const report = validateSchema({
+      model: { code: 'function run () {}' },
+      inputs: { name: 'a', type: 'int' }
+    })
+    expect(report.errors.length).toBeGreaterThan(0)
+    expect(report.errors.join(' ')).toContain('inputs')
+  })
+
+  test('returns warnings for unsupported input/model options', () => {
+    const report = validateSchema({
+      model: { type: 'unsupported-model', timeout: -1 },
+      inputs: [{ name: 123, type: 'unsupported-input', alias: [1, 2, 3] }]
+    })
+    expect(report.errors).toEqual([])
+    expect(report.warnings.length).toBeGreaterThan(0)
+    expect(report.warnings.join(' ')).toContain('not recognized')
   })
 })
