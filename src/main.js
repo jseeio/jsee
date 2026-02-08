@@ -467,7 +467,8 @@ export default class JSEE {
       // Set input value from URL param with type conversion
       if (paramValue !== null) {
         if (input.type === 'file') {
-          input.url = paramValue;
+          input.url = paramValue
+          input.urlAutoLoad = true
         } else {
           switch (input.type) {
             case 'number':

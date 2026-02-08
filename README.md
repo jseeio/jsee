@@ -114,7 +114,8 @@ Extra blocks can be provided for further customization
     - `action` or `button` - Button (its `name` will be passed as a `caller` to the model)
   - `default` - Default value
   - `raw` (boolean, file input only) - If `true`, pass the raw source to the model instead of reading text in the UI (`File` object for disk files or `{ kind: 'url', url: '...' }` for URL input)
-  - `stream` (boolean, file input only) - If `true`, pass an async iterable `ChunkedReader` to the model instead of raw source handles. Supports `for await (const chunk of reader)`, `await reader.text()`, `await reader.bytes()`, and `for await (const line of reader.lines())`. Works in both main-thread and worker execution.
+  - `stream` (boolean, file input only) - If `true`, pass an async iterable `ChunkedReader` to the model instead of raw source handles. Supports `for await (const chunk of reader)`, `await reader.text()`, `await reader.bytes()`, and `for await (const line of reader.lines())`. Works in both main-thread and worker execution. Reader metadata (`reader.name`, `reader.size`, `reader.type`) is preserved and remains available in downstream pipeline models.
+  - URL params for file inputs (e.g. `?file=https://...`) auto-load on init, so bookmarkable links run without an extra Load click
 - `outputs` - Outputs definition
   - `name`* - Name of the output
   - `type`* - Type. Possible types:

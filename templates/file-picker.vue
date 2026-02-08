@@ -107,6 +107,7 @@ export default {
     modelValue:    { type: [String, Object],  default: '' },
     url:           { type: String,  default: '' },
     raw:           { type: Boolean, default: false },
+    autoload:      { type: Boolean, default: false },
     labelValue:    { type: String,  default: 'Choose File' }
   },
   emits : ['update:modelValue', 'update:url', 'change'],
@@ -118,7 +119,8 @@ export default {
       urlError: false,
       label: this.labelValue,
       info: 'or drag and drop it here',
-      showUrlInput: true
+      showUrlInput: true,
+      urlAutoLoadHandled: false
     }
   },
   computed: {
@@ -131,6 +133,25 @@ export default {
       get () { return this.url },
       set (v) { this.$emit('update:url', v) }
     }
+  },
+  watch: {
+    autoload (value) {
+      if (!value) {
+        this.urlAutoLoadHandled = false
+        return
+      }
+      this.tryAutoLoadUrl()
+    },
+    url (value) {
+      if (!value) {
+        this.urlAutoLoadHandled = false
+        return
+      }
+      this.tryAutoLoadUrl()
+    }
+  },
+  mounted () {
+    this.tryAutoLoadUrl()
   },
   methods: {
     /* drag-drop handling */
@@ -214,6 +235,17 @@ export default {
             console.error('Error fetching URL:', error)
           })
       } 
+    },
+
+    tryAutoLoadUrl () {
+      if (!this.autoload || this.urlAutoLoadHandled) {
+        return
+      }
+      if (!(this.urlModel && this.urlModel.length > 0)) {
+        return
+      }
+      this.urlAutoLoadHandled = true
+      this.loadUrl()
     },
   
     /* switch to URL mode */

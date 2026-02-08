@@ -88,6 +88,7 @@
           v-model="input.value"
           v-model:url="input.url"
           v-bind:raw="input.raw === true || input.stream === true"
+          v-bind:autoload="input.urlAutoLoad === true"
           v-on:change="changeHandler"
         ></file-picker>
       </div>

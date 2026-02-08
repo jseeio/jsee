@@ -391,6 +391,28 @@ describe('File uploads', () => {
     await expect(page).toMatchTextContent('content_prefix')
     await expect(page).toMatchTextContent('NONE')
   })
+
+  test('file query param auto-loads URL without clicking Load', async () => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function filePreviewFromQuery (inputs) {
+          return {
+            preview: inputs.file.split('\\n')[0]
+          }
+        }`
+      },
+      inputs: [
+        { name: 'file', type: 'file' }
+      ]
+    }
+    const fileUrl = `http://localhost:${port}/test/fixtures/upload-sample.csv`
+    await page.goto(`${urlQueryEscaped(schema)}&file=${encodeURIComponent(fileUrl)}`)
+    await page.waitForFunction(() => document.body.innerText.includes('Loaded from URL:'), { timeout: 5000 })
+    await expect(page).toClick('button', { text: 'Run' })
+    await expect(page).toMatchTextContent('preview')
+    await expect(page).toMatchTextContent('name,age')
+  })
 })
 
 describe('Streamed file inputs', () => {
@@ -428,6 +450,42 @@ describe('Streamed file inputs', () => {
     await expect(page).toMatchTextContent('true')
     await expect(page).toMatchTextContent('header')
     await expect(page).toMatchTextContent('name,age')
+  })
+
+  test('stream metadata is preserved for downstream pipeline models', async () => {
+    const schema = {
+      model: [
+        {
+          worker: false,
+          code: `function streamStageOne (inputs) {
+            return {
+              stage1_name: inputs.file && inputs.file.name ? inputs.file.name : 'NONE'
+            }
+          }`
+        },
+        {
+          worker: false,
+          code: `function streamStageTwo (inputs) {
+            return {
+              stage2_name: inputs.file && inputs.file.name ? inputs.file.name : 'NONE',
+              stage2_size: inputs.file && typeof inputs.file.size === 'number' ? inputs.file.size : -1
+            }
+          }`
+        }
+      ],
+      inputs: [
+        { name: 'file', type: 'file', raw: true, stream: true }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    await page.waitForSelector('#vfp-filePicker')
+    const fileInput = await page.$('#vfp-filePicker')
+    await fileInput.uploadFile(uploadFixture)
+    await expect(page).toClick('button', { text: 'Run' })
+    await expect(page).toMatchTextContent('stage1_name')
+    await expect(page).toMatchTextContent('stage2_name')
+    await expect(page).toMatchTextContent('upload-sample.csv')
+    await expect(page).toMatchTextContent('stage2_size')
   })
 
   test('main thread receives URL source as async iterable stream', async () => {
