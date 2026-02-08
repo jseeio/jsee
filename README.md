@@ -135,7 +135,12 @@ Extra blocks can be provided for further customization
 JSEE is a reactive branch of [StatSim](https://statsim.com)'s [Port](https://github.com/statsim/port). It's still work in progress. Expect API changes.
 
 # CLI
-- `--fetch` - Fetches JSEE code, models and their imports and generates a bundled HTML file
+- `--fetch` - Fetches JSEE runtime and bundles `model`/`view`/`render` blocks plus their imports into generated HTML
+- `--runtime <auto|local|cdn|inline>` - Select runtime source for generated HTML
+  - `auto` (default): `inline` when `--fetch` is used, otherwise `cdn` for file output and `local` for dev server mode
+  - `local`: use `http://localhost:<port>/dist/...`
+  - `cdn`: use jsdelivr runtime URL
+  - `inline`: embed runtime code directly in HTML
 - `--cdn` - Use CDN for models (can be string with a base URL or boolean to infer from package.json). Model urls will be prefixed with the CDN URL. This helps with deployment to static hosts (e.g. GitHub Pages).
 - `--execute` - Executes the model code on the server-side. 
 # Server-side execution

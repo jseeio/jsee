@@ -5,6 +5,10 @@
 - Gate worker initialization with an `initialized` flag: only the first `{url|code}` payload initializes the worker, all later payloads are treated as execution input
 - Fix model type inference for URL-loaded JS: when `code` is present, infer `function` instead of treating `url` as API `post`
 - Improve worker payload fallback diagnostics: if `postMessage` fails with File/Blob/binary payloads, throw a descriptive error instead of silently dropping data via JSON fallback
+- Move `showdown-katex` and `katex` to runtime `dependencies` so `npx jsee` works without dev installs
+- Fix `--fetch` bundling to include `schema.view` and `schema.render` blocks in addition to `schema.model`
+- Fix `--fetch` import resolution for local relative JS imports and support object import entries (`{ url, ... }`)
+- Fix CLI output path handling for absolute/relative `--outputs` values and remove duplicate final HTML write
 ### Features:
 - Allow `progress(null)` to render an indeterminate top progress bar for stream-like tasks where total size is unknown
 - Add `cancelCurrentRun()` runtime entrypoint and wire overlay Stop button with proper `click` handling for any active run
@@ -13,6 +17,7 @@
 - Add file input stream mode (`inputs[].stream: true`) that wraps raw file/URL sources into async iterable `ChunkedReader` objects (zero-dep, supports `for await`, `.text()`, `.bytes()`, `.lines()`) in both worker and main-thread execution
 - Preserve stream reader metadata (`name`, `size`, `type`) for file/URL sources and keep it available across downstream pipeline stages
 - Auto-load file input URL query params on init (no extra Load click required)
+- Add CLI `--runtime <auto|local|cdn|inline>` to control runtime source in generated HTML
 
 ## 0.3.8
 ### Bug fixes:
