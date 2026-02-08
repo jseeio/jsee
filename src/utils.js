@@ -42,6 +42,25 @@ function isWorkerInitMessage (data, initialized=false) {
   return (typeof data.url !== 'undefined') || (typeof data.code !== 'undefined')
 }
 
+function getProgressState (value) {
+  if (value === null) {
+    return {
+      mode: 'indeterminate',
+      value: null
+    }
+  }
+
+  const progressValue = Number(value)
+  if (Number.isNaN(progressValue)) {
+    return null
+  }
+
+  return {
+    mode: 'determinate',
+    value: Math.max(0, Math.min(100, progressValue))
+  }
+}
+
 async function getModelFuncJS (model, target, app) {
   let modelFunc
   switch (model.type) {
@@ -326,6 +345,7 @@ module.exports = {
   debounce,
   sanitizeName,
   isWorkerInitMessage,
+  getProgressState,
   getName,
   validateSchema
 }

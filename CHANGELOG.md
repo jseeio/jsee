@@ -3,6 +3,8 @@
 ## Unreleased
 ### Bug fixes:
 - Gate worker initialization with an `initialized` flag: only the first `{url|code}` payload initializes the worker, all later payloads are treated as execution input
+### Features:
+- Allow `progress(null)` to render an indeterminate top progress bar for stream-like tasks where total size is unknown
 
 ## 0.3.8
 ### Bug fixes:

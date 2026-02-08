@@ -6,6 +6,7 @@ const {
   debounce,
   getName,
   isWorkerInitMessage,
+  getProgressState,
   getModelFuncJS,
   getModelFuncAPI,
   validateSchema
@@ -141,6 +142,27 @@ describe('isWorkerInitMessage', () => {
 
   test('returns false for non-model execution payloads', () => {
     expect(isWorkerInitMessage({ input: 1, caller: 'run' }, false)).toBe(false)
+  })
+})
+
+describe('getProgressState', () => {
+  test('returns indeterminate mode for null', () => {
+    expect(getProgressState(null)).toEqual({ mode: 'indeterminate', value: null })
+  })
+
+  test('returns determinate mode for numeric values', () => {
+    expect(getProgressState(42)).toEqual({ mode: 'determinate', value: 42 })
+    expect(getProgressState('25')).toEqual({ mode: 'determinate', value: 25 })
+  })
+
+  test('clamps determinate values to [0, 100]', () => {
+    expect(getProgressState(-5)).toEqual({ mode: 'determinate', value: 0 })
+    expect(getProgressState(120)).toEqual({ mode: 'determinate', value: 100 })
+  })
+
+  test('returns null for non-numeric non-null values', () => {
+    expect(getProgressState('unknown')).toBeNull()
+    expect(getProgressState(undefined)).toBeNull()
   })
 })
 
