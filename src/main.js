@@ -667,6 +667,14 @@ export default class JSEE {
         try {
           worker.postMessage(payload)
         } catch (error) {
+          const hasBinaryPayload = utils.containsBinaryPayload(payload)
+          if (hasBinaryPayload) {
+            const message = 'Worker postMessage failed for payload with File/Blob/binary data. JSON fallback would drop that data.'
+            log(message, error)
+            reject(new Error(message))
+            return
+          }
+          log('Worker postMessage failed, retrying with JSON fallback. Complex objects may lose metadata.', error)
           try {
             const fallbackPayload = JSON.parse(JSON.stringify(payload))
             worker.postMessage(fallbackPayload)

@@ -4,12 +4,15 @@
 ### Bug fixes:
 - Gate worker initialization with an `initialized` flag: only the first `{url|code}` payload initializes the worker, all later payloads are treated as execution input
 - Fix model type inference for URL-loaded JS: when `code` is present, infer `function` instead of treating `url` as API `post`
+- Improve worker payload fallback diagnostics: if `postMessage` fails with File/Blob/binary payloads, throw a descriptive error instead of silently dropping data via JSON fallback
 ### Features:
 - Allow `progress(null)` to render an indeterminate top progress bar for stream-like tasks where total size is unknown
 - Add `cancelCurrentRun()` runtime entrypoint and wire overlay Stop button with proper `click` handling for any active run
 - Add worker cooperative cancel signal: `_cmd: 'cancel'` updates worker state and JS model context now exposes `ctx.isCancelled()`
 - Add end-to-end `raw` file input mode: schema `inputs[].raw` now passes `File` objects / URL handles instead of loading full text into memory
 - Add file input stream mode (`inputs[].stream: true`) that wraps raw file/URL sources into async iterable `ChunkedReader` objects (zero-dep, supports `for await`, `.text()`, `.bytes()`, `.lines()`) in both worker and main-thread execution
+- Preserve stream reader metadata (`name`, `size`, `type`) for file/URL sources and keep it available across downstream pipeline stages
+- Auto-load file input URL query params on init (no extra Load click required)
 
 ## 0.3.8
 ### Bug fixes:
