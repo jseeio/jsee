@@ -7,6 +7,7 @@ const {
   getName,
   isWorkerInitMessage,
   getProgressState,
+  shouldContinueInterval,
   getModelFuncJS,
   getModelFuncAPI,
   validateSchema
@@ -163,6 +164,27 @@ describe('getProgressState', () => {
   test('returns null for non-numeric non-null values', () => {
     expect(getProgressState('unknown')).toBeNull()
     expect(getProgressState(undefined)).toBeNull()
+  })
+})
+
+describe('shouldContinueInterval', () => {
+  test('returns true only for active non-cancelled run caller', () => {
+    expect(shouldContinueInterval(1000, true, false, 'run')).toBe(true)
+  })
+
+  test('returns false when run is cancelled', () => {
+    expect(shouldContinueInterval(1000, true, true, 'run')).toBe(false)
+  })
+
+  test('returns false for non-run callers', () => {
+    expect(shouldContinueInterval(1000, true, false, 'reactive')).toBe(false)
+    expect(shouldContinueInterval(1000, true, false, 'autorun')).toBe(false)
+  })
+
+  test('returns false when interval is missing or run is inactive', () => {
+    expect(shouldContinueInterval(0, true, false, 'run')).toBe(false)
+    expect(shouldContinueInterval(null, true, false, 'run')).toBe(false)
+    expect(shouldContinueInterval(1000, false, false, 'run')).toBe(false)
   })
 })
 

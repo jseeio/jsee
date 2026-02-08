@@ -126,6 +126,7 @@ export default class JSEE {
     this.schema = params.schema || params.config // Previous naming
     this.utils = utils
     this.__version__ = VERSION
+    this.cancelled = false
 
     // Check if schema is provided
     if (typeof this.schema === 'undefined') {
@@ -154,6 +155,15 @@ export default class JSEE {
 
   notify (txt) {
     notyf.success(txt)
+  }
+
+  cancelCurrentRun () {
+    log('Stopping current run')
+    this.cancelled = true
+  }
+
+  isCancelled () {
+    return this.cancelled === true
   }
 
   progress (i) {
@@ -467,18 +477,14 @@ export default class JSEE {
           this.modelContainer = container.querySelector('#model')
           // Init overlay
           this.overlay = new Overlay(this.inputsContainer ? this.inputsContainer : this.outputsContainer)
-          // Add stop button to the overlay if interval is defined
-          if (this.schema.interval) {
-            this.stopElement = document.createElement('button')
-            this.stopElement.innerHTML = 'Stop'
-            this.stopElement.style = 'background: white; color: #333; border: 1px solid #DDD; padding: 10px; border-radius: 5px; cursor: pointer;'
-            this.stopElement.addEventListener('hover', () => {
-              log('Stopping the pipeline')
-              this.running = false
-            })
-            this.overlay.element.innerHTML = ''
-            this.overlay.element.appendChild(this.stopElement)
-          }
+          // Stop button is shown only while a run is active
+          this.stopElement = document.createElement('button')
+          this.stopElement.innerHTML = 'Stop'
+          this.stopElement.style = 'display: none; margin-left: 12px; background: white; color: #333; border: 1px solid #DDD; padding: 6px 10px; border-radius: 5px; cursor: pointer;'
+          this.stopElement.addEventListener('click', () => {
+            this.cancelCurrentRun()
+          })
+          this.overlay.element.appendChild(this.stopElement)
           resolve()
         }, log)
         this.data = this.app.$data
@@ -734,6 +740,7 @@ export default class JSEE {
     const schema = this.schema
     const data = this.data
     this.running = true
+    this.cancelled = false
     // Run token to detect stale results when worker.onmessage gets rebound
     const runToken = this._runToken = {}
 
@@ -751,9 +758,9 @@ export default class JSEE {
       inputValues.caller = caller
 
       log('Input values:', inputValues)
-      // Skip overlay for reactive runs to avoid flicker on rapid input changes
-      if (caller !== 'reactive') {
-        this.overlay.show()
+      this.overlay.show()
+      if (this.stopElement) {
+        this.stopElement.style.display = 'inline-block'
       }
 
       // Run pipeline
@@ -766,7 +773,7 @@ export default class JSEE {
       this.output(results)
 
       // Check if interval is defined
-      if (schema.interval && this.running && (caller === 'run')) {
+      if (utils.shouldContinueInterval(schema.interval, this.running, this.isCancelled(), caller)) {
         log('Interval is defined:', schema.interval)
         await utils.delay(schema.interval)
         await this.run(caller)
@@ -778,6 +785,9 @@ export default class JSEE {
     } finally {
       // Always clean up UI state so overlay and running flag don't get stuck
       this.overlay.hide()
+      if (this.stopElement) {
+        this.stopElement.style.display = 'none'
+      }
       this.running = false
 
       // Drain queued run if a manual click arrived while we were running
