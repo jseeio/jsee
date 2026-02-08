@@ -4,6 +4,7 @@ const {
   getUrl,
   delay,
   debounce,
+  getName,
   getModelFuncJS,
   getModelFuncAPI
 } = require('../../src/utils')
@@ -96,6 +97,30 @@ describe('debounce', () => {
     debounced('a', 'b')
     jest.advanceTimersByTime(100)
     expect(fn).toHaveBeenCalledWith('a', 'b')
+  })
+})
+
+describe('getName', () => {
+  test('regular named function string', () => {
+    expect(getName('function sum (a, b) { return a + b }')).toBe('sum')
+  })
+  test('async function string', () => {
+    expect(getName('async function fetchData () { }')).toBe('fetchData')
+  })
+  test('anonymous function string', () => {
+    expect(getName('function (a, b) { return a + b }')).toBeUndefined()
+  })
+  test('arrow function returns undefined', () => {
+    expect(getName('(a, b) => a + b')).toBeUndefined()
+  })
+  test('actual function reference', () => {
+    function myFunc () {}
+    expect(getName(myFunc)).toBe('myFunc')
+  })
+  test('non-string non-function returns undefined', () => {
+    expect(getName(42)).toBeUndefined()
+    expect(getName(null)).toBeUndefined()
+    expect(getName(undefined)).toBeUndefined()
   })
 })
 

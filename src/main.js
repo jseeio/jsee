@@ -52,23 +52,7 @@ function clone (obj) {
 
 
 
-function getName (code) {
-  switch (typeof code) {
-    case 'function':
-      return code.name
-    case 'string':
-      // Match 'function name', 'async function name', etc.
-      // Arrow functions and anonymous functions return undefined (handled by caller)
-      const words = code.split(' ')
-      const functionIndex = words.findIndex((word) => word === 'function')
-      if (functionIndex === -1) return undefined
-      const name = words[functionIndex + 1]
-      if (!name || name.includes('(')) return undefined
-      return name
-    default:
-      return undefined
-  }
-}
+const getName = utils.getName
 
 // Return input value
 function getValue (input) {

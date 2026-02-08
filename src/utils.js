@@ -159,6 +159,24 @@ function debounce (fn, ms) {
   }
 }
 
+// Extract function name from code (string or function reference).
+// Handles 'function name', 'async function name'. Arrow/anonymous return undefined.
+function getName (code) {
+  switch (typeof code) {
+    case 'function':
+      return code.name
+    case 'string':
+      const words = code.split(' ')
+      const functionIndex = words.findIndex((word) => word === 'function')
+      if (functionIndex === -1) return undefined
+      const name = words[functionIndex + 1]
+      if (!name || name.includes('(')) return undefined
+      return name
+    default:
+      return undefined
+  }
+}
+
 module.exports = {
   isObject,
   loadFromDOM,
@@ -168,5 +186,6 @@ module.exports = {
   getUrl,
   delay,
   debounce,
-  sanitizeName
+  sanitizeName,
+  getName
 }
