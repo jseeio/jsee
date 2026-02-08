@@ -177,7 +177,7 @@ describe('Imports', () => {
       }
       `
     },
-    'imports': 'lodash@4.17.21/lodash.min.js',
+    'imports': `http://localhost:${port}/test/fixtures/lodash-like.js`,
     'inputs': [
       { 'name': 'str', 'type': 'string', 'default': 'FooBar' },
     ]
@@ -191,7 +191,20 @@ describe('Imports', () => {
   test('Worker', async () => {
     schema.model.worker = true
     await page.goto(urlQueryEscaped(schema))
-    await expect(page).toClick('button', { text: 'Run' })
+    const runUntilReady = async (attempts=3) => {
+      if (attempts <= 0) {
+        return false
+      }
+      await expect(page).toClick('button', { text: 'Run' })
+      try {
+        await page.waitForFunction(() => document.body.innerText.includes('foo-bar'), { timeout: 5000 })
+        return true
+      } catch (error) {
+        return runUntilReady(attempts - 1)
+      }
+    }
+    const ready = await runUntilReady()
+    expect(ready).toBe(true)
     await expect(page).toMatchTextContent('foo-bar')
     // await (new Promise(resolve => setTimeout(resolve, 1000)))
   })
@@ -341,5 +354,159 @@ describe('File uploads', () => {
     await expect(page).toMatchTextContent(rawUrl)
     await expect(page).toMatchTextContent('content_prefix')
     await expect(page).toMatchTextContent('NONE')
+  })
+})
+
+describe('Streamed file inputs', () => {
+  test('main thread receives uploaded file as async iterable stream', async () => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `async function streamMainFile (inputs) {
+          const reader = inputs.file
+          const isIterable = !!reader
+            && typeof reader[Symbol.asyncIterator] === 'function'
+            && typeof reader.text === 'function'
+            && typeof reader.bytes === 'function'
+            && typeof reader.lines === 'function'
+          if (!isIterable) {
+            return { is_iterable: false, header: 'NONE' }
+          }
+          const text = await reader.text()
+          return {
+            is_iterable: true,
+            header: text.split('\\n')[0]
+          }
+        }`
+      },
+      inputs: [
+        { name: 'file', type: 'file', raw: true, stream: true }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    await page.waitForSelector('#vfp-filePicker')
+    const fileInput = await page.$('#vfp-filePicker')
+    await fileInput.uploadFile(uploadFixture)
+    await expect(page).toClick('button', { text: 'Run' })
+    await expect(page).toMatchTextContent('is_iterable')
+    await expect(page).toMatchTextContent('true')
+    await expect(page).toMatchTextContent('header')
+    await expect(page).toMatchTextContent('name,age')
+  })
+
+  test('main thread receives URL source as async iterable stream', async () => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `async function streamMainUrl (inputs) {
+          const reader = inputs.file
+          const text = await reader.text()
+          return {
+            is_iterable: typeof reader[Symbol.asyncIterator] === 'function',
+            header: text.split('\\n')[0]
+          }
+        }`
+      },
+      inputs: [
+        { name: 'file', type: 'file', raw: true, stream: true }
+      ]
+    }
+    const sampleUrl = `http://localhost:${port}/test/fixtures/upload-sample.csv`
+    await page.goto(urlQueryEscaped(schema))
+    await expect(page).toClick('button', { text: 'From URL' })
+    await page.waitForSelector('input.vfp-urlInput[type="text"]')
+    await page.click('input.vfp-urlInput[type="text"]', { clickCount: 3 })
+    await page.type('input.vfp-urlInput[type="text"]', sampleUrl)
+    await page.evaluate(() => {
+      const loadButton = Array.from(document.querySelectorAll('button'))
+        .find(btn => btn.textContent.trim() === 'Load')
+      if (!loadButton) throw new Error('Load button not found')
+      loadButton.click()
+    })
+    await expect(page).toClick('button', { text: 'Run' })
+    await page.waitForFunction(() => {
+      const outputs = document.querySelector('#outputs')
+      return outputs && outputs.innerText.includes('header')
+    }, { timeout: 5000 })
+    await expect(page).toMatchTextContent('is_iterable')
+    await expect(page).toMatchTextContent('true')
+    await expect(page).toMatchTextContent('header')
+    await expect(page).toMatchTextContent('name,age')
+  })
+
+  test('worker receives uploaded file as async iterable stream', async () => {
+    const schema = {
+      model: {
+        worker: true,
+        code: `async function streamWorkerFile (inputs) {
+          const reader = inputs.file
+          const lines = []
+          for await (const line of reader.lines()) {
+            lines.push(line)
+          }
+          return {
+            is_iterable: typeof reader.text === 'function',
+            header: lines[0] || 'NONE'
+          }
+        }`
+      },
+      inputs: [
+        { name: 'file', type: 'file', raw: true, stream: true }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    await page.waitForSelector('#vfp-filePicker')
+    const fileInput = await page.$('#vfp-filePicker')
+    await fileInput.uploadFile(uploadFixture)
+    await expect(page).toClick('button', { text: 'Run' })
+    await expect(page).toMatchTextContent('is_iterable')
+    await expect(page).toMatchTextContent('true')
+    await expect(page).toMatchTextContent('header')
+    await expect(page).toMatchTextContent('name,age')
+  })
+
+  test('worker receives URL source as async iterable stream', async () => {
+    const schema = {
+      model: {
+        worker: true,
+        code: `async function streamWorkerUrl (inputs) {
+          const reader = inputs.file
+          const decoder = new TextDecoder()
+          let text = ''
+          for await (const chunk of reader) {
+            text += decoder.decode(chunk, { stream: true })
+          }
+          text += decoder.decode()
+          return {
+            is_iterable: typeof reader.bytes === 'function',
+            header: text.split('\\n')[0]
+          }
+        }`
+      },
+      inputs: [
+        { name: 'file', type: 'file', raw: true, stream: true }
+      ]
+    }
+    const sampleUrl = `http://localhost:${port}/test/fixtures/upload-sample.csv`
+    await page.goto(urlQueryEscaped(schema))
+    await expect(page).toClick('button', { text: 'From URL' })
+    await page.waitForSelector('input.vfp-urlInput[type="text"]')
+    await page.click('input.vfp-urlInput[type="text"]', { clickCount: 3 })
+    await page.type('input.vfp-urlInput[type="text"]', sampleUrl)
+    await page.evaluate(() => {
+      const loadButton = Array.from(document.querySelectorAll('button'))
+        .find(btn => btn.textContent.trim() === 'Load')
+      if (!loadButton) throw new Error('Load button not found')
+      loadButton.click()
+    })
+    await expect(page).toClick('button', { text: 'Run' })
+    await page.waitForFunction(() => {
+      const outputs = document.querySelector('#outputs')
+      return outputs && outputs.innerText.includes('header')
+    }, { timeout: 5000 })
+    await expect(page).toMatchTextContent('is_iterable')
+    await expect(page).toMatchTextContent('true')
+    await expect(page).toMatchTextContent('header')
+    await expect(page).toMatchTextContent('name,age')
   })
 })

@@ -1,20 +1,28 @@
 const utils = require('./utils')
 
 function log () {
-  const args = Array.prototype.slice.call(arguments);
+  const args = Array.prototype.slice.call(arguments)
   args.unshift('[Worker]')
-  postMessage({_status: 'log', _log: args})
+  postMessage({ _status: 'log', _log: args })
 }
 
 function progress (value) {
-  postMessage({_status: 'progress', _progress: value})
+  postMessage({ _status: 'progress', _progress: value })
 }
 
 let initialized = false
 let cancelled = false
+let streamInputConfig = {}
 
 function isCancelled () {
   return cancelled === true
+}
+
+function getStreamOptions () {
+  return {
+    isCancelled,
+    onProgress: progress
+  }
 }
 
 function initTF (model) {
@@ -22,7 +30,7 @@ function initTF (model) {
 }
 
 async function initPython (model) {
-  importScripts("https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js")
+  importScripts('https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js')
   const pyodide = await loadPyodide()
   if (model.imports && Array.isArray(model.imports) && model.imports.length) {
     await pyodide.loadPackage(model.imports.map(i => i.url))
@@ -33,7 +41,7 @@ async function initPython (model) {
     for (let key in data) {
       self[key] = data[key]
     }
-    return await pyodide.runPythonAsync(model.code);
+    return await pyodide.runPythonAsync(model.code)
   }
 }
 
@@ -41,11 +49,9 @@ async function initJS (model) {
   log('Init JS')
   this.container = model.container
 
-  // Load imports
   if (model.imports && model.imports.length) {
     log('Loading imports...')
     for (let imp of model.imports) {
-      // Try creating an url
       if (imp.code) {
         log('Importing from DOM:', imp.url)
         importScripts(URL.createObjectURL(new Blob([imp.code], { type: 'text/javascript' })))
@@ -58,7 +64,6 @@ async function initJS (model) {
 
   if (model.code) {
     log('Load code as a string', model)
-    // https://github.com/altbdoor/blob-worker/blob/master/blobWorker.js
     importScripts(URL.createObjectURL(new Blob([model.code], { type: 'text/javascript' })))
   } else if (model.url) {
     log('Load script from URL:', model.url)
@@ -67,14 +72,15 @@ async function initJS (model) {
     log('No script provided')
   }
 
-  // Related:
-  // https://stackoverflow.com/questions/37711603/javascript-es6-class-definition-not-accessible-in-window-global
   const target = model.type === 'class'
     ? eval(model.name)
     : this[model.name]
 
-  // Need promise here in case of async init
-  let modelFunc = await utils.getModelFuncJS(model, target, { log, progress, isCancelled })
+  let modelFunc = await utils.getModelFuncJS(model, target, {
+    log,
+    progress,
+    isCancelled
+  })
 
   return modelFunc
 }
@@ -95,9 +101,12 @@ onmessage = async function (e) {
   }
 
   if (utils.isWorkerInitMessage(data, initialized)) {
-    // Init message
     log('Init...')
     let m = data
+    streamInputConfig = (m && typeof m._streamInputConfig === 'object' && m._streamInputConfig)
+      ? m._streamInputConfig
+      : {}
+
     switch (m.type) {
       case 'tf':
         self.modelFunc = await initTF(m)
@@ -119,13 +128,13 @@ onmessage = async function (e) {
         throw new Error(`No type information: ${m.type}`)
     }
     initialized = true
-    postMessage({_status: 'loaded'})
+    postMessage({ _status: 'loaded' })
   } else {
-    // Execution
     try {
       cancelled = false
-      log('Run model with data:', data)
-      const results = await self.modelFunc(data)
+      const runData = utils.wrapStreamInputs(data, streamInputConfig, getStreamOptions())
+      log('Run model')
+      const results = await self.modelFunc(runData)
       log('Results:', results)
       postMessage(results)
     } catch (error) {

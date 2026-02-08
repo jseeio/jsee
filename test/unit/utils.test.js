@@ -10,7 +10,9 @@ const {
   shouldContinueInterval,
   getModelFuncJS,
   getModelFuncAPI,
-  validateSchema
+  validateSchema,
+  toWorkerSerializable,
+  wrapStreamInputs
 } = require('../../src/utils')
 
 describe('isObject', () => {
@@ -67,6 +69,152 @@ describe('delay', () => {
   })
   test('defaults to 1ms if no argument', async () => {
     await expect(delay()).resolves.toBeUndefined()
+  })
+})
+
+describe('toWorkerSerializable', () => {
+  test('clones plain objects and arrays recursively', () => {
+    const original = {
+      file: { kind: 'url', url: 'http://localhost:8080/test.csv' },
+      nested: [{ a: 1 }, { b: 2 }]
+    }
+    const result = toWorkerSerializable(original)
+    expect(result).toEqual(original)
+    expect(result).not.toBe(original)
+    expect(result.file).not.toBe(original.file)
+    expect(result.nested).not.toBe(original.nested)
+    expect(result.nested[0]).not.toBe(original.nested[0])
+  })
+
+  test('preserves native clone-safe objects by reference', () => {
+    const date = new Date('2024-01-01T00:00:00.000Z')
+    const original = { date }
+    const result = toWorkerSerializable(original)
+    expect(result.date).toBe(date)
+  })
+
+  test('de-proxies custom object-like values into plain data', () => {
+    class CustomType {
+      constructor (v) {
+        this.value = v
+      }
+    }
+    const custom = new CustomType(42)
+    const original = { custom }
+    const result = toWorkerSerializable(original)
+    expect(result.custom).toEqual({ value: 42 })
+    expect(result.custom).not.toBe(custom)
+  })
+})
+
+describe('wrapStreamInputs', () => {
+  test('wraps file-like source into async iterable chunked reader', async () => {
+    const content = new TextEncoder().encode('name,age\n1,2\n')
+    const fakeFile = {
+      size: content.byteLength,
+      slice (start, end) {
+        const chunk = content.slice(start, end)
+        return {
+          async arrayBuffer () {
+            return chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength)
+          }
+        }
+      }
+    }
+    const wrapped = wrapStreamInputs(
+      { file: fakeFile },
+      { file: { stream: true } }
+    )
+    expect(wrapped.file).not.toBe(fakeFile)
+    expect(typeof wrapped.file[Symbol.asyncIterator]).toBe('function')
+    expect(typeof wrapped.file.text).toBe('function')
+    expect(typeof wrapped.file.bytes).toBe('function')
+    expect(typeof wrapped.file.lines).toBe('function')
+
+    const text = await wrapped.file.text()
+    expect(text).toBe('name,age\n1,2\n')
+  })
+
+  test('wraps URL handle into async iterable chunked reader', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => null },
+      body: {
+        getReader () {
+          let readCount = 0
+          return {
+            async read () {
+              readCount += 1
+              if (readCount === 1) {
+                return { done: false, value: new TextEncoder().encode('name,age\n') }
+              }
+              return { done: true, value: undefined }
+            },
+            releaseLock () {}
+          }
+        }
+      }
+    })
+
+    const wrapped = wrapStreamInputs(
+      { file: { kind: 'url', url: 'http://localhost:8080/test.csv' } },
+      { file: { stream: true } },
+      { fetch: fetchMock }
+    )
+    expect(typeof wrapped.file[Symbol.asyncIterator]).toBe('function')
+
+    const text = await wrapped.file.text()
+    expect(text).toBe('name,age\n')
+    expect(fetchMock).toHaveBeenCalled()
+    expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:8080/test.csv')
+  })
+
+  test('lines() yields individual lines from chunked input', async () => {
+    const content = new TextEncoder().encode('line1\nline2\nline3')
+    const fakeFile = {
+      size: content.byteLength,
+      slice (start, end) {
+        const chunk = content.slice(start, end)
+        return {
+          async arrayBuffer () {
+            return chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength)
+          }
+        }
+      }
+    }
+    const wrapped = wrapStreamInputs(
+      { file: fakeFile },
+      { file: { stream: true } }
+    )
+
+    const lines = []
+    for await (const line of wrapped.file.lines()) {
+      lines.push(line)
+    }
+    expect(lines).toEqual(['line1', 'line2', 'line3'])
+  })
+
+  test('bytes() returns concatenated Uint8Array', async () => {
+    const content = new TextEncoder().encode('hello')
+    const fakeFile = {
+      size: content.byteLength,
+      slice (start, end) {
+        const chunk = content.slice(start, end)
+        return {
+          async arrayBuffer () {
+            return chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength)
+          }
+        }
+      }
+    }
+    const wrapped = wrapStreamInputs(
+      { file: fakeFile },
+      { file: { stream: true } }
+    )
+
+    const bytes = await wrapped.file.bytes()
+    expect(bytes).toBeInstanceOf(Uint8Array)
+    expect(new TextDecoder().decode(bytes)).toBe('hello')
   })
 })
 
@@ -340,5 +488,32 @@ describe('validateSchema', () => {
     })
     expect(report.errors).toEqual([])
     expect(report.warnings.join(' ')).toContain('raw should be a boolean')
+  })
+
+  test('accepts file input stream flag when it is boolean', () => {
+    const report = validateSchema({
+      model: { code: 'function run () {}' },
+      inputs: [{ name: 'file', type: 'file', stream: true }]
+    })
+    expect(report.errors).toEqual([])
+    expect(report.warnings).toEqual([])
+  })
+
+  test('warns when file input stream flag is not boolean', () => {
+    const report = validateSchema({
+      model: { code: 'function run () {}' },
+      inputs: [{ name: 'file', type: 'file', stream: 'yes' }]
+    })
+    expect(report.errors).toEqual([])
+    expect(report.warnings.join(' ')).toContain('stream should be a boolean')
+  })
+
+  test('warns when stream flag is used on non-file input', () => {
+    const report = validateSchema({
+      model: { code: 'function run () {}' },
+      inputs: [{ name: 'text', type: 'string', stream: true }]
+    })
+    expect(report.errors).toEqual([])
+    expect(report.warnings.join(' ')).toContain('stream is supported only for file inputs')
   })
 })

@@ -100,6 +100,25 @@ function getInputs (model) {
   return []
 }
 
+function collectStreamInputConfig (inputs, config={}) {
+  if (!Array.isArray(inputs)) {
+    return config
+  }
+  inputs.forEach(input => {
+    if (!isObject(input)) {
+      return
+    }
+    if (input.type === 'group') {
+      collectStreamInputConfig(input.elements, config)
+      return
+    }
+    if (input.type === 'file' && input.stream === true && input.name) {
+      config[input.name] = { stream: true }
+    }
+  })
+  return config
+}
+
 function getFunctionContainer (target) {
   // Check if the number of parameters is > 1, then 'args'
 }
@@ -217,6 +236,7 @@ export default class JSEE {
     await this.initSchema() // Inits: this.schema (object)
     await this.initModel() // Inits: this.model (array of objects)
     await this.initInputs() // Inits: schema inputs based on url
+    this.streamInputConfig = collectStreamInputConfig(this.schema.inputs)
     await this.initVue() // Inits: this.app, this.data
     await this.initPipeline() // Inits: this.pipeline (function)
     if (this.schema.autorun || this.schema.inputs.some(input => input.disabled && input.reactive)) {
@@ -533,6 +553,19 @@ export default class JSEE {
             notyf.error('No type information')
             throw new Error(`No type information: ${m.type}`)
         }
+
+        const streamInputConfig = this.streamInputConfig || {}
+        const hasStreamInputs = Object.keys(streamInputConfig).length > 0
+        if (hasStreamInputs) {
+          const originalModelFunc = modelFunc
+          modelFunc = (inputs) => {
+            const wrappedInputs = utils.wrapStreamInputs(inputs, streamInputConfig, {
+              isCancelled: () => this.isCancelled(),
+              onProgress: (value) => this.progress(value)
+            })
+            return originalModelFunc(wrappedInputs)
+          }
+        }
       }
 
       this.pipeline = (p => {
@@ -585,6 +618,11 @@ export default class JSEE {
     this._cancelWorkerRun = () => worker.postMessage({ _cmd: 'cancel' })
 
     const modelFunc = (inputs) => {
+      const isInitCall = inputs && inputs.code !== undefined
+      const payload = isInitCall
+        ? inputs
+        : utils.toWorkerSerializable(inputs)
+
       const workerPromise = new Promise((resolve, reject) => {
         worker.onmessage = (e) => {
           const res = e.data
@@ -621,11 +659,19 @@ export default class JSEE {
           this.progress(0)
           reject(e)
         }
-        worker.postMessage(inputs)
+        try {
+          worker.postMessage(payload)
+        } catch (error) {
+          try {
+            const fallbackPayload = JSON.parse(JSON.stringify(payload))
+            worker.postMessage(fallbackPayload)
+          } catch (fallbackError) {
+            reject(fallbackError)
+          }
+        }
       })
 
       // Skip timeout for init call (loading model can be slow); apply to execution calls
-      const isInitCall = inputs && inputs.code !== undefined
       if (isInitCall) return workerPromise
 
       const timeoutPromise = new Promise((_, reject) => {
@@ -637,8 +683,11 @@ export default class JSEE {
       return Promise.race([workerPromise, timeoutPromise])
     }
 
-    // Initial worker call with model definition
-    await modelFunc(model)
+    // Initial worker call with model definition and stream input config
+    const modelInitPayload = Object.assign({}, model, {
+      _streamInputConfig: this.streamInputConfig || {}
+    })
+    await modelFunc(modelInitPayload)
 
     // Worker will be in the context of each modelFunc
     return modelFunc
