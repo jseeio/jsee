@@ -132,6 +132,24 @@ JSEE is a reactive branch of [StatSim](https://statsim.com)'s [Port](https://git
 
 # Changelog
 
+## 0.3.8
+### Bug fixes:
+- Fix `run()` error handling: wrap in try/catch/finally so overlay and running state always reset on failure
+- Add `.catch()` to fire-and-forget `run()` callers to prevent unhandled rejections
+- Add worker execution timeout (default 30s, configurable via `model.timeout`) to prevent permanently frozen UI
+- Fix `indexOf('json')` bug in `initSchema` — condition was inverted, `.json` was never appended
+- Fix array type detection in auto-created outputs (`typeof` returns `'object'` for arrays)
+- Fix `getName` for `async function` strings and guard against arrow functions crashing
+- Fix broken string interpolation and remove leftover `console.log('1')` in utils.js
+### Features:
+- Add `schema.reactive` option: re-run model on any input change (debounced 300ms). Distinct from `autorun` (first load only) and per-input `reactive` (individual input change)
+- Add run-concurrency guard: overlapping reactive/autorun calls are dropped, manual clicks are queued
+- Move `getName` to utils.js for testability and reuse
+### Testing:
+- Add separate Jest config for unit tests (`jest.unit.config.js`, no browser needed)
+- Add unit tests for utils.js: `isObject`, `sanitizeName`, `getUrl`, `delay`, `debounce`, `getName`, `getModelFuncJS`, `getModelFuncAPI`
+- Add `npm run test:unit` script
+
 ## 0.3.4
 ### JSEE:
 - [x] Add `columns` parameter to the `inputs`, `outputs` blocks (making it possible to create multi-column layouts, like simple dashboards)
