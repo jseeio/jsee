@@ -9,6 +9,7 @@
   "scripts": {
     "build-dev": "webpack --mode=development --progress --stats-children --env DEVELOPMENT",
     "build": "webpack --mode=production --progress && webpack --mode=production --progress --env RUNTIME && npm test",
+    "watch-dev": "nodemon --watch . --ignore dist,.git --ext vue,js,css,html --exec 'npm run build-dev'",
     "watch": "nodemon --watch . --ignore dist,.git --ext vue,js,css,html --exec 'npm run build-dev && npm run test:basic'",
     "prepublishOnly": "npm run build",
     "test": "npm run test:basic && npm run test:python",
@@ -43,6 +44,7 @@
     "notyf": "^3.10.0",
     "showdown": "^1.9.1",
     "vue": "^3.2.47",
+    "vue-file-picker": "^0.0.2",
     "vue-style-loader": "^4.1.3",
     "vue3-json-viewer": "^2.2.2",
     "vuex": "^4.0.2"

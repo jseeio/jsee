@@ -202,8 +202,9 @@
               <button
                 v-on:click="$parent.reset(example)"
                 class="button is-small example-button"
+                style="white-space: normal; width: 100%; text-align: left; font-family: monospace; font-size: 10px;"
               >
-                {{ example }}
+                {{ JSON.stringify(example, null, 2) }}
               </button>
             </div>
           </div>

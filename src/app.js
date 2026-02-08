@@ -19,17 +19,34 @@ const components = {
 
 const filtrex = require('filtrex')
 const JsonViewer = require('vue3-json-viewer').default
+const { sanitizeName } = require('./utils.js')
+
+function setInputValue (input, value) {
+  if (input.type === 'file') {
+    // For file inputs, we need to set the url
+    input.url = value
+    input.file = null // Reset file object
+  } else {
+    // For other inputs, we can set the value directly
+    input.value = value
+  }
+}
 
 function resetInputs (inputs, example) {
   inputs.forEach((input, index) => {
+    const inputName = input.name ? sanitizeName(input.name) : `input_${index}`
     if (example && input.name && example[input.name]) {
-      // Object
-      input.value = example[input.name]
-    } else if (example && example[index]) {
+      // Object (unsanitized)
+      setInputValue(input, example[input.name])
+    } else if (example && inputName && example[inputName]) {
+      // Object (sanitized)
+      setInputValue(input, example[inputName])
+    } else if (example && Array.isArray(example) && typeof example[index] !== 'undefined') {
       // Array
-      input.value = example[index]
+      setInputValue(input, example[index])
     } else if (input.default) {
-      input.value = input.default
+      // Default value
+      setInputValue(input, input.default)
     } else {
       switch (input.type) {
         case 'int':
@@ -101,7 +118,11 @@ function createVueApp (env, mountedCallback, logMain) {
       return function DisplayConditionally (data) {
         const inputObj = {}
         data.inputs.filter(input => input.name).forEach(input => {
+          // Sanitize input name. This will allow to operate with human-readable names
+          // and use them as object keys. For example, 'Input 1' will be converted to 'input_1'
+          const inputNameSanitized = sanitizeName(input.name) 
           inputObj[input.name] = input.value
+          inputObj[inputNameSanitized] = input.value
         })
         return f(inputObj)
       }
