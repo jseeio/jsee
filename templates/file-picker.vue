@@ -104,8 +104,9 @@ export default {
     id:            { type: String,  default: 'filePicker' },
     accept:        { type: String,  default: '*/*' },
     allowMultiple: { type: Boolean, default: false },
-    modelValue:    { type: String,  default: '' },
+    modelValue:    { type: [String, Object],  default: '' },
     url:           { type: String,  default: '' },
+    raw:           { type: Boolean, default: false },
     labelValue:    { type: String,  default: 'Choose File' }
   },
   emits : ['update:modelValue', 'update:url', 'change'],
@@ -164,6 +165,12 @@ export default {
 
     loadFile (e) {
       const files = e.target ? e.target.files : e
+      if (this.raw) {
+        const fileValue = this.allowMultiple ? Array.from(files) : files[0]
+        this.$emit('update:modelValue', fileValue)
+        this.$emit('change')
+        return
+      }
       const reader = new FileReader()
       reader.readAsText(files[0])
       reader.onload = () => {
@@ -176,6 +183,18 @@ export default {
 
     loadUrl () {
       if (this.urlModel && this.urlModel.length > 0) {
+        if (this.raw) {
+          this.urlSuccess = true
+          this.urlError = false
+          this.label = this.urlModel.split('/').pop().split('?')[0] || 'File from URL'
+          this.rawUrl = this.urlModel.split('/').slice(0, -1).join('/') // Extract URL path
+          this.showUrlInput = false // Hide URL input after successful load
+          this.info = `Loaded URL handle: ${this.rawUrl || this.urlModel}`
+          this.$emit('update:modelValue', { kind: 'url', url: this.urlModel })
+          this.$emit('change')
+          return
+        }
+
         fetch(this.urlModel)
           .then(response => response.text())
           .then(text => {

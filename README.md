@@ -112,6 +112,7 @@ Extra blocks can be provided for further customization
     - `file` - File Input
     - `action` or `button` - Button (its `name` will be passed as a `caller` to the model)
   - `default` - Default value
+  - `raw` (boolean, file input only) - If `true`, pass the raw source to the model instead of reading text in the UI (`File` object for disk files or `{ kind: 'url', url: '...' }` for URL input)
 - `outputs` - Outputs definition
   - `name`* - Name of the output
   - `type`* - Type. Possible types:

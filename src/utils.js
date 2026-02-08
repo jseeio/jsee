@@ -249,6 +249,10 @@ function validateInputSchema (input, path, report) {
     report.warnings.push(`${path}.type '${input.type}' is not recognized`)
   }
 
+  if ((typeof input.raw !== 'undefined') && (typeof input.raw !== 'boolean')) {
+    report.warnings.push(`${path}.raw should be a boolean`)
+  }
+
   if (input.type === 'group') {
     if (!Array.isArray(input.elements)) {
       report.warnings.push(`${path}.elements should be an array for group inputs`)

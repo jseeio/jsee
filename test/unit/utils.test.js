@@ -323,4 +323,22 @@ describe('validateSchema', () => {
     expect(report.warnings.length).toBeGreaterThan(0)
     expect(report.warnings.join(' ')).toContain('not recognized')
   })
+
+  test('accepts file input raw flag when it is boolean', () => {
+    const report = validateSchema({
+      model: { code: 'function run () {}' },
+      inputs: [{ name: 'file', type: 'file', raw: true }]
+    })
+    expect(report.errors).toEqual([])
+    expect(report.warnings).toEqual([])
+  })
+
+  test('warns when file input raw flag is not boolean', () => {
+    const report = validateSchema({
+      model: { code: 'function run () {}' },
+      inputs: [{ name: 'file', type: 'file', raw: 'yes' }]
+    })
+    expect(report.errors).toEqual([])
+    expect(report.warnings.join(' ')).toContain('raw should be a boolean')
+  })
 })
