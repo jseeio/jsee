@@ -12,7 +12,8 @@
     "watch-dev": "nodemon --watch . --ignore dist,.git --ext vue,js,css,html --exec 'npm run build-dev'",
     "watch": "nodemon --watch . --ignore dist,.git --ext vue,js,css,html --exec 'npm run build-dev && npm run test:basic'",
     "prepublishOnly": "npm run build",
-    "test": "npm run test:basic && npm run test:python",
+    "test": "npm run test:unit && npm run test:basic && npm run test:python",
+    "test:unit": "jest --config jest.unit.config.js",
     "test:basic": "jest test/test-basic.test.js --detectOpenHandles",
     "test:python": "jest test/test-python.test.js --detectOpenHandles",
     "test-head": "HEADLESS=false npm test"
