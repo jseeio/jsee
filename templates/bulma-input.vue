@@ -1,3 +1,9 @@
+<style lang="scss" scoped>
+  .control {
+    margin-top: -1px;
+  }
+</style>
+
 <template>
   <div class="field" v-if="input.type == 'int' || input.type == 'float' || input.type == 'number'">
     <label v-bind:for="input.name" class="is-size-7">{{ input.name }}</label>
@@ -78,24 +84,11 @@
     <label v-bind:for="input.name" class="is-size-7">{{ input.name }}</label>
     <div class="control">
       <div class="file has-name is-fullwidth" v-bind:class="{ 'is-primary': !input.file }" v-if="!input.disabled">
-        <label class="file-label">
-          <input
-            v-bind:id="input.name"
-            v-on:change="loadFile"
-  	  			class="file-input"
-  	  			type="file"
-            v-bind:disabled="input.disabled"
-  	  		>
-          <span class="file-cta">
-            <span class="file-label">
-              Open
-            </span>
-          </span>
-          <span class="file-name">
-            <span v-if="input.file && input.file.name">{{ input.file.name }}</span>
-            <span v-else>No file selected</span>
-          </span>
-        </label>
+        <file-picker
+          v-model="input.value"
+          v-model:url="input.url"
+          v-on:change="changeHandler"
+        ></file-picker>
       </div>
       <div class="file has-name is-fullwidth" v-bind:class="{ 'is-primary': !input.file }" v-else>
         <input 

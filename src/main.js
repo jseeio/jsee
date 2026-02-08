@@ -182,13 +182,16 @@ export default class JSEE {
 
   async init () {
     // At this point this.schema is defined but can be in different forms (e.g. string, object, function)
-    await this.initSchema()                   // -> this.schema (object)
-    await this.initModel()
-    await this.initInputs()
-    await this.initVue()                            // -> this.app, this.data
-    await this.initPipeline()
-    if (this.schema.autorun) {
-      log('Autorun is enabled. Running the model')
+    await this.initSchema() // Inits: this.schema (object)
+    await this.initModel() // Inits: this.model (array of objects)
+    await this.initInputs() // Inits: schema inputs based on url
+    await this.initVue() // Inits: this.app, this.data
+    await this.initPipeline() // Inits: this.pipeline (function)
+    if (this.schema.autorun || this.schema.inputs.some(input => input.disabled && input.reactive)) {
+      // 1. If autorun is enabled in the schema, run the model immediately
+      // 2. Server-side inputs: If there are inputs with disabled and reactive flags
+      // (we assume that they are set by the server and trigger the model run)
+      log('[Init] First run of the model due to autorun or reactive inputs')
       this.run('init')
     }
   }
@@ -234,8 +237,21 @@ export default class JSEE {
     // At the end it should be an array of objects that define a sequence of tasks
     this.model = []
 
+    // Check if there's a render or view defined in the schema
+    let view = this.schema.render || this.schema.view
+    if (isObject(view)) {
+      // If view is an object, convert it to an array
+      view = [view] // Convert to array if it's an object
+    }
+    if (Array.isArray(view)) {
+      view.forEach(v => {
+        v.worker = false // Render should not be in a worker
+      })
+      log('View is defined in the schema')
+    }
+
     // Check if model is a function (model)
-    ;[this.schema.model, this.schema.render].forEach(m => {
+    ;[this.schema.model, view].forEach(m => {
       // Function -> {code: Function}
       if (typeof m === 'function') {
         this.model.push({
@@ -362,6 +378,8 @@ export default class JSEE {
       let paramValue = null
       if (urlParams.has(input.name)) {
         paramValue = urlParams.get(input.name);
+      } else if (urlParams.has(utils.sanitizeName(input.name))) {
+        paramValue = urlParams.get(utils.sanitizeName(input.name));
       } else if (input.alias) {
         // Handle alias as either a string or an array of strings
         if (Array.isArray(input.alias)) {
@@ -379,24 +397,28 @@ export default class JSEE {
 
       // Set input value from URL param with type conversion
       if (paramValue !== null) {
-        switch (input.type) {
-          case 'number':
-            paramValue = Number(paramValue);
-            break;
-          case 'boolean':
-            paramValue = paramValue === 'true';
-            break;
-          case 'json':
-            try {
-              paramValue = JSON.parse(paramValue);
-            } catch (e) {
-              console.error(`Failed to parse JSON for input ${input.name}:`, e);
-            }
-            break;
-          default:
-            break;
+        if (input.type === 'file') {
+          input.url = paramValue;
+        } else {
+          switch (input.type) {
+            case 'number':
+              paramValue = Number(paramValue);
+              break;
+            case 'boolean':
+              paramValue = paramValue === 'true';
+              break;
+            case 'json':
+              try {
+                paramValue = JSON.parse(paramValue);
+              } catch (e) {
+                console.error(`Failed to parse JSON for input ${input.name}:`, e);
+              }
+              break;
+            default:
+              break;
+          }
+          input.default = paramValue
         }
-        input.default = paramValue
       }
     })
     log('Inputs are:', this.schema.inputs)
@@ -440,15 +462,14 @@ export default class JSEE {
     this.pipeline = (inputs) => inputs
     // Async for-loop over this.model (again)
     for (const [i, m] of this.model.entries()) {
-      log('Initilizing the pipeline with model:', i, m.type)
       let modelFunc
       if (m.worker) {
         // Init worker model
-        log('Initializing model in a worker:', m.name || m.url)
+        log(`[Init pipeline] Initializing model ${i} in a worker: ${m.name || m.url}`)
         modelFunc = await this.initWorker(m)
       } else {
         // Init specific model types
-        log('Initializing model in the main thread:', m.name || m.url)
+        log(`[Init pipeline] Initializing model ${i} in the main thread: ${m.name || m.url}`)
         switch (m.type) {
           case 'py':
             modelFunc = await this.initPython(m)
@@ -476,15 +497,22 @@ export default class JSEE {
       this.pipeline = (p => {
         return async (inputs) => {
           const resPrev = await p(inputs)
+          // Early stop if resPrev is object and has stop flag
+          if (isObject(resPrev) && resPrev.stop) {
+            log('[Pipeline] Stopping the pipeline due to stop flag in the result')
+            return resPrev
+          }
           const resNext = await modelFunc(resPrev)
           if (isObject(resNext) && isObject(resPrev)) {
             // If both results are objects, merge them
+            log(`[Pipeline] Merging results: ${Object.keys(resPrev).join(', ')} + ${Object.keys(resNext).join(', ')}`)
             return Object.assign({}, resPrev, resNext)
           } else if (typeof resNext !== 'undefined') {
             // If next result is defined, return it
             return resNext
           } else {
             // Otherwise return previous result (pass through)
+            log('[Pipeline] Passing through the previous result')
             return resPrev
           }
         }
@@ -696,24 +724,64 @@ export default class JSEE {
 
     log('[Output] Got output results of type:', typeof res)
 
-    // Process results (res)
-    const inputNames = this.schema.inputs.map(i => i.name)
-    if (isObject(res) && Object.keys(res).every(key => inputNames.includes(key))) {
-      // Update inputs from results
-      log('Updating inputs:', Object.keys(res))
-      this.data.inputs.forEach((input, i) => {
-        if (input.name && (typeof res[input.name] !== 'undefined')) {
-          log('Updating input: ', input.name, 'with data:', res[input.name])
-          const r = res[input.name]
-          if (typeof r === 'object') {
-            Object.keys(r).forEach(k => {
-              input[k] = r[k]
-            })
-          } else {
-            input.value = r
+    const inputNames = this.schema.inputs ? this.schema.inputs.map(i => i.name) : []
+    log('Input names:', inputNames)
+
+    if (isObject(res)) {
+      // Drop system fields
+      delete res.caller
+      delete res.stop
+      delete res._status
+      delete res._log
+      delete res._progress
+      log('Processing results as an object:', res)
+
+      if (Object.keys(res).every(key => inputNames.includes(key))) {
+        // Update input fields from results
+        // e.g. loading a csv file and updating list of target variables
+        // This will be dynamically updated in the UI
+        log('Updating inputs from results with keys:', Object.keys(res))
+        this.data.inputs.forEach((input, i) => {
+          if (input.name && (typeof res[input.name] !== 'undefined')) {
+            log(`Updating input: ${input.name} with data: ${res[input.name]}`)
+            const r = res[input.name]
+            if (typeof r === 'object') {
+              Object.keys(r).forEach(k => {
+                input[k] = r[k]
+              })
+            } else {
+              input.value = r
+            }
           }
-        }
-      })
+        })
+      } else if (this.data.outputs && this.data.outputs.length) {
+        // Update outputs from results
+        log('Updating outputs from results with keys:', Object.keys(res))
+        this.data.outputs.forEach((output, i) => {
+          // try output.name, sanitized output.name, output.alias
+          const r = res[output.name] 
+            || res[utils.sanitizeName(output.name)] 
+            || (output.alias && res[output.alias])
+          if (typeof r !== 'undefined') {
+            log(`Updating output: ${output.name} with data: ${typeof r}`)
+            output.value = r
+          }
+        })
+      } else if (!this.schema.render && !this.schema.view) {
+        // There's no render or view defined in the schema, also:
+        // No outputs defined, create outputs from results
+        log('Creating outputs from results with keys:', Object.keys(res))
+        this.data.outputs = Object.keys(res)
+          .filter(key => !inputNames.includes(key))
+          .filter(key => key !== 'caller') // Filter out caller
+          .map(key => {
+            return {
+              'name': key,
+              'type': typeof res[key],
+              'value': res[key]
+            }
+          })
+      }
     } else if (Array.isArray(res) && res.length) {
       // Result is array
       if (this.data.outputs && this.data.outputs.length) {
@@ -733,27 +801,6 @@ export default class JSEE {
           'type': 'array',
           'value': res
         }]
-      }
-    } else if (isObject(res)) {
-      if (this.data.outputs && this.data.outputs.length) {
-        this.data.outputs.forEach((output, i) => {
-          if (output.name && (typeof res[output.name] !== 'undefined')) {
-            log('Updating output: ', output.name)
-            output.value = res[output.name]
-          }
-        })
-      } else {
-        const inputNames = this.schema.inputs ? this.schema.inputs.map(i => i.name) : []
-        this.data.outputs = Object.keys(res)
-          .filter(key => !inputNames.includes(key))
-          .filter(key => key !== 'caller') // Filter out caller
-          .map(key => {
-            return {
-              'name': key,
-              'type': typeof res[key],
-              'value': res[key]
-            }
-          })
       }
     } else if (this.schema.outputs && this.schema.outputs.length === 1) {
       // One output value passed as raw js object

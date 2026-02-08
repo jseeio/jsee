@@ -3,6 +3,10 @@ function isObject (item) {
   return (typeof item === 'object' && !Array.isArray(item) && item !== null)
 }
 
+function sanitizeName (inputName) {
+  return inputName.toLowerCase().replace(/[^a-z0-9_]/g, '_')
+}
+
 async function getModelFuncJS (model, target, app) {
   let modelFunc
   switch (model.type) {
@@ -153,5 +157,6 @@ module.exports = {
   getModelFuncAPI,
   importScripts,
   getUrl,
-  delay
+  delay,
+  sanitizeName
 }

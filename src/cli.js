@@ -20,6 +20,8 @@ const converter = new showdown.Converter({
 })
 showdown.setFlavor('github')
 
+const { getModelFuncJS, sanitizeName } = require('./utils.js')
+
 // left padding of multiple lines
 function pad (str, len, start=0) {
   return str.split('\n').map((s, i) => i >= start ? ' '.repeat(len) + s : s).join('\n')
@@ -33,29 +35,31 @@ function getDataFromArgv (schema, argv, loadFiles=true) {
   let data = {}
   if (schema.inputs) {
     schema.inputs.forEach(inp => {
-      if (inp.name in argv) {
+      const inputName = sanitizeName(inp.name)
+      console.log('Processing input:', inp.name, 'as', inputName)
+      if (inputName in argv) {
         switch (inp.type) {
           case 'file':
             if (!loadFiles) {
               // If we don't want to load files, just set the value to the file path
-              data[inp.name] = argv[inp.name]
+              data[inp.name] = argv[inputName]
               break
-            } else if (fs.existsSync(argv[inp.name])) {
-              data[inp.name] = fs.readFileSync(argv[inp.name], 'utf8')
+            } else if (fs.existsSync(argv[inputName])) {
+              data[inp.name] = fs.readFileSync(argv[inputName], 'utf8')
             } else {
-              console.error(`File not found: ${argv[inp.name]}`)
+              console.error(`File not found: ${argv[inputName]}`)
               process.exit(1)
             }
             break
           case 'int':
-            data[inp.name] = parseInt(argv[inp.name], 10)
+            data[inp.name] = parseInt(argv[inputName], 10)
             break
           case 'float':
-            data[inp.name] = parseFloat(argv[inp.name])
+            data[inp.name] = parseFloat(argv[inputName])
             break
           case 'string':
           default:
-            data[inp.name] = argv[inp.name]
+            data[inp.name] = argv[inputName]
         }
       }
     })
@@ -314,7 +318,7 @@ function template(schema, blocks) {
     pre { padding: 8px 12px; overflow-x: auto; }
     pre > code { border: 0; padding-right: 0; padding-left: 0; }
     .wrapper { max-width: calc(800px - (30px)); margin-right: auto; margin-left: auto; padding-right: 15px; padding-left: 15px; }
-    @media screen and (min-width: 800px) { .wrapper { max-width: calc(800px - (30px * 2)); padding-right: 30px; padding-left: 30px; } }
+    @media screen and (min-width: 800px) { .wrapper { max-width: calc(1024px - (30px * 2)); padding-right: 30px; padding-left: 30px; } }
     .wrapper:after { content: ""; display: table; clear: both; }
     .orange { color: #f66a0a; }
     .grey { color: #828282; }
@@ -471,7 +475,8 @@ async function gen (pargv, returnHtml=false) {
     port: 'p',
     version: 'v',
     fetch: 'f',
-    execute: 'e'
+    execute: 'e',
+    cdn: 'c',
   }
   const argvDefault = {
     execute: false, // execute the model code on the server
@@ -480,6 +485,7 @@ async function gen (pargv, returnHtml=false) {
     port: 3000, // default port for the server
     version: 'latest', // default version of JSEE runtime to use
     verbose: false, // verbose mode
+    cdn: false,
   }
   let argv = minimist(pargv, {
     alias: argvAlias,
@@ -554,15 +560,18 @@ async function gen (pargv, returnHtml=false) {
   if (schema.inputs) {
     schema.inputs.forEach((inp, inp_index) => {
       if (inp.name) {
+        const inputName = sanitizeName(inp.name)
         if (inp.alias) {
-          argvAlias[inp.name] = inp.alias
+          argvAlias[inputName] = inp.alias
         }
-        if (argv._.length > inp_index) {
-          argvDefault[inp.name] = argv._[inp_index]
+        // Use positional arguments as schema inputs defaults if JSEE CLI is imported
+        if (imported && argv._.length > inp_index) {
+          log('Using positional argument for input:', inputName, argv._[inp_index])
+          argvDefault[inputName] = argv._[inp_index]
         }
         // We don't need to duplicate defaults here, as we handle them on the frontend
         // else if (inp.default) {
-        //   argvDefault[inp.name] = inp.default
+        //   argvDefault[inputName] = inp.default
         // }
       }
     })
@@ -577,8 +586,10 @@ async function gen (pargv, returnHtml=false) {
   // If you set parameter on the command line, it should not be editable in the GUI
   // E.g. file selected
   const dataFromArgvWithoutFileLoading = getDataFromArgv(schema, argv, false)
+  log('Data from argv without file loading:', dataFromArgvWithoutFileLoading)
   if (schema.inputs) {
     schema.inputs.forEach(inp => {
+      // Here data contains unsanitized input names
       if (inp.name in dataFromArgvWithoutFileLoading) {
         inp.default = dataFromArgvWithoutFileLoading[inp.name]
         inp.disabled = true // Deactivate the input if it's present in argv
@@ -603,16 +614,50 @@ async function gen (pargv, returnHtml=false) {
   // If execute is true, we will prepare the model functions to run on the server side
   // Schema model will be updated with the server url and POST method
   if (argv.execute) {
-    schema.model.forEach(m => {
+    await Promise.all(schema.model.map(async m => {
       log('Preparing a model to run on the server side:', m.name, m.url)
-      modelFuncs[m.name] = require(path.join(schemaPath ? path.dirname(schemaPath) : cwd, m.url))
+      const target = require(path.join(schemaPath ? path.dirname(schemaPath) : cwd, m.url))
+      modelFuncs[m.name] = await getModelFuncJS(m, target, {log})
       m.type = 'post'
       m.url = `/${m.name}`
       m.worker = false
+    }))
+  } 
+  
+  // Switch to CDN for model files
+  if (argv.cdn) {
+    let cdn = ''
+    console.log(argv)
+    if (typeof argv.cdn === 'string') {
+      cdn = argv.cdn
+    } else if (typeof argv.cdn === 'boolean') {
+      // Check package.json in cwd
+      const packageJsonPath = path.join(cwd, 'package.json')
+      if (fs.existsSync(packageJsonPath)) {
+        const target = require(packageJsonPath)
+        const packageName = target.name
+        cdn = `https://cdn.jsdelivr.net/npm/${packageName}@${target.version}/`
+      } else {
+        console.error(`No package.json found: ${packageJsonPath}`)
+        process.exit(1)
+      }
+    } else {
+      console.error('Invalid CDN argument. Use --cdn <url> or --cdn true to use package.json version.')
+      process.exit(1)
+    }
+    log('Using CDN for model files:', cdn)
+    schema.model.forEach(m => {
+      if (m.url) {
+        // If url is relative, make it absolute
+        if (!m.url.startsWith('http')) {
+          m.url = path.join(cdn, m.url)
+          log(`Updated ${m.name} model URL to: ${m.url}`)
+        }
+      }
     })
   }
-  log('Schema:', schema)
 
+  log('Schema:', schema)
 
   // Generate description block
   if (description) {
@@ -655,6 +700,8 @@ async function gen (pargv, returnHtml=false) {
         continue
       }
       if (m.url) {
+        // Fetch model from the local file system (url)
+        // TODO: Can be a remote URL (e.g. CDN)
         const modelCode = fs.readFileSync(path.join(cwd, m.url), 'utf8')
         hiddenElementHtml += `<script type="text/plain" style="display: none;" data-src="${m.url}">${modelCode}</script>`
       }
@@ -681,7 +728,7 @@ async function gen (pargv, returnHtml=false) {
             const ageInDays = (now - mtime) / (1000 * 60 * 60 * 24)
 
             if (ageInDays < 1) {
-              console.log('Using cached import:', importUrl)
+              log('Using cached import:', importUrl)
               importCode = fs.readFileSync(cacheFilePath, 'utf8');
               useCache = true;
             }
@@ -695,7 +742,7 @@ async function gen (pargv, returnHtml=false) {
             }
             importCode = await response.text()
             fs.writeFileSync(cacheFilePath, importCode, 'utf8')
-            console.log('Fetched and stored to cache:', importUrl)
+            log('Fetched and stored to cache:', importUrl)
           }
           hiddenElementHtml += `<script type="text/plain" style="display: none;" data-src="${importUrl}">${importCode}</script>`
         }
@@ -705,7 +752,9 @@ async function gen (pargv, returnHtml=false) {
   } else {
     jseeHtml = outputs
       ? `<script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@${argv.version}/dist/jsee.runtime.js"></script>`
-      : `<script src="http://localhost:${argv.port}/dist/jsee.runtime.js"></script>` 
+      : argv.version === 'dev' 
+        ? `<script src="http://localhost:${argv.port}/dist/jsee.js"></script>` 
+        : `<script src="http://localhost:${argv.port}/dist/jsee.runtime.js"></script>` 
   }
 
   let socialHtml = ''
@@ -785,7 +834,7 @@ async function gen (pargv, returnHtml=false) {
     // Store the html in the output file
     for (let o of outputs) {
       if (o === 'stdout') {
-        console.log(html)
+        log(html)
       } else if (o.includes('.html')) {
         fs.writeFileSync(path.join(cwd, o), html)
       } else if (o.includes('.json')) {
@@ -806,37 +855,38 @@ async function gen (pargv, returnHtml=false) {
       // Create post endpoint for executing the model
       schema.model.forEach(m => {
         app.post(m.url, (req, res) => {
-          console.log(`Executing model: ${m.name}`)
+          log(`Executing model: ${m.name}`)
           if (m.name in modelFuncs) {
             const modelFunc = modelFuncs[m.name]
             try {
               const dataFromArgv = getDataFromArgv(schema, argv)
               const dataFromGUI = req.body
               const data = { ...dataFromGUI, ...dataFromArgv }
-              console.log('Data for model execution:', data)
+              log('Data for model execution:', data)
               const result = modelFunc(data)
               res.json(result)
-              console.log(`Model ${m.name} executed successfully: `, result)
+              log(`Model ${m.name} executed successfully: `, result)
             } catch (error) {
               console.error('Error executing model:', error)
               res.status(500).json({ error: error.message })
             }
           }
         })
-        console.log('Model execution endpoints created:', m.url)
+        log('Model execution endpoints created:', m.url)
       })
     }
     app.get('/', async (req, res) => {
-      console.log('Serving index.html')
+      log('Serving index.html')
       res.send(await gen(pargv, true))
     })
-    app.get('/dist/jsee.runtime.js', (req, res) => {
-      // __dirname points to this file location (it's jsee/src/cli.js, likely in node_modules)
-      // so we need to go up one level to get to the dist folder with jsee.runtime.js
-      const pathToJSEE = path.join(__dirname, '..', 'dist', 'jsee.runtime.js')
-      console.log(`Serving jsee.runtime.js from: ${pathToJSEE}`)
-      res.sendFile(pathToJSEE)
-    })
+    // app.get('/dist/jsee.runtime.js', (req, res) => {
+    //   // __dirname points to this file location (it's jsee/src/cli.js, likely in node_modules)
+    //   // so we need to go up one level to get to the dist folder with jsee.runtime.js
+    //   const pathToJSEE = path.join(__dirname, '..', 'dist', 'jsee.runtime.js')
+    //   log(`Serving jsee.runtime.js from: ${pathToJSEE}`)
+    //   res.sendFile(pathToJSEE)
+    // })
+    app.use('/dist', express.static(path.join(__dirname, '..', 'dist'))) // Serve static files from the dist folder
     // app.use(express.static(cwd))
     // app.use(express.static(require.main.path)) // Serve static files from the main module path
     // app.use(express.static(path.join(require.main.path, '..'))) // Serve static files from the parent directory of the main module path

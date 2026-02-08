@@ -1,6 +1,8 @@
 import { saveAs } from 'file-saver'
 import domtoimage from 'dom-to-image'
 
+const { sanitizeName } = require('../src/utils.js')
+
 const Blob = window['Blob']
 
 function stringify (v) {
@@ -12,11 +14,35 @@ function stringify (v) {
 const component = {
   props: ['output'],
   emits: ['notification'],
-  mounted() {
-    this.executeRenderFunction()
+  data () {
+    return {
+      outputName: 'output',
+      isFullScreen: false,
+    }
   },
-  updated() {
+  mounted() {
+    this.outputName = this.output.alias 
+      ? this.output.alias
+      : this.output.name
+        ? sanitizeName(this.output.name) 
+        : 'output_' + Math.floor(Math.random() * 1000000)
     this.executeRenderFunction()
+    document.addEventListener('fullscreenchange', this.onFullScreenChange)
+  },
+  beforeUnmount() {
+    document.removeEventListener('fullscreenchange', this.onFullScreenChange)
+  },
+  // updated() {
+  //   this.executeRenderFunction()
+  // },
+  watch: {
+    'output.value': function (newValue, oldValue) {
+      if (newValue !== oldValue) {
+        this.$nextTick(() => {
+          this.executeRenderFunction()
+        })
+      }
+    }
   },
   computed: {
     isRenderFunction() {
@@ -24,6 +50,35 @@ const component = {
     }
   },
   methods: {
+    toggleFullScreen() {
+      const el = this.$refs.cardRoot || this.$el
+      if (!this.isFullScreen) {
+        if (el.requestFullscreen) {
+          el.requestFullscreen()
+        } else if (el.webkitRequestFullscreen) {
+          el.webkitRequestFullscreen()
+        } else if (el.mozRequestFullScreen) {
+          el.mozRequestFullScreen()
+        } else if (el.msRequestFullscreen) {
+          el.msRequestFullscreen()
+        }
+        // state will flip in onFullScreenChange
+      } else {
+        if (document.exitFullscreen) {
+          document.exitFullscreen()
+        } else if (document.webkitExitFullscreen) {
+          document.webkitExitFullscreen()
+        } else if (document.mozCancelFullScreen) {
+          document.mozCancelFullScreen()
+        } else if (document.msExitFullscreen) {
+          document.msExitFullscreen()
+        }
+        // state will flip in onFullScreenChange
+      }
+    },
+    onFullScreenChange() {
+      this.isFullScreen = !!document.fullscreenElement
+    },
     save () {
       // Prepare filename
       let filename
