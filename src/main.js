@@ -3,6 +3,7 @@ import Worker from './worker.js'
 
 const utils = require('./utils')
 const isObject = utils.isObject
+const { DEFAULT_CONTAINER, DEFAULT_WORKER_TIMEOUT } = require('./constants')
 
 const { Notyf } = require('notyf')
 const notyf = new Notyf({
@@ -161,8 +162,8 @@ export default class JSEE {
     // Check if container is provided
     if (typeof this.container === 'undefined') {
       // Check if 'jsee-container' exists
-      if (document.querySelector('#jsee-container')) {
-        this.container = '#jsee-container'
+      if (document.querySelector(DEFAULT_CONTAINER)) {
+        this.container = DEFAULT_CONTAINER
         log(`Using default container: ${this.container}`)
       } else {
         notyf.error('No container provided')
@@ -619,7 +620,7 @@ export default class JSEE {
     }
 
     // Timeout prevents permanently frozen UI if worker hangs (default 30s, configurable via model.timeout)
-    const timeoutMs = model.timeout || 30000
+    const timeoutMs = model.timeout || DEFAULT_WORKER_TIMEOUT
     this._cancelWorkerRun = () => worker.postMessage({ _cmd: 'cancel' })
 
     const modelFunc = (inputs) => {

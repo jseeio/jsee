@@ -1,3 +1,5 @@
+const { DEFAULT_CHUNK_SIZE, STREAM_HIGH_WATER } = require('./constants')
+
 // https://stackoverflow.com/questions/8511281/check-if-a-value-is-an-object-in-javascript
 function isObject (item) {
   return (typeof item === 'object' && !Array.isArray(item) && item !== null)
@@ -241,7 +243,7 @@ function createChunkChannel () {
   let waitingProducer = null  // resolve fn when producer awaits drain
   let done = false
   let error = null
-  const HIGH_WATER = 4
+  const HIGH_WATER = STREAM_HIGH_WATER
 
   return {
     async push (chunk) {
@@ -383,7 +385,7 @@ function createFileStream (source, options={}) {
   const isCancelled = options.isCancelled
   const chunkSize = (typeof options.chunkSize === 'number') && options.chunkSize > 0
     ? Math.floor(options.chunkSize)
-    : (256 * 1024)
+    : DEFAULT_CHUNK_SIZE
 
   const readerMetadata = getStreamMetadata(source, null)
 
