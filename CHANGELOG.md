@@ -19,7 +19,7 @@
 - Auto-load file input URL query params on init (no extra Load click required)
 - Add CLI `--runtime <auto|local|cdn|inline>` to control runtime source in generated HTML
 
-## 0.3.8
+## 0.3.8 (2026-02-08)
 ### Bug fixes:
 - Fix `run()` error handling: wrap in try/catch/finally so overlay and running state always reset on failure
 - Add `.catch()` to fire-and-forget `run()` callers to prevent unhandled rejections
@@ -39,7 +39,7 @@
 - Add unit tests for utils.js: `isObject`, `sanitizeName`, `getUrl`, `delay`, `debounce`, `getName`, `getModelFuncJS`, `getModelFuncAPI`, `validateSchema`
 - Add `npm run test:unit` script
 
-## 0.3.4
+## 0.3.4 (2024-11-19)
 ### JSEE:
 - [x] Add `columns` parameter to the `inputs`, `outputs` blocks (making it possible to create multi-column layouts, like simple dashboards)
 - [x] Add `function` output type (for custom renderers which take a container element as an argument)
@@ -52,11 +52,11 @@
 - [x] Update `social`, `org`, `ga` blocks
 - [x] Small layout fixes
 
-## 0.3.1
+## 0.3.1 (2024-04-10)
 - [x] Add `download` method to jsee object
 - [x] Add `bin` folder with `cmd.js` for easier project building
 
-## 0.2.9
+## 0.2.9 (2023-12-11)
 - [x] Add examples
 - [x] Add imports
 - [x] Add `caller` field to the model input (can be: `run`, `autorun` or a button name)
@@ -64,14 +64,14 @@
 - [x] If `display` field is `false` the input is not shown
 - [x] If `autorun` is true, then actually autorun the model initially
 
-## 0.2.8
+## 0.2.8 (2021-12-29)
 - [x] Fix no input case
 
-## 0.2.7
+## 0.2.7 (2021-12-29)
 - [x] Show output when result is `0`
 - [x] Updated style for buttons and inputs
 
-## 0.2.6
+## 0.2.6 (2021-12-27)
 - [x] Tests
 - [x] Load schema from query (loader)
 - [x] Reset button appears only after data change
