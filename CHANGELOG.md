@@ -9,6 +9,10 @@
 - Fix `--fetch` bundling to include `schema.view` and `schema.render` blocks in addition to `schema.model`
 - Fix `--fetch` import resolution for local relative JS imports and support object import entries (`{ url, ... }`)
 - Fix CLI output path handling for absolute/relative `--outputs` values and remove duplicate final HTML write
+- Fix `download()` method referencing undeclared `env` variable — now correctly uses `this`
+- Fix `outputAsync()` referencing undeclared `delay` — now correctly uses `utils.delay`
+- Fix CLI social links default case referencing undeclared `s` variable
+- Remove dead `title` assignment in CLI `gen` function (already handled in `genHead`)
 ### Features:
 - Allow `progress(null)` to render an indeterminate top progress bar for stream-like tasks where total size is unknown
 - Add `cancelCurrentRun()` runtime entrypoint and wire overlay Stop button with proper `click` handling for any active run
@@ -18,6 +22,8 @@
 - Preserve stream reader metadata (`name`, `size`, `type`) for file/URL sources and keep it available across downstream pipeline stages
 - Auto-load file input URL query params on init (no extra Load click required)
 - Add CLI `--runtime <auto|local|cdn|inline>` to control runtime source in generated HTML
+- Add CLI `--help` flag with usage information and examples
+- Add ESLint config matching project style (no semicolons, single quotes, 2-space indent)
 
 ## 0.3.8 (2026-02-08)
 ### Bug fixes:
