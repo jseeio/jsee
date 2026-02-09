@@ -869,7 +869,7 @@ export default class JSEE {
 
   async outputAsync (res) {
     this.output(res)
-    await delay(1)
+    await utils.delay(1)
   }
 
   output (res) {
@@ -1008,11 +1008,11 @@ export default class JSEE {
       console.error('Error removing GA script tags:', error.message)
     }
 
-    console.log('Caching schema:', env.schema)
-    storeInHiddenElement(env.schemaUrl, env.schema)
+    console.log('Caching schema:', this.schema)
+    storeInHiddenElement(this.schemaUrl, this.schema)
 
-    console.log('Caching models:', env.model)
-    for (const model of env.model) {
+    console.log('Caching models:', this.model)
+    for (const model of this.model) {
       storeInHiddenElement(model.url, model.code)
       // Iterate over imports
       if (model.imports) {

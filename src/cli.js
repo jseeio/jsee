@@ -911,9 +911,6 @@ Documentation: https://jsee.org
   let orgHtml = ''
 
   if (schema.page) {
-    if (schema.page.title) {
-      title = schema.page.title
-    }
     if (schema.page.ga) {
       gaHtml = `
         <script id="ga-src" async src="https://www.googletagmanager.com/gtag/js?id=${schema.page.ga}"></script>
@@ -951,7 +948,7 @@ Documentation: https://jsee.org
             socialHtml += `<li><a rel="me" href="https://www.youtube.com/${url}">YouTube</a></li>`
             break
           default:
-            socialHtml += `<li><a rel="me" href="${s.url}">${s.name}</a></li>`
+            socialHtml += `<li><a rel="me" href="${url}">${name}</a></li>`
         }
       }
     }
