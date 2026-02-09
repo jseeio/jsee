@@ -5,9 +5,10 @@ module.exports = {
     product: 'chrome',
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   },
-  // server: {
-  //   command: 'http-server',
-  //   port: 8081,
-  // },
+  server: {
+    command: 'npx http-server -p 8484 --silent',
+    port: 8484,
+    launchTimeout: 10000,
+  },
   browserContext: 'default',
 }

@@ -2,12 +2,9 @@ require('expect-puppeteer')
 
 page.setDefaultTimeout(30000)
 
-// Tests require a server to be running on port 8080
-// If you have php installed: php -S localhost:8080
-// Python: python -m http.server 8080
-// Node: npm install -g http-server && http-server -p 8080
+// Server on port 8484 is auto-started by jest-puppeteer (see jest-puppeteer.config.js)
 
-const port = 8080
+const port = 8484
 const urlSchema = (name) => `http://localhost:${port}/load/?s=/test/${name}.schema.json`
 const urlHTML = (name) => `http://localhost:${port}/test/${name}.html`
 const urlQuery = (schema) => `http://localhost:${port}/load/?s=${JSON.stringify(schema)}`
