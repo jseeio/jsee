@@ -854,6 +854,29 @@ function validateSchema (schema) {
   return report
 }
 
+// Convert a URL parameter string to the appropriate type
+function coerceParam (value, type, name) {
+  if (type === 'number') return Number(value)
+  if (type === 'boolean') return value === 'true'
+  if (type === 'json') {
+    try { return JSON.parse(value) }
+    catch (e) { console.error(`Failed to parse JSON for input ${name}:`, e) }
+  }
+  return value
+}
+
+// Extract URL parameter value for an input, checking name, sanitized name, and aliases
+function getUrlParam (urlParams, input) {
+  if (urlParams.has(input.name)) return urlParams.get(input.name)
+  if (urlParams.has(sanitizeName(input.name))) return urlParams.get(sanitizeName(input.name))
+  if (!input.alias) return null
+  const aliases = Array.isArray(input.alias) ? input.alias : [input.alias]
+  for (const alias of aliases) {
+    if (urlParams.has(alias)) return urlParams.get(alias)
+  }
+  return null
+}
+
 module.exports = {
   isObject,
   loadFromDOM,
@@ -873,5 +896,7 @@ module.exports = {
   getName,
   validateSchema,
   toWorkerSerializable,
-  containsBinaryPayload
+  containsBinaryPayload,
+  getUrlParam,
+  coerceParam
 }

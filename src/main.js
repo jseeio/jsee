@@ -445,52 +445,16 @@ export default class JSEE {
       }
 
       // Get input value from URL params
-      let paramValue = null
-      if (urlParams.has(input.name)) {
-        paramValue = urlParams.get(input.name);
-      } else if (urlParams.has(utils.sanitizeName(input.name))) {
-        paramValue = urlParams.get(utils.sanitizeName(input.name));
-      } else if (input.alias) {
-        // Handle alias as either a string or an array of strings
-        if (Array.isArray(input.alias)) {
-          for (let alias of input.alias) {
-            if (urlParams.has(alias)) {
-              paramValue = urlParams.get(alias);
-              break;
-            }
-          }
-        } else if (typeof input.alias === 'string' && urlParams.has(input.alias)) {
-          paramValue = urlParams.get(input.alias);
-        }
-      }
+      const paramValue = utils.getUrlParam(urlParams, input)
       log(`Param value for ${input.name}:`, paramValue)
 
-      // Set input value from URL param with type conversion
-      if (paramValue !== null) {
-        if (input.type === 'file') {
-          input.url = paramValue
-          input.urlAutoLoad = true
-        } else {
-          switch (input.type) {
-            case 'number':
-              paramValue = Number(paramValue);
-              break;
-            case 'boolean':
-              paramValue = paramValue === 'true';
-              break;
-            case 'json':
-              try {
-                paramValue = JSON.parse(paramValue);
-              } catch (e) {
-                console.error(`Failed to parse JSON for input ${input.name}:`, e);
-              }
-              break;
-            default:
-              break;
-          }
-          input.default = paramValue
-        }
+      if (paramValue === null) return
+      if (input.type === 'file') {
+        input.url = paramValue
+        input.urlAutoLoad = true
+        return
       }
+      input.default = utils.coerceParam(paramValue, input.type, input.name)
     })
     log('Inputs are:', this.schema.inputs)
   }
