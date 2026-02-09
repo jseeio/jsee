@@ -117,6 +117,9 @@ Extra blocks can be provided for further customization
     - `ctx.log(...args)` - Write runtime logs
     - `ctx.progress(value)` - Report progress (`0..100` or `null` for indeterminate)
     - `ctx.isCancelled()` - Check cooperative cancellation state (useful in long loops/streams)
+  - `timeout` (number, default: `30000`) - Worker execution timeout in milliseconds. Only applies when `worker: true`. Does not apply during model initialization (loading can be slow). If exceeded, the worker is terminated with an error
+  - `imports` (array) - Per-model imports loaded before this model's code executes. Accepts URLs as strings or objects `{ url: "..." }`. Top-level `imports` are moved to the first model internally
+  - `model` can also be an **array of model objects** to create a pipeline. Models execute sequentially — each receives the merged output of the previous one. First model defaults to `worker: true`, others to `worker: false`. Return `{ stop: true }` from any model to halt the pipeline early
 - `render` - Custom rendering script. Instead of relying on JSEE for output visualization, you can provide a custom script that visualizes the results. That can be useful if you rely on custom libs for plotting.
 - `design` - Design parameters
   - `layout` - Layout for the model/input/output blocks. If it's empty and the JSEE container is not, JSEE uses inner HTML as a template. If the container is empty too, it uses the default `blocks` template.
@@ -132,10 +135,13 @@ Extra blocks can be provided for further customization
     - `file` - File Input
     - `action` or `button` - Button (its `name` will be passed as a `caller` to the model)
   - `default` - Default value
+  - `alias` (string or array of strings) - Alternative names for URL parameter matching. E.g. `"alias": ["f", "file"]` allows `?f=value` or `?file=value` to set this input
+  - `display` (string) - Filtrex expression to conditionally show/hide this input. Evaluated against current input values. E.g. `"display": "mode == 'advanced'"` shows the input only when `mode` is `"advanced"`. Supports `len()` for string length
+  - `disabled` (boolean) - Disables the input in the UI. When combined with `reactive: true`, triggers an initial model run on page load (useful for server-populated values)
   - `raw` (boolean, file input only) - If `true`, pass the raw source to the model instead of reading text in the UI (`File` object for disk files or `{ kind: 'url', url: '...' }` for URL input)
   - `stream` (boolean, file input only) - If `true`, pass an async iterable `ChunkedReader` to the model instead of raw source handles. Supports `for await (const chunk of reader)`, `await reader.text()`, `await reader.bytes()`, and `for await (const line of reader.lines())`. Works in both main-thread and worker execution. Reader metadata (`reader.name`, `reader.size`, `reader.type`) is preserved and remains available in downstream pipeline models.
   - URL params for file inputs (e.g. `?file=https://...`) auto-load on init, so bookmarkable links run without an extra Load click
-- `outputs` - Outputs definition
+- `outputs` - Outputs definition. Outputs also support `alias` (string) for matching model result keys by alternative names
   - `name`* - Name of the output
   - `type`* - Type. Possible types:
     - `file` - File output (not displayer, but downloaded)
@@ -150,6 +156,13 @@ Extra blocks can be provided for further customization
 - `interval` (number, default: `0`) - Defines the interval between script evaluations (in milliseconds). If set to `0`, the script is evaluated only once.
 - Runtime cancellation: call `jsee.cancelCurrentRun()` on the JSEE instance to request stop of the active run. Long-running models should check `ctx.isCancelled()` and return early.
 - Schema validation - JSEE validates schema structure during initialization and logs warnings for non-critical issues (e.g. unknown input types, malformed aliases)
+- `jsee.download(title)` - Downloads a self-contained HTML file that works offline. All external scripts are inlined and the schema/model/imports are cached. `title` defaults to `'output'`
+- `page` (CLI only) - Page metadata for generated HTML:
+  - `title` (string) - Page title
+  - `url` (string) - Page URL
+  - `ga` (string) - Google Analytics measurement ID (e.g. `"G-XXXXXXXXXX"`)
+  - `social` (object) - Social media links: `twitter`, `github`, `facebook`, `linkedin`, `instagram`, `youtube` (values are usernames/handles)
+  - `org` (object) - Organization footer: `name`, `url`, `description`
 
 JSEE is a reactive branch of [StatSim](https://statsim.com)'s [Port](https://github.com/statsim/port). It's still work in progress. Expect API changes.
 
