@@ -13,7 +13,9 @@ const {
   validateSchema,
   toWorkerSerializable,
   wrapStreamInputs,
-  containsBinaryPayload
+  containsBinaryPayload,
+  getUrlParam,
+  coerceParam
 } = require('../../src/utils')
 
 describe('isObject', () => {
@@ -626,5 +628,76 @@ describe('validateSchema', () => {
     })
     expect(report.errors).toEqual([])
     expect(report.warnings.join(' ')).toContain('stream is supported only for file inputs')
+  })
+})
+
+describe('getUrlParam', () => {
+  function makeParams (obj) {
+    return new URLSearchParams(obj)
+  }
+
+  test('matches by input name', () => {
+    const params = makeParams({ myInput: '42' })
+    expect(getUrlParam(params, { name: 'myInput' })).toBe('42')
+  })
+
+  test('matches by sanitized name', () => {
+    const params = makeParams({ my_input: '42' })
+    expect(getUrlParam(params, { name: 'my input' })).toBe('42')
+  })
+
+  test('matches by string alias', () => {
+    const params = makeParams({ f: 'data.csv' })
+    expect(getUrlParam(params, { name: 'file', alias: 'f' })).toBe('data.csv')
+  })
+
+  test('matches by array alias', () => {
+    const params = makeParams({ src: 'data.csv' })
+    expect(getUrlParam(params, { name: 'file', alias: ['f', 'src'] })).toBe('data.csv')
+  })
+
+  test('returns null when no match', () => {
+    const params = makeParams({ other: '1' })
+    expect(getUrlParam(params, { name: 'file' })).toBeNull()
+  })
+
+  test('returns null when no alias match', () => {
+    const params = makeParams({ other: '1' })
+    expect(getUrlParam(params, { name: 'file', alias: ['f', 'data'] })).toBeNull()
+  })
+
+  test('prefers name over alias', () => {
+    const params = makeParams({ file: 'direct', f: 'alias' })
+    expect(getUrlParam(params, { name: 'file', alias: 'f' })).toBe('direct')
+  })
+})
+
+describe('coerceParam', () => {
+  test('coerces to number', () => {
+    expect(coerceParam('42', 'number', 'x')).toBe(42)
+    expect(coerceParam('3.14', 'number', 'x')).toBeCloseTo(3.14)
+  })
+
+  test('coerces to boolean', () => {
+    expect(coerceParam('true', 'boolean', 'x')).toBe(true)
+    expect(coerceParam('false', 'boolean', 'x')).toBe(false)
+    expect(coerceParam('yes', 'boolean', 'x')).toBe(false)
+  })
+
+  test('coerces to JSON', () => {
+    expect(coerceParam('{"a":1}', 'json', 'x')).toEqual({ a: 1 })
+    expect(coerceParam('[1,2,3]', 'json', 'x')).toEqual([1, 2, 3])
+  })
+
+  test('returns original string for invalid JSON', () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation()
+    expect(coerceParam('not json', 'json', 'x')).toBe('not json')
+    expect(consoleSpy).toHaveBeenCalled()
+    consoleSpy.mockRestore()
+  })
+
+  test('returns string as-is for unknown types', () => {
+    expect(coerceParam('hello', 'string', 'x')).toBe('hello')
+    expect(coerceParam('hello', 'text', 'x')).toBe('hello')
   })
 })
