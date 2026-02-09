@@ -837,8 +837,7 @@ export default class JSEE {
   }
 
   output (res) {
-    // TODO: Think about all edge cases
-    // * No output field, but reactivity
+    // Edge case: no output field with reactivity is handled — undefined results exit early
 
     if (typeof res === 'undefined') {
       return

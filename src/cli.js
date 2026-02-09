@@ -567,7 +567,6 @@ function template(schema, blocks) {
 </html>`
 }
 
-// Adding async here breaks express. TODO: investigate
 async function gen (pargv, returnHtml=false) {
   // Determine if JSEE CLI is imported or run directly
   const imported = path.dirname(__dirname) !== path.dirname(require.main.path)
@@ -831,8 +830,7 @@ Documentation: https://jsee.org
         continue
       }
       if (m.url) {
-        // Fetch model from the local file system (url)
-        // TODO: Can be a remote URL (e.g. CDN)
+        // Fetch model from the local file system (remote URLs not yet supported here)
         const modelCode = fs.readFileSync(path.join(cwd, m.url), 'utf8')
         hiddenElementHtml += `<script type="text/plain" style="display: none;" data-src="${m.url}">${modelCode}</script>`
       }

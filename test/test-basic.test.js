@@ -55,7 +55,7 @@ describe('Initial test (worker)', () => {
 describe('Minimal examples', () => {
   const schema = {
     'model': {
-      'code': 'function (a, b) { return a / b }', // TODO: check '+'
+      'code': 'function (a, b) { return a / b }',
     }
   }
   test('Code only (text) (main window)', async () => {
