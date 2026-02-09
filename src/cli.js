@@ -598,7 +598,36 @@ async function gen (pargv, returnHtml=false) {
   let argv = minimist(pargv, {
     alias: argvAlias,
     default: argvDefault,
+    boolean: ['help', 'h'],
   })
+
+  if (argv.help || argv.h) {
+    console.log(`
+Usage: jsee [schema.json] [options]
+
+Options:
+  -i, --inputs <file>       Input schema file (default: schema.json)
+  -o, --outputs <file>      Output HTML file path
+  -d, --description <file>  Markdown description file to include
+  -p, --port <number>       Dev server port (default: 3000)
+  -v, --version <version>   JSEE runtime version (default: latest)
+  -f, --fetch               Fetch and bundle runtime + dependencies into output
+  -e, --execute             Execute model server-side
+  -c, --cdn <url|bool>      Rewrite model URLs for CDN deployment
+  -r, --runtime <mode>      Runtime mode: auto|local|cdn|inline (default: auto)
+      --verbose             Enable verbose logging
+
+Examples:
+  jsee schema.json                  Start dev server with schema
+  jsee schema.json -o app.html      Generate static HTML file
+  jsee schema.json -o app.html -f   Generate self-contained HTML with bundled runtime
+  jsee -p 8080                      Start dev server on port 8080
+
+Documentation: https://jsee.org
+    `.trim())
+    return
+  }
+
   // Set argv.inputs to the first non-option argument if it exists
   if (!imported && argv._.length > 0 && !argv.inputs) {
     argv.inputs = argv._[0]
