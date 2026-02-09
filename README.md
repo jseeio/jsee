@@ -16,6 +16,25 @@ Minimal example:
 
 ↳ [Result](https://jsee.org/test/minimal1.html)
 
+## Installation
+
+**Browser (CDN):**
+```html
+<script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@latest/dist/jsee.runtime.js"></script>
+```
+
+**npm (for CLI or Node.js projects):**
+```bash
+npm install @jseeio/jsee
+```
+
+**CLI (generate standalone apps):**
+```bash
+npx @jseeio/jsee schema.json -o app.html
+```
+
+Run `jsee --help` for all CLI options.
+
 ## JavaScript Execution Environment
 
 JSEE is a browser-based environment for processing tasks. It creates a graphical interface, executes code in a web worker or via API, bridges all pieces together into a user-friendly web app. In some cases, JSEE does all of that automatically, without any configuration. And when the configuration is required, it's just one JSON file with an [intuitive structure](#schema).
