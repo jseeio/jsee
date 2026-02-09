@@ -701,3 +701,106 @@ describe('coerceParam', () => {
     expect(coerceParam('hello', 'text', 'x')).toBe('hello')
   })
 })
+
+describe('error scenarios', () => {
+  describe('validateSchema edge cases', () => {
+    test('handles empty schema', () => {
+      const report = validateSchema({})
+      expect(report.errors.length).toBeGreaterThan(0)
+    })
+
+    test('handles null/undefined inputs gracefully', () => {
+      const report = validateSchema({
+        model: { code: 'function run () {}' },
+        inputs: null
+      })
+      // null inputs should not crash
+      expect(report).toBeDefined()
+    })
+
+    test('warns on multiple issues at once', () => {
+      const report = validateSchema({
+        model: { type: 'bad-type', timeout: -100 },
+        inputs: [
+          { name: 123, type: 'invalid-type', alias: [1], raw: 'yes', stream: 'yes' }
+        ]
+      })
+      expect(report.warnings.length).toBeGreaterThan(3)
+    })
+  })
+
+  describe('getName edge cases', () => {
+    test('handles empty string', () => {
+      expect(getName('')).toBeUndefined()
+    })
+
+    test('handles whitespace-only string', () => {
+      expect(getName('   ')).toBeUndefined()
+    })
+
+    test('handles object input', () => {
+      expect(getName({})).toBeUndefined()
+    })
+  })
+
+  describe('sanitizeName edge cases', () => {
+    test('handles empty string', () => {
+      expect(sanitizeName('')).toBe('')
+    })
+
+    test('handles string with only special chars', () => {
+      const result = sanitizeName('!@#$%')
+      expect(typeof result).toBe('string')
+    })
+
+    test('handles numbers as input', () => {
+      expect(sanitizeName('123abc')).toBe('123abc')
+    })
+  })
+
+  describe('getModelFuncJS error handling', () => {
+    const mockApp = { log: jest.fn() }
+
+    test('class without predict method throws', async () => {
+      class NoPredict {}
+      await expect(async () => {
+        const wrapped = await getModelFuncJS({ type: 'class' }, NoPredict, mockApp)
+        wrapped({ x: 1 })
+      }).rejects.toThrow()
+    })
+  })
+
+  describe('toWorkerSerializable edge cases', () => {
+    test('handles empty object', () => {
+      const result = toWorkerSerializable({})
+      expect(result).toEqual({})
+    })
+
+    test('handles nested objects without binary', () => {
+      const input = { a: 1, b: { c: 'hello' } }
+      const result = toWorkerSerializable(input)
+      expect(result).toEqual(input)
+    })
+
+    test('handles null values', () => {
+      const input = { a: null, b: undefined }
+      const result = toWorkerSerializable(input)
+      expect(result.a).toBeNull()
+    })
+  })
+
+  describe('containsBinaryPayload edge cases', () => {
+    test('returns false for empty object', () => {
+      expect(containsBinaryPayload({})).toBe(false)
+    })
+
+    test('returns false for string values', () => {
+      expect(containsBinaryPayload({ a: 'hello', b: '123' })).toBe(false)
+    })
+
+    test('returns false for null/undefined', () => {
+      expect(containsBinaryPayload(null)).toBe(false)
+      expect(containsBinaryPayload(undefined)).toBe(false)
+    })
+  })
+})
