@@ -418,6 +418,14 @@ export default class JSEE {
           }
         }
       }
+      // Inject CSS imports into <head> for worker models (workers have no DOM)
+      if (m.imports && Array.isArray(m.imports) && m.imports.length && m.worker) {
+        const cssImports = m.imports.filter(imp => utils.isCssImport(imp.url))
+        for (const imp of cssImports) {
+          await utils.importScripts(imp)
+        }
+      }
+
       console.log('Imports:', m.imports)
     } // end of model-loop
 

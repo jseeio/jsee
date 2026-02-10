@@ -594,12 +594,40 @@ async function getModelFuncJS (model, target, app) {
   }
 }
 
+function isCssImport (url) {
+  if (typeof url !== 'string') return false
+  const clean = url.split('?')[0].split('#')[0].toLowerCase()
+  return clean.endsWith('.css')
+}
+
+// Distinguish relative file paths (dist/core.js, ./lib.js) from bare package
+// names (lodash, chart.js, @org/pkg). Bare names resolve to CDN; relative paths
+// must resolve against the page URL so blob workers can load them.
+function isRelativeImport (url) {
+  if (typeof url !== 'string') return false
+  if (url.startsWith('./') || url.startsWith('../') || url.startsWith('/')) return true
+  if (/^https?:\/\//i.test(url)) return false
+  if (url.includes('@')) return false // scoped or versioned packages (e.g. lodash@4/...)
+  // Bare names like "chart.js" have no slash; paths like "dist/core.js" do
+  if (url.includes('/') && /\.(js|css|mjs|wasm)(\?|#|$)/i.test(url)) return true
+  return false
+}
+
 function getUrl (url) {
   let newUrl
   try {
     newUrl = (new URL(url)).href
   } catch (e) {
-    newUrl = (new URL(url, 'https://cdn.jsdelivr.net/npm/')).href
+    if (isRelativeImport(url)) {
+      // Resolve against page URL so the absolute URL works inside blob workers
+      // (blob workers have opaque origins and can't resolve relative paths)
+      const base = typeof window !== 'undefined' && window.location
+        ? window.location.href
+        : 'https://cdn.jsdelivr.net/npm/'
+      newUrl = (new URL(url, base)).href
+    } else {
+      newUrl = (new URL(url, 'https://cdn.jsdelivr.net/npm/')).href
+    }
   }
   return newUrl
 }
@@ -616,6 +644,26 @@ function loadFromDOM (url) {
 function importScriptAsync (imp, async=true) {
   return new Promise((resolve, reject) => {
     try {
+      // CSS imports: inject <link> or <style> instead of <script>
+      if (isCssImport(imp.url)) {
+        if (imp.code) {
+          const style = document.createElement('style')
+          style.textContent = imp.code
+          document.head.appendChild(style)
+          resolve({ status: true })
+        } else {
+          const link = document.createElement('link')
+          link.rel = 'stylesheet'
+          link.href = imp.url
+          link.addEventListener('load', () => resolve({ status: true }))
+          link.addEventListener('error', () => reject({
+            status: false,
+            message: `Failed to load CSS ${imp.url}`
+          }))
+          document.head.appendChild(link)
+        }
+        return
+      }
       const scriptElement = document.createElement('script')
       scriptElement.type = 'text/javascript'
       if (imp.code) {
@@ -897,6 +945,8 @@ module.exports = {
   validateSchema,
   toWorkerSerializable,
   containsBinaryPayload,
+  isCssImport,
+  isRelativeImport,
   getUrlParam,
   coerceParam
 }

@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 ### Bug fixes:
+- Fix relative import URLs (e.g. `dist/core.js`) resolving against CDN instead of page URL — now resolves against `window.location.href` so blob workers can load them correctly
 - Gate worker initialization with an `initialized` flag: only the first `{url|code}` payload initializes the worker, all later payloads are treated as execution input
 - Fix model type inference for URL-loaded JS: when `code` is present, infer `function` instead of treating `url` as API `post`
 - Improve worker payload fallback diagnostics: if `postMessage` fails with File/Blob/binary payloads, throw a descriptive error instead of silently dropping data via JSON fallback
@@ -21,7 +22,8 @@
 - Add file input stream mode (`inputs[].stream: true`) that wraps raw file/URL sources into async iterable `ChunkedReader` objects (zero-dep, supports `for await`, `.text()`, `.bytes()`, `.lines()`) in both worker and main-thread execution
 - Preserve stream reader metadata (`name`, `size`, `type`) for file/URL sources and keep it available across downstream pipeline stages
 - Auto-load file input URL query params on init (no extra Load click required)
-- Add CLI `--runtime <auto|local|cdn|inline>` to control runtime source in generated HTML
+- Add CSS-aware imports: `.css` entries in `imports` arrays are injected as `<link rel="stylesheet">` on the main thread and skipped in workers
+- Add CLI `--runtime` to control runtime source: supports `auto|local|cdn|inline` modes plus custom URL/path values (e.g. `./node_modules/@jseeio/jsee/dist/jsee.js`)
 - Add CLI `--help` flag with usage information and examples
 - Add ESLint config matching project style (no semicolons, single quotes, 2-space indent)
 

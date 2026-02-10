@@ -52,6 +52,11 @@ async function initJS (model) {
   if (model.imports && model.imports.length) {
     log('Loading imports...')
     for (let imp of model.imports) {
+      // Workers have no DOM — CSS is injected on the main thread in initModel()
+      if (utils.isCssImport(imp.url)) {
+        log('Skipping CSS import in worker:', imp.url)
+        continue
+      }
       if (imp.code) {
         log('Importing from DOM:', imp.url)
         importScripts(URL.createObjectURL(new Blob([imp.code], { type: 'text/javascript' })))

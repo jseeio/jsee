@@ -64,6 +64,14 @@ function isLocalJsImport (value) {
   return value.startsWith('./') || value.startsWith('../') || value.startsWith('/') || value.startsWith('file://')
 }
 
+function isLocalCssImport (value) {
+  if (typeof value !== 'string') return false
+  const lower = value.toLowerCase()
+  if (!lower.endsWith('.css') && !lower.includes('.css?')) return false
+  if (isHttpUrl(value)) return false
+  return value.startsWith('./') || value.startsWith('../') || value.startsWith('/') || value.startsWith('file://')
+}
+
 function getImportUrlValue (importValue) {
   if (typeof importValue === 'string') return importValue
   if (importValue && typeof importValue === 'object' && typeof importValue.url === 'string') {
@@ -79,7 +87,7 @@ function resolveFetchImport (importValue, modelUrl, cwd) {
   }
   const importIsObject = importValue && typeof importValue === 'object'
 
-  if (isLocalJsImport(importUrlValue)) {
+  if (isLocalJsImport(importUrlValue) || isLocalCssImport(importUrlValue)) {
     const modelDir = modelUrl && !isHttpUrl(modelUrl) ? path.dirname(modelUrl) : '.'
     const localSchemaPath = path.normalize(path.join(modelDir, importUrlValue))
     const schemaImport = localSchemaPath.split(path.sep).join('/')
@@ -108,7 +116,7 @@ function resolveRuntimeMode (runtime, fetchEnabled, outputs) {
   const requestedRuntime = runtime || 'auto'
   const availableModes = ['auto', 'local', 'cdn', 'inline']
   if (!availableModes.includes(requestedRuntime)) {
-    throw new Error(`Invalid runtime mode: ${requestedRuntime}. Use one of: ${availableModes.join(', ')}`)
+    return requestedRuntime // custom URL/path passthrough
   }
   if (requestedRuntime !== 'auto') {
     return requestedRuntime
@@ -613,7 +621,7 @@ Options:
   -f, --fetch               Fetch and bundle runtime + dependencies into output
   -e, --execute             Execute model server-side
   -c, --cdn <url|bool>      Rewrite model URLs for CDN deployment
-  -r, --runtime <mode>      Runtime mode: auto|local|cdn|inline (default: auto)
+  -r, --runtime <mode>      Runtime: auto|local|cdn|inline or a custom URL/path (default: auto)
       --verbose             Enable verbose logging
 
 Examples:
@@ -897,10 +905,13 @@ Documentation: https://jsee.org
       jseeHtml = `<script>${jseeCode}</script>`
     } else if (runtimeMode === 'cdn') {
       jseeHtml = `<script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@${argv.version}/dist/jsee.runtime.js"></script>`
-    } else {
+    } else if (runtimeMode === 'local') {
       jseeHtml = argv.version === 'dev'
         ? `<script src="http://localhost:${argv.port}/dist/jsee.js"></script>`
         : `<script src="http://localhost:${argv.port}/dist/jsee.runtime.js"></script>`
+    } else {
+      // Custom path/URL passed via --runtime (e.g. ./node_modules/.../jsee.js)
+      jseeHtml = `<script src="${runtimeMode}"></script>`
     }
   }
 

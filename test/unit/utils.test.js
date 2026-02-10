@@ -14,6 +14,8 @@ const {
   toWorkerSerializable,
   wrapStreamInputs,
   containsBinaryPayload,
+  isCssImport,
+  isRelativeImport,
   getUrlParam,
   coerceParam
 } = require('../../src/utils')
@@ -53,6 +55,67 @@ describe('sanitizeName', () => {
   })
 })
 
+describe('isCssImport', () => {
+  test('.css extension returns true', () => {
+    expect(isCssImport('styles/main.css')).toBe(true)
+    expect(isCssImport('https://cdn.example.com/lib.css')).toBe(true)
+  })
+  test('.css with query string returns true', () => {
+    expect(isCssImport('styles/main.css?v=2')).toBe(true)
+  })
+  test('.css with hash returns true', () => {
+    expect(isCssImport('styles/main.css#id')).toBe(true)
+  })
+  test('.js extension returns false', () => {
+    expect(isCssImport('lib/app.js')).toBe(false)
+  })
+  test('bare package name returns false', () => {
+    expect(isCssImport('lodash')).toBe(false)
+  })
+  test('non-string returns false', () => {
+    expect(isCssImport(null)).toBe(false)
+    expect(isCssImport(undefined)).toBe(false)
+    expect(isCssImport(42)).toBe(false)
+  })
+})
+
+describe('isRelativeImport', () => {
+  test('./ prefix is relative', () => {
+    expect(isRelativeImport('./lib.js')).toBe(true)
+  })
+  test('../ prefix is relative', () => {
+    expect(isRelativeImport('../utils.js')).toBe(true)
+  })
+  test('/ prefix is relative', () => {
+    expect(isRelativeImport('/dist/app.js')).toBe(true)
+  })
+  test('path with dir separator and .js extension is relative', () => {
+    expect(isRelativeImport('dist/core.js')).toBe(true)
+  })
+  test('path with dir separator and .css extension is relative', () => {
+    expect(isRelativeImport('styles/main.css')).toBe(true)
+  })
+  test('bare package name is not relative', () => {
+    expect(isRelativeImport('lodash')).toBe(false)
+  })
+  test('package name ending in .js without slash is not relative', () => {
+    expect(isRelativeImport('chart.js')).toBe(false)
+  })
+  test('scoped package is not relative', () => {
+    expect(isRelativeImport('@org/pkg')).toBe(false)
+  })
+  test('versioned package is not relative', () => {
+    expect(isRelativeImport('lodash@4.17.21/lodash.min.js')).toBe(false)
+  })
+  test('absolute URL is not relative', () => {
+    expect(isRelativeImport('https://example.com/lib.js')).toBe(false)
+  })
+  test('non-string returns false', () => {
+    expect(isRelativeImport(null)).toBe(false)
+    expect(isRelativeImport(undefined)).toBe(false)
+  })
+})
+
 describe('getUrl', () => {
   test('returns absolute URLs as-is', () => {
     expect(getUrl('https://example.com/lib.js')).toBe('https://example.com/lib.js')
@@ -60,6 +123,25 @@ describe('getUrl', () => {
   test('prepends CDN base for bare package names', () => {
     expect(getUrl('lodash@4.17.21/lodash.min.js'))
       .toBe('https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js')
+  })
+  test('resolves relative paths with ./ using window.location when available', () => {
+    global.window = { location: { href: 'https://example.com/app/' } }
+    const result = getUrl('./lib/helper.js')
+    expect(result).toBe('https://example.com/app/lib/helper.js')
+    delete global.window
+  })
+  test('resolves paths with dir separator and extension using window.location', () => {
+    global.window = { location: { href: 'https://example.com/app/' } }
+    const result = getUrl('dist/profile-core.js')
+    expect(result).toBe('https://example.com/app/dist/profile-core.js')
+    delete global.window
+  })
+  test('falls back to CDN for relative paths when window is unavailable', () => {
+    const result = getUrl('./lib/helper.js')
+    expect(result).toContain('cdn.jsdelivr.net')
+  })
+  test('bare names without extension still resolve to CDN', () => {
+    expect(getUrl('lodash')).toBe('https://cdn.jsdelivr.net/npm/lodash')
   })
 })
 

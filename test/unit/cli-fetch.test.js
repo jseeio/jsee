@@ -67,6 +67,18 @@ describe('resolveFetchImport', () => {
     expect(result.localFilePath).toBe(path.join('/tmp/jsee-workspace', 'apps/qrcode/helpers/math.js'))
     expect(result.remoteUrl).toBeNull()
   })
+  test('resolves local CSS import paths', () => {
+    const result = resolveFetchImport('./styles/app.css', 'apps/demo/model.js', '/tmp')
+    expect(result.schemaImport).toBe('apps/demo/styles/app.css')
+    expect(result.localFilePath).toBe(path.join('/tmp', 'apps/demo/styles/app.css'))
+    expect(result.remoteUrl).toBeNull()
+  })
+
+  test('keeps remote CSS imports as remote URLs', () => {
+    const result = resolveFetchImport('https://cdn.example.com/lib.css', 'model.js', '/tmp')
+    expect(result.remoteUrl).toBe('https://cdn.example.com/lib.css')
+    expect(result.localFilePath).toBeNull()
+  })
 })
 
 describe('resolveRuntimeMode', () => {
@@ -87,8 +99,10 @@ describe('resolveRuntimeMode', () => {
     expect(resolveRuntimeMode('inline', false, false)).toBe('inline')
   })
 
-  test('throws on invalid runtime mode', () => {
-    expect(() => resolveRuntimeMode('invalid', false, false)).toThrow('Invalid runtime mode')
+  test('passes through custom URL/path as runtime mode', () => {
+    expect(resolveRuntimeMode('./dist/jsee.js', false, false)).toBe('./dist/jsee.js')
+    expect(resolveRuntimeMode('https://example.com/jsee.js', false, true)).toBe('https://example.com/jsee.js')
+    expect(resolveRuntimeMode('./node_modules/@jseeio/jsee/dist/jsee.js', true, true)).toBe('./node_modules/@jseeio/jsee/dist/jsee.js')
   })
 })
 

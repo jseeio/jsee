@@ -73,12 +73,13 @@ Extra blocks can be provided for further customization
 
 - `render` - visualization part (optional). Defines custom rendering code.
 - `design` - overall appearance (optional). Defines how the app looks overwriting defaults.
-- `imports` - a list of urls (optional). Defines a list of scripts to load before the model is initialized.
+- `imports` - a list of urls (optional). Defines a list of scripts and stylesheets to load before the model is initialized. CSS files (`.css` extension) are injected as `<link rel="stylesheet">` in `<head>`, JS files are loaded as scripts. Relative paths are resolved against the page URL.
 
   ```json
   "imports": [
     "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs",
-    "https://cdn.jsdelivr.net/pyodide/v0.17.0/full/pyodide.js"
+    "https://cdn.jsdelivr.net/pyodide/v0.17.0/full/pyodide.js",
+    "styles/app.css"
   ]
   ```
 
@@ -168,14 +169,22 @@ JSEE is a reactive branch of [StatSim](https://statsim.com)'s [Port](https://git
 
 # CLI
 - `--fetch` - Fetches JSEE runtime and bundles `model`/`view`/`render` blocks plus their imports into generated HTML
-- `--runtime <auto|local|cdn|inline>` - Select runtime source for generated HTML
+- `--runtime <mode|path|url>` - Select runtime source for generated HTML
   - `auto` (default): `inline` when `--fetch` is used, otherwise `cdn` for file output and `local` for dev server mode
   - `local`: use `http://localhost:<port>/dist/...`
   - `cdn`: use jsdelivr runtime URL
   - `inline`: embed runtime code directly in HTML
+  - Any other value is used as a custom `<script src="...">` path/URL (e.g. `./node_modules/@jseeio/jsee/dist/jsee.js`)
 - `--cdn` - Use CDN for models (can be string with a base URL or boolean to infer from package.json). Model urls will be prefixed with the CDN URL. This helps with deployment to static hosts (e.g. GitHub Pages).
-- `--execute` - Executes the model code on the server-side. 
+- `--execute` - Executes the model code on the server-side
+
 # Server-side execution
+
+With `--execute` (`-e`), JSEE loads each model's JS file on the server (via `require()`), rewrites the schema to point at a POST endpoint, and starts an Express server. The browser GUI sends inputs to the server, which runs the model and returns results as JSON. This is useful for models that need Node.js APIs or heavy computation that shouldn't run in the browser.
+
+```bash
+jsee schema.json -e -p 3000
+```
 
 # Changelog
 

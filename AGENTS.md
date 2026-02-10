@@ -13,14 +13,41 @@ Use **2-space indentation** and **semicolon-free** syntax. Use **single quotes**
 
 ## Quick start
 
+```bash
+npm install          # install dependencies
+npm run build-dev    # fast dev build (no tests, no minification)
+npm run build        # production build + full test suite
+npm run test:unit    # unit tests only (fast, no browser)
+npm run test:basic   # E2E tests (auto-starts http-server on 8484)
+```
 
 ## Repo map
+
+```
+src/
+  main.js        # JSEE class — schema parsing, model/worker init, run loop
+  app.js         # Vue 3 app factory — creates reactive GUI from schema inputs/outputs
+  worker.js      # Web Worker entry — receives model config, runs importScripts + model code
+  utils.js       # Shared helpers — URL resolution, script loading, serialization, validation
+  cli.js         # CLI (`npx jsee`) — HTML generation, --fetch bundling, dev server
+  overlay.js     # Loading/progress overlay component
+  constants.js   # Shared defaults (container selector, timeouts, chunk sizes)
+templates/       # Vue SFC templates (bulma-app, bulma-input, bulma-output, file-picker)
+test/
+  unit/          # Jest unit tests (no browser): utils.test.js, cli-fetch.test.js
+  test-basic.test.js   # Puppeteer E2E tests against built dist/
+  test-python.test.js  # Pyodide integration test
+  fixtures/      # Test fixtures (lodash-like.js, upload-sample.csv)
+dist/            # Build output: jsee.js (dev), jsee.runtime.js (production)
+apps/            # Example apps (hashr, detect, qrcode, etc.)
+webpack.config.js  # Two build targets: full (jsee.js) and runtime (jsee.runtime.js)
+```
 
 
 ## Definition of done
 - Run: `npm run build` (or `npm run build-dev` during iteration)
 - Run unit tests: `npm run test:unit` (fast, no browser needed)
-- Run E2E tests: `npm run test:basic` (requires `http-server -p 8080` running)
+- Run E2E tests: `npm run test:basic` (auto-starts http-server on port 8484)
 - Add/adjust unit tests for core logic in `test/unit/`
 
 ## Constraints
