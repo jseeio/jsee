@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0
+## 0.4.1
 ### Bug fixes:
 - Fix relative import URLs (e.g. `dist/core.js`) resolving against CDN instead of page URL — now resolves against `window.location.href` so blob workers can load them correctly
 - Gate worker initialization with an `initialized` flag: only the first `{url|code}` payload initializes the worker, all later payloads are treated as execution input
@@ -9,6 +9,7 @@
 - Move `showdown-katex` and `katex` to runtime `dependencies` so `npx jsee` works without dev installs
 - Fix `--fetch` bundling to include `schema.view` and `schema.render` blocks in addition to `schema.model`
 - Fix `--fetch` import resolution for local relative JS imports and support object import entries (`{ url, ... }`)
+- Fix `--fetch` bundling for bare-relative imports (e.g. `dist/core.js`, `css/app.css`) — use filesystem existence check instead of prefix heuristics, and fix `data-src` key mismatch by keeping raw import paths so `loadFromDOM` finds bundled code at runtime
 - Fix CLI output path handling for absolute/relative `--outputs` values and remove duplicate final HTML write
 - Fix `download()` method referencing undeclared `env` variable — now correctly uses `this`
 - Fix `outputAsync()` referencing undeclared `delay` — now correctly uses `utils.delay`

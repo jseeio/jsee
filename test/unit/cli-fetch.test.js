@@ -2,7 +2,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const gen = require('../../src/cli')
-const { collectFetchBundleBlocks, resolveFetchImport, resolveRuntimeMode } = gen
+const { collectFetchBundleBlocks, resolveLocalImportFile, resolveFetchImport, resolveRuntimeMode } = gen
 
 describe('collectFetchBundleBlocks', () => {
   test('collects model, view and render blocks', () => {
@@ -32,19 +32,107 @@ describe('collectFetchBundleBlocks', () => {
   })
 })
 
-describe('resolveFetchImport', () => {
-  test('resolves local relative import paths against model location', () => {
-    const cwd = '/tmp/jsee-workspace'
-    const result = resolveFetchImport('./helpers/math.js', 'apps/qrcode/model.js', cwd)
+describe('resolveLocalImportFile', () => {
+  let tmpDir
 
-    expect(result.schemaImport).toBe('apps/qrcode/helpers/math.js')
-    expect(result.importUrl).toBe('https://cdn.jsdelivr.net/npm/apps/qrcode/helpers/math.js')
-    expect(result.localFilePath).toBe(path.join(cwd, 'apps/qrcode/helpers/math.js'))
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-resolve-'))
+    // Create a project layout:
+    //   dist/a.js
+    //   css/x.css
+    //   src/model.js
+    //   src/helper.js
+    fs.mkdirSync(path.join(tmpDir, 'dist'))
+    fs.mkdirSync(path.join(tmpDir, 'css'))
+    fs.mkdirSync(path.join(tmpDir, 'src'))
+    fs.writeFileSync(path.join(tmpDir, 'dist', 'a.js'), '// a')
+    fs.writeFileSync(path.join(tmpDir, 'css', 'x.css'), '/* x */')
+    fs.writeFileSync(path.join(tmpDir, 'src', 'model.js'), '// model')
+    fs.writeFileSync(path.join(tmpDir, 'src', 'helper.js'), '// helper')
+  })
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  test('resolves bare-relative JS path from cwd', () => {
+    const result = resolveLocalImportFile('dist/a.js', 'src/model.js', tmpDir)
+    expect(result).toBe(path.join(tmpDir, 'dist', 'a.js'))
+  })
+
+  test('resolves bare-relative CSS path from cwd', () => {
+    const result = resolveLocalImportFile('css/x.css', 'src/model.js', tmpDir)
+    expect(result).toBe(path.join(tmpDir, 'css', 'x.css'))
+  })
+
+  test('resolves explicit-relative path against model directory', () => {
+    const result = resolveLocalImportFile('./helper.js', 'src/model.js', tmpDir)
+    expect(result).toBe(path.join(tmpDir, 'src', 'helper.js'))
+  })
+
+  test('returns null for nonexistent file', () => {
+    const result = resolveLocalImportFile('dist/nope.js', 'src/model.js', tmpDir)
+    expect(result).toBeNull()
+  })
+
+  test('returns null for HTTP URLs', () => {
+    const result = resolveLocalImportFile('https://cdn.example.com/lib.js', 'src/model.js', tmpDir)
+    expect(result).toBeNull()
+  })
+
+  test('returns null for npm package names', () => {
+    const result = resolveLocalImportFile('lodash', 'src/model.js', tmpDir)
+    expect(result).toBeNull()
+  })
+})
+
+describe('resolveFetchImport', () => {
+  let tmpDir
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-resolve-'))
+    fs.mkdirSync(path.join(tmpDir, 'dist'))
+    fs.mkdirSync(path.join(tmpDir, 'css'))
+    fs.mkdirSync(path.join(tmpDir, 'src'))
+    fs.writeFileSync(path.join(tmpDir, 'dist', 'core.js'), '// core')
+    fs.writeFileSync(path.join(tmpDir, 'css', 'app.css'), '/* app */')
+    fs.writeFileSync(path.join(tmpDir, 'src', 'model.js'), '// model')
+    fs.writeFileSync(path.join(tmpDir, 'src', 'helper.js'), '// helper')
+  })
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  test('resolves bare-relative local JS with raw importUrl', () => {
+    const result = resolveFetchImport('dist/core.js', 'src/model.js', tmpDir)
+
+    expect(result.schemaImport).toBe('dist/core.js')
+    expect(result.importUrl).toBe('dist/core.js')
+    expect(result.localFilePath).toBe(path.join(tmpDir, 'dist', 'core.js'))
+    expect(result.remoteUrl).toBeNull()
+  })
+
+  test('resolves bare-relative local CSS with raw importUrl', () => {
+    const result = resolveFetchImport('css/app.css', 'src/model.js', tmpDir)
+
+    expect(result.schemaImport).toBe('css/app.css')
+    expect(result.importUrl).toBe('css/app.css')
+    expect(result.localFilePath).toBe(path.join(tmpDir, 'css', 'app.css'))
+    expect(result.remoteUrl).toBeNull()
+  })
+
+  test('resolves explicit-relative local import against model dir', () => {
+    const result = resolveFetchImport('./helper.js', 'src/model.js', tmpDir)
+
+    expect(result.schemaImport).toBe('./helper.js')
+    expect(result.importUrl).toBe('./helper.js')
+    expect(result.localFilePath).toBe(path.join(tmpDir, 'src', 'helper.js'))
     expect(result.remoteUrl).toBeNull()
   })
 
   test('keeps package imports as remote URLs', () => {
-    const result = resolveFetchImport('chart.js', 'apps/qrcode/model.js', '/tmp/jsee-workspace')
+    const result = resolveFetchImport('chart.js', 'src/model.js', tmpDir)
 
     expect(result.schemaImport).toBe('chart.js')
     expect(result.importUrl).toBe('https://cdn.jsdelivr.net/npm/chart.js')
@@ -52,32 +140,33 @@ describe('resolveFetchImport', () => {
     expect(result.remoteUrl).toBe('https://cdn.jsdelivr.net/npm/chart.js')
   })
 
+  test('keeps remote HTTP URLs unchanged', () => {
+    const result = resolveFetchImport('https://cdn.example.com/lib.css', 'model.js', tmpDir)
+    expect(result.remoteUrl).toBe('https://cdn.example.com/lib.css')
+    expect(result.localFilePath).toBeNull()
+  })
+
   test('supports object imports and preserves extra fields', () => {
     const result = resolveFetchImport(
-      { url: './helpers/math.js', integrity: 'sha-123' },
-      'apps/qrcode/model.js',
-      '/tmp/jsee-workspace'
+      { url: './helper.js', integrity: 'sha-123' },
+      'src/model.js',
+      tmpDir
     )
 
     expect(result.schemaEntry).toEqual({
-      url: 'apps/qrcode/helpers/math.js',
+      url: './helper.js',
       integrity: 'sha-123'
     })
-    expect(result.importUrl).toBe('https://cdn.jsdelivr.net/npm/apps/qrcode/helpers/math.js')
-    expect(result.localFilePath).toBe(path.join('/tmp/jsee-workspace', 'apps/qrcode/helpers/math.js'))
-    expect(result.remoteUrl).toBeNull()
-  })
-  test('resolves local CSS import paths', () => {
-    const result = resolveFetchImport('./styles/app.css', 'apps/demo/model.js', '/tmp')
-    expect(result.schemaImport).toBe('apps/demo/styles/app.css')
-    expect(result.localFilePath).toBe(path.join('/tmp', 'apps/demo/styles/app.css'))
+    expect(result.importUrl).toBe('./helper.js')
+    expect(result.localFilePath).toBe(path.join(tmpDir, 'src', 'helper.js'))
     expect(result.remoteUrl).toBeNull()
   })
 
-  test('keeps remote CSS imports as remote URLs', () => {
-    const result = resolveFetchImport('https://cdn.example.com/lib.css', 'model.js', '/tmp')
-    expect(result.remoteUrl).toBe('https://cdn.example.com/lib.css')
+  test('nonexistent file falls through to remote/CDN', () => {
+    const result = resolveFetchImport('dist/nope.js', 'src/model.js', tmpDir)
+
     expect(result.localFilePath).toBeNull()
+    expect(result.remoteUrl).toBe('https://cdn.jsdelivr.net/npm/dist/nope.js')
   })
 })
 

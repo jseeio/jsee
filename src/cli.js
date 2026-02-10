@@ -80,26 +80,58 @@ function getImportUrlValue (importValue) {
   return null
 }
 
+// Resolve an import path to a local file by checking candidate locations on disk.
+// Returns the absolute file path if found, null otherwise.
+// This replaces heuristic prefix detection (isLocalJsImport/isLocalCssImport) with
+// a definitive filesystem check — no heuristic can reliably distinguish bare-relative
+// local paths like "dist/core.js" from npm package subpaths like "chart.js/dist/chart.min.js".
+function resolveLocalImportFile (importUrlValue, modelUrl, cwd) {
+  if (!importUrlValue || typeof importUrlValue !== 'string') return null
+  if (isHttpUrl(importUrlValue)) return null
+
+  const modelDir = modelUrl && !isHttpUrl(modelUrl) ? path.dirname(modelUrl) : '.'
+  const candidates = []
+
+  if (importUrlValue.startsWith('./') || importUrlValue.startsWith('../')) {
+    // Explicit relative: prefer model-relative (colocated helpers), fallback to cwd
+    candidates.push(path.resolve(cwd, path.join(modelDir, importUrlValue)))
+    candidates.push(path.resolve(cwd, importUrlValue))
+  } else if (importUrlValue.startsWith('/')) {
+    // Absolute from project root
+    candidates.push(path.resolve(cwd, importUrlValue.slice(1)))
+  } else {
+    // Bare relative (dist/core.js): prefer cwd (schema-relative), fallback to model-relative
+    candidates.push(path.resolve(cwd, importUrlValue))
+    candidates.push(path.resolve(cwd, path.join(modelDir, importUrlValue)))
+  }
+
+  for (const fp of candidates) {
+    if (fs.existsSync(fp) && fs.statSync(fp).isFile()) return fp
+  }
+  return null
+}
+
 function resolveFetchImport (importValue, modelUrl, cwd) {
   const importUrlValue = getImportUrlValue(importValue)
-  if (!importUrlValue) {
-    return null
-  }
+  if (!importUrlValue) return null
   const importIsObject = importValue && typeof importValue === 'object'
 
-  if (isLocalJsImport(importUrlValue) || isLocalCssImport(importUrlValue)) {
-    const modelDir = modelUrl && !isHttpUrl(modelUrl) ? path.dirname(modelUrl) : '.'
-    const localSchemaPath = path.normalize(path.join(modelDir, importUrlValue))
-    const schemaImport = localSchemaPath.split(path.sep).join('/')
+  const localFilePath = resolveLocalImportFile(importUrlValue, modelUrl, cwd)
+
+  if (localFilePath) {
+    // Keep the raw import string as the lookup key (importUrl) so that
+    // data-src in the bundled HTML matches what the runtime's loadFromDOM
+    // will look up before getUrl transforms the path.
     return {
-      schemaImport: schemaImport,
-      schemaEntry: importIsObject ? { ...importValue, url: schemaImport } : schemaImport,
-      importUrl: toRuntimeUrl(schemaImport),
-      localFilePath: path.resolve(cwd, localSchemaPath),
+      schemaImport: importUrlValue,
+      schemaEntry: importIsObject ? { ...importValue, url: importUrlValue } : importUrlValue,
+      importUrl: importUrlValue,
+      localFilePath,
       remoteUrl: null
     }
   }
 
+  // Remote: npm package or explicit HTTP URL
   const remoteUrl = isHttpUrl(importUrlValue)
     ? importUrlValue
     : `https://cdn.jsdelivr.net/npm/${importUrlValue}`
@@ -108,7 +140,7 @@ function resolveFetchImport (importValue, modelUrl, cwd) {
     schemaEntry: importIsObject ? { ...importValue, url: importUrlValue } : importUrlValue,
     importUrl: toRuntimeUrl(importUrlValue),
     localFilePath: null,
-    remoteUrl: remoteUrl
+    remoteUrl
   }
 }
 
@@ -1053,6 +1085,7 @@ Documentation: https://jsee.org
 
 module.exports = gen
 module.exports.collectFetchBundleBlocks = collectFetchBundleBlocks
+module.exports.resolveLocalImportFile = resolveLocalImportFile
 module.exports.resolveFetchImport = resolveFetchImport
 module.exports.resolveRuntimeMode = resolveRuntimeMode
 module.exports.resolveOutputPath = resolveOutputPath

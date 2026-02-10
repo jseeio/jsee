@@ -413,8 +413,11 @@ export default class JSEE {
             imp = m.imports[i]
           }
           if (!m.type.includes('py')) {
-            imp.url = utils.getUrl(imp.url) 
-            imp.code = utils.loadFromDOM(imp.url)
+            imp.code = utils.loadFromDOM(imp.url)      // Try raw path first (matches --fetch data-src)
+            imp.url = utils.getUrl(imp.url)             // Resolve to absolute URL for network/worker
+            if (!imp.code) {
+              imp.code = utils.loadFromDOM(imp.url)     // Fallback: resolved URL (legacy compat)
+            }
           }
         }
       }
