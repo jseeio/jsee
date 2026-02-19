@@ -1,0 +1,18 @@
+<html>
+  <div id="jsee-container">
+  <script src="/dist/jsee.js"></script>
+  <script>
+    new JSEE({
+      schema: {
+        model: {
+          worker: false,
+          code: ({ a, b }) => ({ sum: Number(a) + Number(b) })
+        },
+        inputs: [
+          { name: 'a', type: 'int', default: 100 },
+          { name: 'b', type: 'int', default: 42 }
+        ]
+      }
+    })
+  </script>
+</html>
