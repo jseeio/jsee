@@ -86,6 +86,33 @@ describe('Minimal examples', () => {
   })
 })
 
+describe('Arrow function as model.code', () => {
+  test('Main thread', async () => {
+    await page.goto(urlHTML('arrow-main'))
+    await expect(page).toFill('#a', '8')
+    await expect(page).toFill('#b', '7')
+    await expect(page).toClick('button', { text: 'Run' })
+    await expect(page).toMatchTextContent('15')
+  })
+  test('Worker', async () => {
+    await page.goto(urlHTML('arrow-worker'))
+    await expect(page).toFill('#a', '8')
+    await expect(page).toFill('#b', '7')
+    await expect(page).toClick('button', { text: 'Run' })
+    await expect(page).toMatchTextContent('15')
+  })
+})
+
+describe('Runtime build (jsee.runtime.js)', () => {
+  test('Arrow function in worker', async () => {
+    await page.goto(urlHTML('runtime-arrow'))
+    await expect(page).toFill('#a', '8')
+    await expect(page).toFill('#b', '7')
+    await expect(page).toClick('button', { text: 'Run' })
+    await expect(page).toMatchTextContent('15')
+  })
+})
+
 describe('Load code directly', () => {
   test('Window', async () => {
     await page.goto(urlHTML('code'))

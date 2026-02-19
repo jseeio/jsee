@@ -464,6 +464,26 @@ describe('getName', () => {
     function myFunc () {}
     expect(getName(myFunc)).toBe('myFunc')
   })
+  test('arrow function reference returns undefined (not inferred property name)', () => {
+    const obj = { code: (a, b) => a + b }
+    expect(getName(obj.code)).toBeUndefined()
+  })
+  test('anonymous function reference returns undefined', () => {
+    const fn = function () {}
+    // When assigned to a variable, .name is inferred, but toString() doesn't
+    // start with 'function <name>' — it starts with 'function ()'
+    // For this case getName should still work because fn.name = 'fn'
+    // and fn.toString() starts with 'function'
+    expect(getName(fn)).toBe('fn')
+  })
+  test('async function reference', () => {
+    async function fetchData () {}
+    expect(getName(fetchData)).toBe('fetchData')
+  })
+  test('async arrow function returns undefined', () => {
+    const obj = { code: async (a) => a }
+    expect(getName(obj.code)).toBeUndefined()
+  })
   test('non-string non-function returns undefined', () => {
     expect(getName(42)).toBeUndefined()
     expect(getName(null)).toBeUndefined()

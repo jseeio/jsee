@@ -775,7 +775,15 @@ function debounce (fn, ms) {
 function getName (code) {
   switch (typeof code) {
     case 'function':
-      return code.name
+      if (!code.name) return undefined
+      // Arrow functions get an inferred .name from property assignment
+      // (e.g. { code: (a) => a } → code.name === "code") which is misleading.
+      // Only trust .name when toString() confirms a real named declaration.
+      const src = code.toString().trimStart()
+      if (src.startsWith('function') || src.startsWith('async function')) {
+        return code.name
+      }
+      return undefined
     case 'string':
       const words = code.split(' ')
       const functionIndex = words.findIndex((word) => word === 'function')
