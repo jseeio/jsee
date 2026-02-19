@@ -5,3 +5,5 @@ tmp/
 example/
 *.swp
 npm-debug.log
+*.dump.txt
+dump.sh
