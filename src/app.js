@@ -231,7 +231,9 @@ function createVueApp (env, mountedCallback, logMain) {
     app.use(window[framework])
   }
 
-  return app.mount(container) // After app.mount() it's not the same app
+  const component = app.mount(container) // After app.mount() it's not the same app
+  component.__vueApp = app
+  return component
 }
 
 export { createVueApp }

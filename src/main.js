@@ -152,6 +152,7 @@ export default class JSEE {
     this.__version__ = VERSION
     this.cancelled = false
     this._cancelWorkerRun = null
+    this._workers = []
 
     // Check if schema is provided
     if (typeof this.schema === 'undefined') {
@@ -171,7 +172,7 @@ export default class JSEE {
       }
     }
 
-    this.init()
+    this._initPromise = this.init()
   }
 
   log (...args) {
@@ -192,6 +193,35 @@ export default class JSEE {
 
   isCancelled () {
     return this.cancelled === true
+  }
+
+  destroy () {
+    log('Destroying JSEE instance')
+    // Cancel any running computation
+    this.cancelCurrentRun()
+    // Terminate all workers
+    this._workers.forEach(w => {
+      try { w.terminate() } catch (e) { /* ignore */ }
+    })
+    this._workers = []
+    // Unmount Vue app
+    if (this.app && this.app.__vueApp) {
+      this.app.__vueApp.unmount()
+    }
+    // Clean up overlay
+    if (this.overlay) {
+      this.overlay.hide()
+    }
+    // Remove progress bar
+    const progress = document.querySelector('#progress')
+    if (progress) progress.remove()
+    // Null out references
+    this.app = null
+    this.data = null
+    this.pipeline = null
+    this.model = null
+    this.schema = null
+    this._cancelWorkerRun = null
   }
 
   progress (i) {
@@ -581,6 +611,7 @@ export default class JSEE {
   async initWorker (model) {
     // Init worker
     const worker = new Worker()
+    this._workers.push(worker)
 
     // Init worker with the model
     if (typeof model.code === 'function') {
