@@ -614,6 +614,55 @@ test.describe('Output tabs (group style: tabs)', () => {
   })
 })
 
+test.describe('Per-input reactive', () => {
+  test('reactive slider triggers auto-run on change', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { result: 'VAL:' + data.x } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'slider', min: 0, max: 100, step: 1, default: 50, reactive: true }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    // Change slider value — should auto-run without clicking Run
+    const slider = page.locator('#x')
+    await slider.evaluate((el) => {
+      el.value = 75
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await expect(page.locator('body')).toContainText('VAL:75')
+  })
+
+  test('non-reactive slider does not auto-run', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { result: 'VAL:' + data.x } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'slider', min: 0, max: 100, step: 1, default: 50 }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    const slider = page.locator('#x')
+    await slider.evaluate((el) => {
+      el.value = 75
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    // Should NOT auto-run — no output yet
+    await page.waitForTimeout(500)
+    const body = await page.locator('body').textContent()
+    expect(body).not.toContain('VAL:')
+    // Only runs after clicking Run
+    await page.click('button:has-text("Run")')
+    await expect(page.locator('body')).toContainText('VAL:75')
+  })
+})
+
 test.describe('File output', () => {
   test('renders download button', async ({ page }) => {
     const schema = {
