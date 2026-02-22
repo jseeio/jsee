@@ -772,6 +772,11 @@ describe('getUrlParam', () => {
     const params = makeParams({ file: 'direct', f: 'alias' })
     expect(getUrlParam(params, { name: 'file', alias: 'f' })).toBe('direct')
   })
+
+  test('returns null when input has no name', () => {
+    const params = makeParams({ x: '1' })
+    expect(getUrlParam(params, { type: 'group' })).toBeNull()
+  })
 })
 
 describe('coerceParam', () => {
