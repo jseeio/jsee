@@ -177,6 +177,7 @@ Extra blocks can be provided for further customization:
   - `display` (string) — Filtrex expression to conditionally show/hide this input. Evaluated against current input values. E.g. `"display": "mode == 'advanced'"` shows the input only when `mode` is `"advanced"`. Supports `len()` for string length
   - `reactive` (boolean) — Trigger a model run when this input changes (see **Execution triggers** below)
   - `disabled` (boolean) — Disables the input in the UI. When combined with `reactive: true`, triggers an initial model run on page load (useful for server-populated values)
+  - `enter` (boolean) — If `true` on a `string` input, pressing Enter triggers a model run (useful for chat or search inputs)
   - `raw` (boolean, file input only) — If `true`, pass the raw source to the model instead of reading text in the UI (`File` object for disk files or `{ kind: 'url', url: '...' }` for URL input)
   - `stream` (boolean, file input only) — If `true`, pass an async iterable `ChunkedReader` to the model instead of raw source handles. Supports `for await (const chunk of reader)`, `await reader.text()`, `await reader.bytes()`, and `for await (const line of reader.lines())`. Works in both main-thread and worker execution. Reader metadata (`reader.name`, `reader.size`, `reader.type`) is preserved and remains available in downstream pipeline models
   - URL params for file inputs (e.g. `?file=https://...`) auto-load on init, so bookmarkable links run without an extra Load click
@@ -190,6 +191,7 @@ Extra blocks can be provided for further customization:
     - `markdown` — Rendered Markdown (supports tables, headings, lists, etc.)
     - `image` — Image (`<img>` tag from data URL or URL)
     - `table` — Virtualized table with scrolling
+    - `chat` — Chat message list. Accumulates `{role, content}` messages across runs instead of replacing. Renders user/assistant bubbles with Markdown support, auto-scrolls to latest message. See **Chat mode** below
     - `group` — Group of outputs. Use `elements` array for child outputs. Supports `style: 'tabs'` for tabbed display or default blocks (stacked). Child outputs are matched by name against model results
     - `function` — Render function. Rather than returning a value, a model returns a function that JSEE will call passing the container element
     - `blank` — Blank block (can be alternative to `function` and useful for custom renderers)
@@ -206,6 +208,15 @@ Extra blocks can be provided for further customization:
   | `reactive: true` | schema | every input change | yes (300ms) |
   | `reactive: true` | input | that input changes | no |
   | `interval: N` | schema | every N ms | no |
+- **Chat mode** — declare an output with `"type": "chat"` to enable conversational UI. The runtime manages state:
+  1. User types a message in a text input and presses Run (or Enter if the input has `"enter": true`)
+  2. The runtime injects `history` (array of `{role, content}` dicts) into the model payload alongside the user's `message`
+  3. The model returns `{chat: "response string"}` (or `{chat: {role, content}}`)
+  4. The runtime appends both the user message and assistant response to the chat output's internal `_messages` array, clears the input, and auto-scrolls
+  5. Messages render with Markdown support (code blocks, bold, links, tables)
+
+  Works with both Workers (postMessage) and server POST — no special execution mode needed. Python shorthand: `jsee.serve(fn, chat=True)` auto-generates the schema from `fn(message, history) -> str`
+
 - Runtime cancellation: call `jsee.cancelCurrentRun()` on the JSEE instance to request stop of the active run. Long-running models should check `ctx.isCancelled()` and return early
 - Schema validation — JSEE validates schema structure during initialization and logs warnings for non-critical issues (e.g. unknown input types, malformed aliases)
 - `jsee.download(title)` — Downloads a self-contained HTML file that works offline. All external scripts are inlined and the schema/model/imports are cached. `title` defaults to `'output'`
@@ -284,6 +295,7 @@ Both servers normalize model return values consistently:
 | Tuple/list (Python) | `{"result": [a, b]}` |
 | Buffer/bytes | `{"result": "data:image/png;base64,..."}` |
 | PIL Image (Python) | `{"result": "data:image/png;base64,..."}` |
+| list[dict] (Python) | `{"result": {"columns": [...], "rows": [...]}}` |
 
 # Python
 
