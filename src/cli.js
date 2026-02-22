@@ -1109,7 +1109,17 @@ Documentation: https://jsee.org
   if (shouldExecute) {
     await Promise.all(schema.model.map(async m => {
       log('Preparing a model to run on the server side:', m.name, m.url)
-      const target = require(path.join(schemaPath ? path.dirname(schemaPath) : cwd, m.url))
+      const modelPath = path.join(schemaPath ? path.dirname(schemaPath) : cwd, m.url)
+      let target = require(modelPath)
+      // Handle browser-style model files (no module.exports) — eval the source
+      // to extract the named function, similar to how the worker does it
+      if (typeof target !== 'function' && (!target || Object.keys(target).length === 0)) {
+        const src = fs.readFileSync(modelPath, 'utf-8')
+        const fn = new Function(src + `\nreturn typeof ${m.name} === 'function' ? ${m.name} : undefined`)()
+        if (typeof fn === 'function') {
+          target = fn
+        }
+      }
       modelFuncs[m.name] = await getModelFuncJS(m, target, {log})
       m.type = 'post'
       m.url = `/${m.name}`

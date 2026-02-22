@@ -10,3 +10,6 @@ npm-debug.log
 dump.sh
 test-results/
 playwright-report/
+references/
+py/references/
+py/jsee/static/

@@ -999,6 +999,14 @@ export default class JSEE {
 
     log('[Output] Got output results of type:', typeof res)
 
+    // Normalize primitive results to {result: value} for consistent rendering
+    // regardless of execution mode (browser worker vs server POST)
+    if ((typeof res !== 'object' || res === null) && !Array.isArray(res)) {
+      if (!(this.schema.outputs && this.schema.outputs.length)) {
+        res = { result: res }
+      }
+    }
+
     const inputNames = this.schema.inputs ? this.schema.inputs.map(i => i.name) : []
     log('Input names:', inputNames)
 
