@@ -114,6 +114,26 @@
   display: flex;
   gap: 8px;
 }
+.jsee-tabs-header {
+  display: flex;
+  border-bottom: 2px solid var(--jsee-border, #e0e0e0);
+  margin-bottom: 8px;
+}
+.jsee-tab-btn {
+  padding: 6px 14px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--jsee-text-secondary, #666);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+}
+.jsee-tab-btn.active {
+  color: var(--jsee-primary, #00d1b2);
+  border-bottom-color: var(--jsee-primary, #00d1b2);
+}
+.jsee-tab-btn:hover { color: var(--jsee-text, #333); }
 </style>
 
 <template>
@@ -294,11 +314,36 @@
   </div>
 
   <div class="jsee-field" v-if="input.type == 'group'">
-    <div class="jsee-accordion-header" v-if="input.label || input.collapsed !== undefined" v-on:click="toggleCollapsed">
-      <span class="jsee-accordion-arrow" v-bind:class="{ collapsed: collapsed }"></span>
-      <strong>{{ input.label || input.name }}</strong>
+    <!-- Accordion -->
+    <div v-if="effectiveStyle === 'accordion'">
+      <div class="jsee-accordion-header" v-on:click="toggleCollapsed">
+        <span class="jsee-accordion-arrow" v-bind:class="{ collapsed: collapsed }"></span>
+        <strong>{{ input.label || input.name }}</strong>
+      </div>
+      <div class="jsee-group jsee-accordion-body" v-bind:class="{ collapsed: collapsed }" style="max-height: 2000px;">
+        <vue-input v-for="(el, index) in input.elements" v-bind:input="el"></vue-input>
+      </div>
     </div>
-    <div class="jsee-group" v-bind:class="{ 'jsee-accordion-body': input.label || input.collapsed !== undefined, collapsed: collapsed }" style="max-height: 2000px;">
+    <!-- Tabs -->
+    <div v-else-if="effectiveStyle === 'tabs'">
+      <div class="jsee-tabs-header">
+        <button v-for="(el, ti) in input.elements" :key="ti"
+          class="jsee-tab-btn" :class="{ active: activeTab === ti }"
+          v-on:click="activeTab = ti">
+          {{ el.label || el.name || 'Tab ' + (ti + 1) }}
+        </button>
+      </div>
+      <div class="jsee-tabs-body">
+        <div v-for="(el, ti) in input.elements" :key="ti" v-show="activeTab === ti">
+          <template v-if="el.type === 'group'">
+            <vue-input v-for="(child, ci) in el.elements" :key="ci" :input="child"></vue-input>
+          </template>
+          <vue-input v-else :input="el"></vue-input>
+        </div>
+      </div>
+    </div>
+    <!-- Blocks (default) -->
+    <div v-else class="jsee-group">
       <vue-input v-for="(el, index) in input.elements" v-bind:input="el"></vue-input>
     </div>
   </div>

@@ -497,3 +497,150 @@ test.describe('Dark theme', () => {
     expect(theme).toBeNull()
   })
 })
+
+test.describe('Input tabs (group style: tabs)', () => {
+  test('renders tab buttons and switches content', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return data }`,
+        autorun: false
+      },
+      inputs: [
+        {
+          type: 'group',
+          style: 'tabs',
+          elements: [
+            {
+              name: 'Basic',
+              type: 'group',
+              elements: [
+                { name: 'x', type: 'int', default: 10 }
+              ]
+            },
+            {
+              name: 'Advanced',
+              type: 'group',
+              elements: [
+                { name: 'threshold', type: 'slider', min: 0, max: 100, step: 1, default: 50 }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    // Tab buttons should be visible
+    await expect(page.locator('.jsee-tab-btn').first()).toContainText('Basic')
+    await expect(page.locator('.jsee-tab-btn').nth(1)).toContainText('Advanced')
+    // First tab active by default — its input visible
+    await expect(page.locator('#x')).toBeVisible()
+    // Second tab content hidden
+    await expect(page.locator('#threshold')).not.toBeVisible()
+    // Click second tab
+    await page.locator('.jsee-tab-btn').nth(1).click()
+    await expect(page.locator('#threshold')).toBeVisible()
+    await expect(page.locator('#x')).not.toBeVisible()
+  })
+
+  test('inner tab input values are included in model data', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { result: 'X:' + data.Basic.x + ':T:' + data.Advanced.threshold } }`,
+        autorun: false
+      },
+      inputs: [
+        {
+          type: 'group',
+          style: 'tabs',
+          elements: [
+            {
+              name: 'Basic',
+              type: 'group',
+              elements: [
+                { name: 'x', type: 'int', default: 42 }
+              ]
+            },
+            {
+              name: 'Advanced',
+              type: 'group',
+              elements: [
+                { name: 'threshold', type: 'slider', min: 0, max: 100, step: 1, default: 75 }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    await page.click('button:has-text("Run")')
+    await expect(page.locator('body')).toContainText('X:42:T:75')
+  })
+})
+
+test.describe('Output tabs (group style: tabs)', () => {
+  test('renders tab buttons and switches output content', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { summary: '# Hello', raw: 'RAW_DATA' } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 1 }
+      ],
+      outputs: [
+        {
+          type: 'group',
+          style: 'tabs',
+          elements: [
+            { name: 'summary', type: 'markdown' },
+            { name: 'raw', type: 'code' }
+          ]
+        }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    await page.click('button:has-text("Run")')
+    // Tab buttons visible
+    await expect(page.locator('.jsee-tab-btn').first()).toContainText('summary')
+    await expect(page.locator('.jsee-tab-btn').nth(1)).toContainText('raw')
+    // First tab active — markdown rendered
+    await expect(page.locator('h1')).toContainText('Hello')
+    // Click second tab
+    await page.locator('.jsee-tab-btn').nth(1).click()
+    await expect(page.locator('body')).toContainText('RAW_DATA')
+  })
+})
+
+test.describe('Output group blocks', () => {
+  test('renders all outputs stacked', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { out1: 'FIRST', out2: 'SECOND' } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 1 }
+      ],
+      outputs: [
+        {
+          type: 'group',
+          elements: [
+            { name: 'out1', type: 'code' },
+            { name: 'out2', type: 'code' }
+          ]
+        }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    await page.click('button:has-text("Run")')
+    // Both outputs visible at once (blocks mode, no tabs)
+    await expect(page.locator('body')).toContainText('FIRST')
+    await expect(page.locator('body')).toContainText('SECOND')
+    // No tab buttons should exist
+    await expect(page.locator('.jsee-tab-btn')).toHaveCount(0)
+  })
+})

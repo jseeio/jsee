@@ -929,6 +929,7 @@ function coerceParam (value, type, name) {
 
 // Extract URL parameter value for an input, checking name, sanitized name, and aliases
 function getUrlParam (urlParams, input) {
+  if (!input.name) return null
   if (urlParams.has(input.name)) return urlParams.get(input.name)
   if (urlParams.has(sanitizeName(input.name))) return urlParams.get(sanitizeName(input.name))
   if (!input.alias) return null

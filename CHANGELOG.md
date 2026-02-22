@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.1
+### Features:
+- Add `style` property to `group` input type: `blocks` (default flat list), `accordion` (collapsible), `tabs` (tabbed view)
+- Add `group` output type with `tabs` and `blocks` display styles for organizing outputs
+- Unnamed top-level input groups now flatten child values into the top-level input object
+### Bug fixes:
+- Fix crash when a top-level input has no `name` (e.g. layout-only group) — `getUrlParam` now guards against undefined names
+
 ## 0.5.0
 ### Breaking:
 - Remove Bulma dependency — the minimal (framework-free) theme is now the default. `design.framework: 'bulma'` still works as a backward-compatible alias for `'minimal'`. Bundle size reduced by ~50% (224 KB removed)

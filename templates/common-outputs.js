@@ -21,13 +21,14 @@ const component = {
     return {
       outputName: 'output',
       isFullScreen: false,
+      activeOutputTab: 0,
     }
   },
   mounted() {
-    this.outputName = this.output.alias 
+    this.outputName = this.output.alias
       ? this.output.alias
       : this.output.name
-        ? sanitizeName(this.output.name) 
+        ? sanitizeName(this.output.name)
         : 'output_' + Math.floor(Math.random() * 1000000)
     this.executeRenderFunction()
     document.addEventListener('fullscreenchange', this.onFullScreenChange)

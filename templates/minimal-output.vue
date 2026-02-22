@@ -64,10 +64,51 @@
 .is-fullscreen .jsee-output-body, .is-fullscreen .custom-container {
   height: 100% !important;
 }
+.jsee-tabs-header {
+  display: flex;
+  border-bottom: 2px solid var(--jsee-border, #e0e0e0);
+  margin-bottom: 8px;
+}
+.jsee-tab-btn {
+  padding: 6px 14px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--jsee-text-secondary, #666);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+}
+.jsee-tab-btn.active {
+  color: var(--jsee-primary, #00d1b2);
+  border-bottom-color: var(--jsee-primary, #00d1b2);
+}
+.jsee-tab-btn:hover { color: var(--jsee-text, #333); }
 </style>
 
 <template>
+  <!-- Group output: no card wrapper, children render as separate vue-output -->
+  <div v-if="output.type === 'group'" :id="outputName">
+    <template v-if="output.style === 'tabs'">
+      <div class="jsee-tabs-header">
+        <button v-for="(el, ti) in output.elements" :key="ti"
+          class="jsee-tab-btn" :class="{ active: activeOutputTab === ti }"
+          v-on:click="activeOutputTab = ti">
+          {{ el.name || 'Tab ' + (ti + 1) }}
+        </button>
+      </div>
+      <div v-for="(el, ti) in output.elements" :key="ti" v-show="activeOutputTab === ti">
+        <vue-output :output="el" v-on:notification="$emit('notification', $event)"></vue-output>
+      </div>
+    </template>
+    <template v-else>
+      <vue-output v-for="(el, ti) in output.elements" :key="ti"
+        :output="el" v-on:notification="$emit('notification', $event)"></vue-output>
+    </template>
+  </div>
+  <!-- Regular output: card wrapper -->
   <div
+    v-else
     class="jsee-output-card"
     v-show="!(typeof output.value === 'undefined')"
     :class="{ 'is-fullscreen': isFullScreen }"

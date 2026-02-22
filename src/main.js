@@ -831,6 +831,13 @@ export default class JSEE {
         // Skip buttons
         if (input.name && !(input.type == 'action' || input.type == 'button')) {
           inputValues[input.name] = getValue(input)
+        } else if (input.type === 'group' && !input.name && input.elements) {
+          // Unnamed groups (e.g. tabs layout): flatten children into top-level
+          input.elements.forEach(el => {
+            if (el.name) {
+              inputValues[el.name] = getValue(el)
+            }
+          })
         }
       })
       // Add caller to input values so we can change model behavior based on it
@@ -883,6 +890,22 @@ export default class JSEE {
     await utils.delay(1)
   }
 
+  _mapResultsToOutputs (outputs, res) {
+    outputs.forEach(output => {
+      if (output.type === 'group' && output.elements) {
+        this._mapResultsToOutputs(output.elements, res)
+      } else {
+        const r = res[output.name]
+          || res[utils.sanitizeName(output.name)]
+          || (output.alias && res[output.alias])
+        if (typeof r !== 'undefined') {
+          log(`Updating output: ${output.name} with data: ${typeof r}`)
+          output.value = r
+        }
+      }
+    })
+  }
+
   output (res) {
     // Edge case: no output field with reactivity is handled — undefined results exit early
 
@@ -925,16 +948,7 @@ export default class JSEE {
       } else if (this.data.outputs && this.data.outputs.length) {
         // Update outputs from results
         log('Updating outputs from results with keys:', Object.keys(res))
-        this.data.outputs.forEach((output, i) => {
-          // try output.name, sanitized output.name, output.alias
-          const r = res[output.name] 
-            || res[utils.sanitizeName(output.name)] 
-            || (output.alias && res[output.alias])
-          if (typeof r !== 'undefined') {
-            log(`Updating output: ${output.name} with data: ${typeof r}`)
-            output.value = r
-          }
-        })
+        this._mapResultsToOutputs(this.data.outputs, res)
       } else if (!this.schema.render && !this.schema.view) {
         // There's no render or view defined in the schema, also:
         // No outputs defined, create outputs from results

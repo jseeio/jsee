@@ -166,7 +166,10 @@ Extra blocks can be provided for further customization:
     - `toggle` — Toggle switch (boolean)
     - `date` — Date picker
     - `multi-select` — Checkbox group, returns array of selected `options`
-    - `group` — Group of inputs. Use `elements` array for child inputs. Supports collapsible accordion via `collapsed: true` and `label`
+    - `group` — Group of inputs. Use `elements` array for child inputs. Supports three display styles via `style` property:
+      - `blocks` (default) — flat list of child inputs
+      - `accordion` — collapsible section (also triggered by `collapsed` or `label` props)
+      - `tabs` — tabbed view where each child element becomes a tab (child groups use their `name`/`label` as tab label)
     - `file` — File Input
     - `action` or `button` — Button (its `name` will be passed as a `caller` to the model)
   - `default` — Default value
@@ -186,6 +189,7 @@ Extra blocks can be provided for further customization:
     - `markdown` — Rendered Markdown (supports tables, headings, lists, etc.)
     - `image` — Image (`<img>` tag from data URL or URL)
     - `table` — Virtualized table with scrolling
+    - `group` — Group of outputs. Use `elements` array for child outputs. Supports `style: 'tabs'` for tabbed display or default blocks (stacked). Child outputs are matched by name against model results
     - `function` — Render function. Rather than returning a value, a model returns a function that JSEE will call passing the container element
     - `blank` — Blank block (can be alternative to `function` and useful for custom renderers)
 - `examples` — List of examples
