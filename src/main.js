@@ -124,10 +124,6 @@ function collectStreamInputConfig (inputs, config={}) {
   return config
 }
 
-function getFunctionContainer (target) {
-  // Check if the number of parameters is > 1, then 'args'
-}
-
 export default class JSEE {
   constructor (params, alt1, alt2) {
     // Check if JSEE was initialized with args rather than with a params object
