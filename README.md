@@ -43,6 +43,28 @@ Run `jsee --help` for all CLI options.
 ```
 The full bundle adds `chart`, `3d`, `map`, and `pdf` output types out of the box. The core bundle stays lightweight (~97KB gzip) — you can still use these output types by loading the libraries manually via schema `imports`. The CLI and Python server auto-select the right bundle based on schema output types.
 
+## Quick start
+
+Scaffold a new project with `jsee init`:
+
+```bash
+npx @jseeio/jsee init            # minimal: schema.json + model.js + README.md
+npx @jseeio/jsee init chat       # chat template
+npx @jseeio/jsee init --html     # single index.html with CDN script
+```
+
+Python:
+```bash
+jsee init                         # schema.json + model.py + README.md
+jsee init chat                    # chat template
+```
+
+Then start the dev server:
+```bash
+npx @jseeio/jsee schema.json     # Node (auto server-side execution)
+jsee schema.json                  # Python
+```
+
 ## Inputs and outputs
 
 JSEE works best with functional tasks and one-way flow from inputs to outputs (i.e., inputs → processing → outputs). You can also extend it to more complex scenarios, like inputs → preprocessing → updated inputs → processing → outputs or inputs → processing → outputs → custom renderer. Even though many computational tasks have a functional form, some problems require more complex interactions between a user interface and code. For such cases, JSEE is probably too constrained. That makes it not as universal as R's [shiny](https://shiny.rstudio.com/) or Python's [streamlit](https://streamlit.io/).
@@ -270,31 +292,156 @@ Extra blocks can be provided for further customization:
 
 JSEE is a reactive branch of [StatSim](https://statsim.com)'s [Port](https://github.com/statsim/port). It's still work in progress. Expect API changes.
 
-# CLI
+# CLI — Node.js
 
-- `--inputs`, `-i` — Input schema JSON file (default: `schema.json`)
-- `--outputs`, `-o` — Output file path(s), comma-separated (HTML, JSON, or both)
-- `--description`, `-d` — Markdown file to include as app description
-- `--port`, `-p` — Dev server port (default: `3000`)
-- `--version`, `-v` — JSEE runtime version (`latest`, `dev`, or semver)
-- `--fetch`, `-f` — Bundle everything into a single offline HTML: fetches the JSEE runtime, reads `model`/`view`/`render` code from disk, and resolves imports. Local files are detected by checking the filesystem (so bare paths like `dist/core.js` work alongside `./relative.js`); anything not found locally is fetched from CDN. All code is stored in hidden `<script data-src="...">` elements
-- `--runtime`, `-r` — Select runtime source for generated HTML:
-  - `auto` (default): `inline` when `--fetch` is used, otherwise `cdn` for file output and `local` for dev server mode
-  - `local`: use `http://localhost:<port>/dist/...`
-  - `cdn`: use jsdelivr runtime URL
-  - `inline`: embed runtime code directly in HTML
-  - Any other value is used as a custom `<script src="...">` path/URL (e.g. `./node_modules/@jseeio/jsee/dist/jsee.js`)
-- `--cdn`, `-c` — Rewrite model URLs for CDN deployment (can be a base URL string or boolean to infer from `package.json`)
-- `--execute`, `-e` — Run models server-side (see below)
-- `--verbose` — Enable verbose logging
-- `--help`, `-h` — Show usage info
+```
+jsee [schema.json] [data...] [options]
+jsee init [template] [--html]
+```
 
-# Server-side execution
+## Commands
 
-With `--execute` (`-e`), JSEE loads each model's JS file on the server (via `require()`), rewrites the schema to point at a POST endpoint, and starts an Express server. The browser GUI sends inputs to the server, which runs the model and returns results as JSON. This is useful for models that need Node.js APIs or heavy computation that shouldn't run in the browser.
+### `jsee init [template]`
+
+Scaffold a new project. Templates: `minimal` (default), `chat`.
 
 ```bash
-jsee schema.json -e -p 3000
+jsee init                   # schema.json + model.js + README.md
+jsee init chat              # chat template
+jsee init --html            # single index.html with CDN script
+```
+
+### `jsee <schema> [data...]`
+
+Start a dev server or generate a static HTML file from a schema.
+
+```bash
+jsee schema.json                    # dev server on port 3000
+jsee schema.json -o app.html        # generate static HTML
+jsee schema.json -o app.html -f     # self-contained HTML with bundled runtime
+```
+
+## Options
+
+| Flag | Description |
+|---|---|
+| `-i, --inputs <file>` | Input schema JSON file (default: `schema.json`) |
+| `-o, --outputs <file>` | Output file path(s), comma-separated (HTML, JSON) |
+| `-d, --description <file>` | Markdown file to include as app description |
+| `-p, --port <number>` | Dev server port (default: `3000`) |
+| `-v, --version <version>` | JSEE runtime version (`latest`, `dev`, or semver) |
+| `-f, --fetch` | Bundle runtime + all deps into a single offline HTML |
+| `-e, --execute` | Run models server-side (auto-enabled when serving local .js models) |
+| `--client` | Force client-side execution (disable auto server-side) |
+| `-c, --cdn <url\|bool>` | Rewrite model URLs for CDN deployment |
+| `-r, --runtime <mode>` | Runtime source: `auto\|local\|cdn\|inline` or a custom URL/path |
+| `--verbose` | Enable verbose logging |
+| `--help, -h` | Show usage info |
+
+### `--fetch`
+
+Bundles everything into a single offline HTML: the JSEE runtime, model/view/render code, and all imports are stored in hidden `<script data-src="...">` elements. Local files are detected by checking the filesystem (so bare paths like `dist/core.js` work alongside `./relative.js`); anything not found locally is fetched from CDN.
+
+### `--runtime`
+
+Select the runtime source for generated HTML:
+- `auto` (default): `inline` when `--fetch`, otherwise `cdn` for file output and `local` for dev server
+- `local`: `http://localhost:<port>/dist/...`
+- `cdn`: jsdelivr CDN URL
+- `inline`: embed runtime code directly in HTML
+- Any other value is used as a custom `<script src="...">` path/URL
+
+## Data inputs
+
+Positional arguments after the schema file and named `--key=value` arguments are mapped to schema inputs. Values are auto-detected:
+
+| Value | Detected as |
+|---|---|
+| `42`, `3.14` | Number |
+| `'[1,2,3]'`, `'{"a":1}'` | JSON (array or object) |
+| `data.csv` (existing file) | File path |
+| `hello` | String |
+
+Inputs set from the CLI are locked (non-editable) in the GUI and used as defaults for server-side execution.
+
+```bash
+# Positional — mapped to inputs in schema order
+jsee schema.json 42 hello
+
+# Named — matched by input name
+jsee schema.json --a=100 --b=200
+
+# File path
+jsee schema.json data.csv
+
+# Mixed
+jsee schema.json data.csv --format=json
+```
+
+## Server-side execution
+
+When serving (no `-o` flag), JSEE automatically enables server-side execution if all models point to local `.js` files. Use `--client` to force browser execution.
+
+```bash
+jsee schema.json              # auto server-side (local .js models)
+jsee schema.json --client     # force browser execution
+jsee schema.json -e -p 3000   # explicit server-side on port 3000
+```
+
+## Serve bar
+
+When serving, a top bar appears with the server address, a Save HTML button, and (when server-side execution is active) a Browser/Server toggle to switch execution mode. Input values are preserved across the switch via localStorage. The serve bar is not included in generated output files or saved bundles.
+
+# CLI — Python
+
+```
+jsee <target> [function] [data...] [options]
+jsee init [template]
+```
+
+## Commands
+
+### `jsee init [template]`
+
+Scaffold a new project. Templates: `minimal` (default), `chat`. Generates `schema.json` + `model.py` + `README.md`.
+
+```bash
+jsee init                   # minimal template
+jsee init chat              # chat template
+```
+
+### `jsee <file.py> <function> [data...]`
+
+Serve a Python function as a web app with auto-generated GUI and REST API.
+
+```bash
+jsee example.py greet                  # serve function
+jsee example.py greet --port=8080      # custom port
+```
+
+### `jsee <schema.json>`
+
+Serve from a pre-built schema file.
+
+```bash
+jsee schema.json
+```
+
+## Options
+
+| Flag | Description |
+|---|---|
+| `--host <addr>` | Host to bind to (default: `0.0.0.0`) |
+| `--port <number>` | Port to listen on (default: `5050`) |
+
+## Data inputs
+
+Same as Node.js — positional args after the function name and `--key=value` args are mapped to function parameters. Values are auto-detected (numbers, JSON, file paths, strings). Inputs set from the CLI are locked in the GUI.
+
+```bash
+jsee example.py greet Alice 5          # positional data
+jsee example.py greet --name=Alice     # named data
+jsee schema.json 42 hello              # positional data with schema
 ```
 
 ## API endpoints
@@ -367,6 +514,27 @@ jsee.serve(calculator, port=5050)
 ```
 
 Python type hints are auto-mapped to GUI widgets: `Literal` → dropdown, `Annotated[float, jsee.Slider()]` → slider, `bool` → checkbox, `Enum` → dropdown. See [`py/README.md`](py/README.md) for full Python documentation.
+
+## WSGI deployment
+
+For production deployment, use `create_app()` to get a standard WSGI application:
+
+```python
+# app.py
+import jsee
+
+def multiply(x: float = 5) -> dict:
+    return {'result': x * 2}
+
+app = jsee.create_app(multiply)
+```
+
+Deploy with gunicorn, uWSGI, or any WSGI server:
+```bash
+gunicorn app:app
+```
+
+`create_app()` accepts the same arguments as `serve()` — functions, dicts, or schema.json paths. Note: SSE streaming is not supported in basic WSGI.
 
 # Changelog
 

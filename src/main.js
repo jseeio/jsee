@@ -1118,6 +1118,9 @@ export default class JSEE {
       console.error('Error removing GA script tags:', error.message)
     }
 
+    // Remove serve bar (bundled HTML is standalone, no server)
+    try { clone.getElementById('jsee-serve-bar')?.remove() } catch (e) {}
+
     console.log('Caching schema:', this.schema)
     storeInHiddenElement(this.schemaUrl, this.schema)
 

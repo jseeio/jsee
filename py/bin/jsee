@@ -3,27 +3,156 @@
 import argparse
 import importlib
 import importlib.util
+import json
 import os
 import sys
 
 import jsee
 
 
+# ── jsee init <template> ────────────────────────────────────────────
+if len(sys.argv) >= 2 and sys.argv[1] == 'init':
+  tpl = sys.argv[2] if len(sys.argv) >= 3 else 'minimal'
+  cwd = os.getcwd()
+
+  if tpl == 'chat':
+    files = {
+      'schema.json': json.dumps({
+        'model': {'url': 'model.py', 'name': 'chat', 'type': 'post'},
+        'inputs': [{'name': 'message', 'type': 'string', 'enter': True}],
+        'outputs': [{'name': 'chat', 'type': 'chat'}]
+      }, indent=2) + '\n',
+      'model.py': '''def chat(message='', history=None):
+    return {'chat': 'You said: ' + message}
+''',
+      'README.md': '''# Chat
+
+A chat app built with [JSEE](https://jsee.org).
+
+## Run
+
+```bash
+jsee schema.json
+```
+'''
+    }
+  else:
+    # minimal (default)
+    files = {
+      'schema.json': json.dumps({
+        'model': {'url': 'model.py', 'name': 'greet', 'type': 'post'},
+        'inputs': [
+          {'name': 'name', 'type': 'string', 'default': 'World'},
+          {'name': 'count', 'type': 'slider', 'min': 1, 'max': 10, 'default': 3}
+        ],
+        'outputs': [{'name': 'greeting', 'type': 'code'}]
+      }, indent=2) + '\n',
+      'model.py': '''def greet(name='World', count=3):
+    return {'greeting': (name + '\\n') * count}
+''',
+      'README.md': '''# My App
+
+A web app built with [JSEE](https://jsee.org).
+
+## Run
+
+```bash
+jsee schema.json
+```
+'''
+    }
+
+  created = 0
+  for filename, content in files.items():
+    dest = os.path.join(cwd, filename)
+    if os.path.exists(dest):
+      print(f'{filename} already exists, skipping')
+    else:
+      with open(dest, 'w') as f:
+        f.write(content)
+      print(f'Created {filename}')
+      created += 1
+
+  if created == 0:
+    print('All files already exist, nothing to do')
+
+  sys.exit(0)
+
+
+def detect_arg_value(value):
+  """Auto-detect value type: number, JSON, file path, or string."""
+  if not isinstance(value, str):
+    return value
+  # Number
+  try:
+    if '.' in value:
+      return float(value)
+    return int(value)
+  except ValueError:
+    pass
+  # JSON array or object
+  if value.startswith('[') or value.startswith('{'):
+    try:
+      return json.loads(value)
+    except (json.JSONDecodeError, ValueError):
+      pass
+  # File path
+  if os.path.isfile(value):
+    return value
+  return value
+
+
 parser = argparse.ArgumentParser(
-  description='JSEE — turn Python functions into web apps with GUI and REST API'
+  description='JSEE — turn Python functions into web apps with GUI and REST API',
+  epilog='''data inputs:
+  Extra positional args after function name are mapped to function params in order.
+  Extra --key=value args are matched by parameter name.
+  Values are auto-detected: numbers, JSON arrays/objects, file paths, or strings.
+  Inputs set from the CLI are locked (non-editable) in the GUI.
+
+examples:
+  jsee example.py greet                    Serve function with GUI
+  jsee example.py greet Alice 5            Pass positional data
+  jsee example.py greet --name=Alice       Pass named data
+  jsee schema.json                         Serve from schema file''',
+  formatter_class=argparse.RawDescriptionHelpFormatter
 )
 parser.add_argument('target', help='Python file with function (e.g. example.py) or schema.json')
 parser.add_argument('function', nargs='?', default=None, help='Function name (required for .py files)')
 parser.add_argument('--host', default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
 parser.add_argument('--port', type=int, default=5050, help='Port to listen on (default: 5050)')
 
-args = parser.parse_args()
+args, extra = parser.parse_known_args()
+
+# Parse extra --key=value args into defaults dict
+defaults = {}
+extra_positional = []
+for arg in extra:
+  if arg.startswith('--') and '=' in arg:
+    key, val = arg[2:].split('=', 1)
+    defaults[key] = detect_arg_value(val)
+  elif arg.startswith('--'):
+    # --key without value treated as boolean True
+    defaults[arg[2:]] = True
+  else:
+    extra_positional.append(detect_arg_value(arg))
 
 sys.path.insert(1, os.getcwd())
 
 if args.target.endswith('.json'):
-  # Schema mode
-  jsee.serve(args.target, args.host, args.port)
+  # Schema mode — apply defaults to schema inputs
+  with open(args.target, 'r') as f:
+    schema = json.load(f)
+  if schema.get('inputs') and (defaults or extra_positional):
+    for i, inp in enumerate(schema['inputs']):
+      name = inp.get('name', '')
+      if name in defaults:
+        inp['default'] = defaults[name]
+        inp['disabled'] = True
+      elif i < len(extra_positional):
+        inp['default'] = extra_positional[i]
+        inp['disabled'] = True
+  jsee.serve(schema, args.host, args.port)
 elif args.target.endswith('.py'):
   # Function mode
   if not args.function:
@@ -35,13 +164,15 @@ elif args.target.endswith('.py'):
   module = importlib.util.module_from_spec(spec)
   spec.loader.exec_module(module)
   target = getattr(module, args.function)
-  jsee.serve(target, args.host, args.port)
+  jsee.serve(target, args.host, args.port, defaults=defaults,
+             extra_positional=extra_positional)
 else:
   # Try as module name (legacy compat)
   module = importlib.import_module(args.target.split('.')[0])
   if args.function:
     target = getattr(module, args.function)
-    jsee.serve(target, args.host, args.port)
+    jsee.serve(target, args.host, args.port, defaults=defaults,
+               extra_positional=extra_positional)
   else:
     print('Error: function name required', file=sys.stderr)
     sys.exit(1)

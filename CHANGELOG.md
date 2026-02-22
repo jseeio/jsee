@@ -16,6 +16,11 @@
 - Graceful degradation: library-dependent output types show a helpful message with link when the library is not loaded, instead of crashing
 - `columnsToRows()` utility for converting column-oriented to row-oriented data
 - Schema-driven theming: `design.primary`, `design.secondary`, `design.bg`, `design.fg`, `design.font`, `design.radius` — set accent colors, background, text, font family, and border radius directly from the schema without custom CSS
+- `jsee init` command: scaffold new projects with `jsee init` (minimal) or `jsee init chat` templates. Node generates `schema.json` + `model.js` + `README.md` (or `--html` for a single `index.html`). Python generates `schema.json` + `model.py` + `README.md`
+- Server-side execution by default: when serving local `.js` models (no `-o` flag), JSEE now auto-enables server-side execution. Use `--client` to force browser execution
+- Serve bar: a top bar shown only when serving (not in `-o` output) with server address, Browser/Server execution toggle, and Save HTML button. Consistent across Node and Python servers. Stripped when saving bundled HTML via Save or `download()`
+- Python `create_app()`: WSGI factory function for production deployment with gunicorn, uWSGI, etc. Same target resolution as `serve()`. Routes: GET /, GET /api, GET /api/openapi.json, GET /static/jsee.js, static files, POST model endpoints
+- CLI data inputs: pass data from the command line as positional args (`jsee schema.json 42 hello`) or named args (`jsee schema.json --a=100`). Values are auto-detected (numbers, JSON, file paths, strings). CLI-set inputs are locked in the GUI. Works in both Node and Python CLIs
 
 ### Breaking changes:
 - Drop `jsee.js` build (Vue template compiler). Only two bundles now: `jsee.core.js` and `jsee.full.js`. The `design.template` schema option is no longer supported — use the default render function instead

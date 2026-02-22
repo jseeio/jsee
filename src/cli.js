@@ -36,6 +36,22 @@ function toArray (value) {
   return Array.isArray(value) ? value : [value]
 }
 
+// Auto-detect CLI argument type: file path, number, JSON array/object, or string
+function detectArgValue (value) {
+  if (typeof value === 'number') return value
+  if (typeof value === 'boolean') return value
+  if (typeof value !== 'string') return value
+  // File on disk
+  if (fs.existsSync(value) && fs.statSync(value).isFile()) return value
+  // Number
+  if (value !== '' && !isNaN(value)) return Number(value)
+  // JSON array or object
+  if (value.startsWith('[') || value.startsWith('{')) {
+    try { return JSON.parse(value) } catch (e) { /* not JSON */ }
+  }
+  return value
+}
+
 function collectFetchBundleBlocks (schema) {
   return []
     .concat(toArray(schema.model))
@@ -200,7 +216,6 @@ function getDataFromArgv (schema, argv, loadFiles=true) {
   if (schema.inputs) {
     schema.inputs.forEach(inp => {
       const inputName = sanitizeName(inp.name)
-      console.log('Processing input:', inp.name, 'as', inputName)
       if (inputName in argv) {
         switch (inp.type) {
           case 'file':
@@ -556,8 +571,7 @@ function template(schema, blocks) {
     @media screen and (min-width: 800px) { .one-half { width: calc(50% - (30px / 2)); } }
     /** Jsee elements */
     .app-container { background-color: #F0F1F4; border-bottom: 1px solid #e8e8e8; padding-bottom: 55px }
-    #download-btn { float: right; margin-top: 10px; padding: 10px; background-color: white; border: none; cursor: pointer; }
-    #download-btn:hover { background-color: #f0f0f0; }
+    #save-html-btn:hover { background-color: #f0f0f0 !important; }
     .schema-description { background-color: #f8f8fa; padding: 20px; margin-top: 20px; border-radius: 10px; border: 1px solid #e8e8e8; }
     .schema-description h2, .schema-description h3, .schema-description h4 { margin-top: 10px; }
     /** Logos */
@@ -572,10 +586,10 @@ function template(schema, blocks) {
 </head>
 <body>
   ${blocks.hiddenElementHtml}
+  ${blocks.serveBarHtml}
   <header class="site-header">
     <div class="wrapper">
       <span class="site-title">${title}</span>
-      <button id="download-btn" title="Download bundled HTML file without external dependencies to use offline">Download bundle (html)</button>
     </div>
   </header>
   <div class="page-content app-container">
@@ -611,15 +625,25 @@ function template(schema, blocks) {
   </footer>
   ${blocks.jseeHtml}
   <script>
-    const schema = ${JSON.stringify(schema, null, 2)}
-    const title = "${title}"
+    ${blocks.schemaScript}
+    var currentSchema = schemaServer || schemaClient
+    var container = document.getElementById('jsee-container')
     var env = new JSEE({
-      container: document.getElementById('jsee-container'),
-      schema
+      container: container,
+      schema: currentSchema
     })
-    document.getElementById('download-btn').addEventListener('click', async () => {
-      env.download(title)
-    })
+    var toggle = document.getElementById('exec-toggle')
+    if (toggle) {
+      toggle.addEventListener('change', function () {
+        env.destroy()
+        currentSchema = this.checked ? schemaClient : schemaServer
+        env = new JSEE({ container: container, schema: currentSchema })
+      })
+    }
+    var saveBtn = document.getElementById('save-html-btn')
+    if (saveBtn) {
+      saveBtn.addEventListener('click', function () { env.download("${title}") })
+    }
   </script>
 </body>
 </html>`
@@ -643,7 +667,7 @@ async function gen (pargv, returnHtml=false) {
     runtime: 'r',
   }
   const argvDefault = {
-    execute: false, // execute the model code on the server
+    execute: 'auto', // execute the model code on the server (auto = server-side when serving local .js models)
     fetch: false, // fetch the JSEE runtime from the CDN or local server
     inputs: 'schema.json', // default input is schema.json in the current working directory
     port: 3000, // default port for the server
@@ -655,12 +679,150 @@ async function gen (pargv, returnHtml=false) {
   let argv = minimist(pargv, {
     alias: argvAlias,
     default: argvDefault,
-    boolean: ['help', 'h'],
+    boolean: ['help', 'h', 'html', 'client'],
   })
+
+  // ── jsee init <template> ──────────────────────────────────────────
+  if (argv._[0] === 'init') {
+    const tpl = argv._[1] || 'minimal'
+    const cwd = process.cwd()
+
+    if (argv.html) {
+      // Single index.html with inline schema + CDN script
+      const dest = path.join(cwd, 'index.html')
+      if (fs.existsSync(dest)) {
+        console.log('index.html already exists, skipping')
+        return
+      }
+      let htmlContent
+      if (tpl === 'chat') {
+        htmlContent = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chat</title>
+</head>
+<body>
+  <div id="jsee-container"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@latest/dist/jsee.core.js"></script>
+  <script>
+    new JSEE({
+      container: document.getElementById('jsee-container'),
+      schema: {
+        model: { code: function chat(message, history) { return { chat: 'You said: ' + message } }, worker: false },
+        inputs: [{ name: 'message', type: 'string', enter: true }],
+        outputs: [{ name: 'chat', type: 'chat' }]
+      }
+    })
+  </script>
+</body>
+</html>`
+      } else {
+        htmlContent = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My App</title>
+</head>
+<body>
+  <div id="jsee-container"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@latest/dist/jsee.core.js"></script>
+  <script>
+    new JSEE({
+      container: document.getElementById('jsee-container'),
+      schema: {
+        model: { code: function greet(name, count) { return { greeting: (name + '\\n').repeat(count) } }, worker: false },
+        inputs: [
+          { name: 'name', type: 'string', default: 'World' },
+          { name: 'count', type: 'slider', min: 1, max: 10, default: 3 }
+        ],
+        outputs: [{ name: 'greeting', type: 'code' }]
+      }
+    })
+  </script>
+</body>
+</html>`
+      }
+      fs.writeFileSync(dest, htmlContent)
+      console.log('Created index.html')
+      return
+    }
+
+    // Multi-file scaffolding
+    const files = {}
+    if (tpl === 'chat') {
+      files['schema.json'] = JSON.stringify({
+        model: { url: 'model.js', name: 'chat', worker: false },
+        inputs: [{ name: 'message', type: 'string', enter: true }],
+        outputs: [{ name: 'chat', type: 'chat' }]
+      }, null, 2) + '\n'
+      files['model.js'] = `function chat(message, history) {
+  return { chat: 'You said: ' + message }
+}
+`
+      files['README.md'] = `# Chat
+
+A chat app built with [JSEE](https://jsee.org).
+
+## Run
+
+\`\`\`bash
+npx @jseeio/jsee schema.json
+\`\`\`
+`
+    } else {
+      // minimal (default)
+      files['schema.json'] = JSON.stringify({
+        model: { url: 'model.js', name: 'greet' },
+        inputs: [
+          { name: 'name', type: 'string', default: 'World' },
+          { name: 'count', type: 'slider', min: 1, max: 10, default: 3 }
+        ],
+        outputs: [{ name: 'greeting', type: 'code' }]
+      }, null, 2) + '\n'
+      files['model.js'] = `function greet(name, count) {
+  return { greeting: (name + '\\n').repeat(count) }
+}
+`
+      files['README.md'] = `# My App
+
+A web app built with [JSEE](https://jsee.org).
+
+## Run
+
+\`\`\`bash
+npx @jseeio/jsee schema.json
+\`\`\`
+`
+    }
+
+    let created = 0
+    for (const [filename, content] of Object.entries(files)) {
+      const dest = path.join(cwd, filename)
+      if (fs.existsSync(dest)) {
+        console.log(`${filename} already exists, skipping`)
+      } else {
+        fs.writeFileSync(dest, content)
+        console.log(`Created ${filename}`)
+        created++
+      }
+    }
+    if (created === 0) {
+      console.log('All files already exist, nothing to do')
+    }
+    return
+  }
 
   if (argv.help || argv.h) {
     console.log(`
-Usage: jsee [schema.json] [options]
+Usage: jsee [schema.json] [data...] [options]
+       jsee init [template] [--html]
+
+Commands:
+  init [template]           Scaffold a new JSEE project (templates: minimal, chat)
+    --html                  Generate a single index.html instead of separate files
 
 Options:
   -i, --inputs <file>       Input schema file (default: schema.json)
@@ -669,13 +831,26 @@ Options:
   -p, --port <number>       Dev server port (default: 3000)
   -v, --version <version>   JSEE runtime version (default: latest)
   -f, --fetch               Fetch and bundle runtime + dependencies into output
-  -e, --execute             Execute model server-side
+  -e, --execute             Execute model server-side (auto-enabled when serving local .js models)
+      --client              Force client-side execution (disable auto server-side)
   -c, --cdn <url|bool>      Rewrite model URLs for CDN deployment
   -r, --runtime <mode>      Runtime: auto|local|cdn|inline or a custom URL/path (default: auto)
       --verbose             Enable verbose logging
 
+Data inputs:
+  Positional args after the schema file are mapped to schema inputs in order.
+  Named args (--name=value) are matched to schema inputs by name.
+  Values are auto-detected: numbers, JSON arrays/objects, file paths, or strings.
+  Inputs set from the CLI are locked (non-editable) in the GUI.
+
 Examples:
+  jsee init                         Scaffold minimal project (schema.json + model.js)
+  jsee init chat                    Scaffold chat project
+  jsee init --html                  Generate single index.html
   jsee schema.json                  Start dev server with schema
+  jsee schema.json 42 hello         Pass positional data to first two inputs
+  jsee schema.json --a=100 --b=200  Pass named data inputs
+  jsee schema.json data.csv         Pass a file path as input
   jsee schema.json -o app.html      Generate static HTML file
   jsee schema.json -o app.html -f   Generate self-contained HTML with bundled runtime
   jsee -p 8080                      Start dev server on port 8080
@@ -685,8 +860,8 @@ Documentation: https://jsee.org
     return
   }
 
-  // Set argv.inputs to the first non-option argument if it exists
-  if (!imported && argv._.length > 0 && !argv.inputs) {
+  // Set argv.inputs to the first positional argument if it looks like a schema/script
+  if (!imported && argv._.length > 0 && argv.inputs === argvDefault.inputs) {
     argv.inputs = argv._[0]
   }
 
@@ -758,10 +933,15 @@ Documentation: https://jsee.org
         if (inp.alias) {
           argvAlias[inputName] = inp.alias
         }
-        // Use positional arguments as schema inputs defaults if JSEE CLI is imported
+        // Use positional arguments as schema input defaults
         if (imported && argv._.length > inp_index) {
           log('Using positional argument for input:', inputName, argv._[inp_index])
-          argvDefault[inputName] = argv._[inp_index]
+          argvDefault[inputName] = detectArgValue(argv._[inp_index])
+        } else if (!imported && argv._.length > inp_index + 1) {
+          // Skip first positional arg (schema file), map rest to inputs
+          const val = argv._[inp_index + 1]
+          log('Using positional argument for input:', inputName, val)
+          argvDefault[inputName] = detectArgValue(val)
         }
         // We don't need to duplicate defaults here, as we handle them on the frontend
         // else if (inp.default) {
@@ -804,10 +984,30 @@ Documentation: https://jsee.org
     schema.model = [schema.model]
   }
 
+  // Resolve server-side execution mode
+  const hasOutputs = Array.isArray(outputs) ? outputs.length > 0 : Boolean(outputs)
+  let shouldExecute = argv.execute
+  if (shouldExecute === 'auto') {
+    const isServing = !hasOutputs
+    if (argv.client) {
+      shouldExecute = false
+    } else if (isServing) {
+      shouldExecute = schema.model.every(m =>
+        m.url && m.url.endsWith('.js') && !isHttpUrl(m.url))
+    } else {
+      shouldExecute = false
+    }
+  } else {
+    shouldExecute = Boolean(shouldExecute)
+  }
+
+  // Store original models before execute/CDN mutations (for client-side toggle)
+  const originalModels = JSON.parse(JSON.stringify(schema.model))
+
   // Server-side execution
-  // If execute is true, we will prepare the model functions to run on the server side
+  // Prepare the model functions to run on the server side
   // Schema model will be updated with the server url and POST method
-  if (argv.execute) {
+  if (shouldExecute) {
     await Promise.all(schema.model.map(async m => {
       log('Preparing a model to run on the server side:', m.name, m.url)
       const target = require(path.join(schemaPath ? path.dirname(schemaPath) : cwd, m.url))
@@ -816,7 +1016,7 @@ Documentation: https://jsee.org
       m.url = `/${m.name}`
       m.worker = false
     }))
-  } 
+  }
   
   // Switch to CDN for model files
   if (argv.cdn) {
@@ -873,7 +1073,6 @@ Documentation: https://jsee.org
   // Generate jsee code
   let jseeHtml = ''
   let hiddenElementHtml = ''
-  const hasOutputs = Array.isArray(outputs) ? outputs.length > 0 : Boolean(outputs)
   const runtimeMode = resolveRuntimeMode(argv.runtime, argv.fetch, hasOutputs)
   if (argv.fetch) {
     // Fetch jsee code from the CDN or local server
@@ -1022,6 +1221,29 @@ Documentation: https://jsee.org
 
   }
 
+  // Build serve bar (only when serving, not for -o output)
+  let serveBarHtml = ''
+  let schemaScript = ''
+  const isServing = !hasOutputs
+  if (isServing) {
+    const toggleHtml = shouldExecute
+      ? '<label style="cursor:pointer"><input type="checkbox" id="exec-toggle" style="margin-right:4px">Browser</label>'
+      : ''
+    serveBarHtml = `<div id="jsee-serve-bar" style="background:#f8f8f8;border-bottom:1px solid #e0e0e0;padding:6px 15px;font-size:13px;color:#828282;display:flex;align-items:center;gap:16px">
+      <span style="font-family:monospace">localhost:${argv.port}</span>
+      <span style="flex:1"></span>
+      ${toggleHtml}
+      <button id="save-html-btn" style="background:none;border:1px solid #ddd;border-radius:3px;padding:3px 10px;font-size:12px;color:#555;cursor:pointer" title="Save as self-contained HTML file">Save HTML</button>
+    </div>`
+  }
+  if (shouldExecute) {
+    const clientSchema = JSON.parse(JSON.stringify(schema))
+    clientSchema.model = originalModels
+    schemaScript = `var schemaServer = ${JSON.stringify(schema, null, 2)}\n    var schemaClient = ${JSON.stringify(clientSchema, null, 2)}`
+  } else {
+    schemaScript = `var schemaServer = ${JSON.stringify(schema, null, 2)}\n    var schemaClient = null`
+  }
+
   const html = template(schema, {
     descriptionHtml: pad(descriptionHtml, 8, 1),
     descriptionTxt: descriptionTxt,
@@ -1030,6 +1252,8 @@ Documentation: https://jsee.org
     hiddenElementHtml: hiddenElementHtml,
     socialHtml: pad(socialHtml, 2, 1),
     orgHtml: pad(orgHtml, 2, 1),
+    serveBarHtml: serveBarHtml,
+    schemaScript: schemaScript,
   })
 
   if (returnHtml) {
@@ -1077,7 +1301,7 @@ Documentation: https://jsee.org
     app.get('/api/openapi.json', (req, res) => {
       res.json(generateOpenAPISpec(schema))
     })
-    if (argv.execute) {
+    if (shouldExecute) {
       // Create post endpoint for executing the model
       schema.model.forEach(m => {
         app.post(m.url, async (req, res) => {

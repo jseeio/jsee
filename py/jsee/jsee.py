@@ -59,12 +59,18 @@ TEMPLATE = """<!DOCTYPE html>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{name}</title>
   <style>
-    body {{ font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 20px; }}
-    .container {{ max-width: 1100px; margin: auto; }}
+    body {{ font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 0; }}
+    .container {{ max-width: 1100px; margin: auto; padding: 20px; }}
     h1 {{ font-weight: 300; font-size: 22px; }}
   </style>
 </head>
 <body>
+  <div id="jsee-serve-bar" style="background:#f8f8f8;border-bottom:1px solid #e0e0e0;padding:6px 15px;font-size:13px;color:#828282;display:flex;align-items:center;gap:16px">
+    <span style="font-family:monospace">{address}</span>
+    <span style="flex:1"></span>
+    <label style="color:#aaa;cursor:not-allowed" title="Server execution only"><input type="checkbox" disabled style="margin-right:4px">Browser</label>
+    <button id="save-html-btn" style="background:none;border:1px solid #ddd;border-radius:3px;padding:3px 10px;font-size:12px;color:#555;cursor:pointer" title="Save as self-contained HTML file">Save HTML</button>
+  </div>
   <div class="container">
     <h1>{name}</h1>
     <div id="jsee-container"></div>
@@ -75,6 +81,10 @@ TEMPLATE = """<!DOCTYPE html>
       container: document.getElementById('jsee-container'),
       schema: {schema_json}
     }})
+    var saveBtn = document.getElementById('save-html-btn')
+    if (saveBtn) {{
+      saveBtn.addEventListener('click', function () {{ env.download("{name}") }})
+    }}
   </script>
 </body>
 </html>"""
@@ -233,6 +243,18 @@ def generate_schema(target, host='0.0.0.0', port=5050, **kwargs):
         default = default.value
       inp['default'] = default
     inputs.append(inp)
+
+  # Apply CLI data defaults (--key=value or positional args)
+  cli_defaults = kwargs.get('defaults', {})
+  cli_positional = kwargs.get('extra_positional', [])
+  for i, inp in enumerate(inputs):
+    name = inp.get('name', '')
+    if name in cli_defaults:
+      inp['default'] = cli_defaults[name]
+      inp['disabled'] = True
+    elif i < len(cli_positional):
+      inp['default'] = cli_positional[i]
+      inp['disabled'] = True
 
   title = kwargs.get('title') or target.__name__
   description = kwargs.get('description')
@@ -523,9 +545,11 @@ def serve(target, host='0.0.0.0', port=5050, **kwargs):
 
   # Build HTML
   model_name = models[0].get('title') or models[0].get('name', 'JSEE') if models else 'JSEE'
+  display_host = 'localhost' if host == '0.0.0.0' else host
   html = TEMPLATE.format(
     name=model_name,
-    schema_json=json.dumps(schema)
+    schema_json=json.dumps(schema),
+    address='{}:{}'.format(display_host, port)
   )
   html_bytes = html.encode('utf-8')
 
@@ -657,3 +681,200 @@ def serve(target, host='0.0.0.0', port=5050, **kwargs):
     server.serve_forever()
   except KeyboardInterrupt:
     pass
+
+
+def create_app(target, **kwargs):
+  """Create a WSGI application for deployment with gunicorn, uWSGI, etc.
+
+  target can be:
+    - A Python function (schema auto-generated from type hints)
+    - A dict (pre-built JSEE schema)
+    - A string path to schema.json
+
+  Returns a WSGI callable ``app(environ, start_response)``.
+
+  Note: SSE streaming is not supported in basic WSGI.
+
+  Example::
+
+      # app.py
+      import jsee
+      app = jsee.create_app(lambda x=5: {'result': x * 2})
+      # gunicorn app:app
+  """
+  funcs = {}
+  schema_cwd = '.'
+  host = kwargs.pop('host', '0.0.0.0')
+  port = kwargs.pop('port', 5050)
+
+  if isinstance(target, str):
+    schema_cwd = os.path.dirname(os.path.abspath(target))
+    with open(target, 'r') as f:
+      schema = json.load(f)
+    funcs = _load_model_func(schema, schema_cwd)
+  elif isinstance(target, dict):
+    schema = target
+  elif callable(target):
+    schema = generate_schema(target, host, port, **kwargs)
+    if kwargs.get('chat'):
+      original_fn = target
+      def _chat_wrapper(**data):
+        result = original_fn(**data)
+        if isinstance(result, str):
+          return {'chat': result}
+        return result
+      funcs[target.__name__] = _chat_wrapper
+    else:
+      funcs[target.__name__] = target
+  else:
+    raise ValueError('target must be a function, dict, or path to schema.json')
+
+  models = schema.get('model', {})
+  if isinstance(models, dict):
+    models = [models]
+  elif not models:
+    models = []
+
+  for m in models:
+    name = m.get('name', 'model')
+    m['type'] = 'post'
+    m['url'] = '/{}'.format(name)
+    m['worker'] = False
+
+  runtime_path = _find_runtime(schema)
+  runtime_code = None
+  if runtime_path:
+    with open(runtime_path, 'r') as f:
+      runtime_code = f.read()
+
+  model_name = models[0].get('title') or models[0].get('name', 'JSEE') if models else 'JSEE'
+  display_host = 'localhost' if host == '0.0.0.0' else host
+  html = TEMPLATE.format(
+    name=model_name,
+    schema_json=json.dumps(schema),
+    address='{}:{}'.format(display_host, port)
+  )
+  html_bytes = html.encode('utf-8')
+
+  mime_types = {
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'application/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+  }
+
+  def app(environ, start_response):
+    method = environ.get('REQUEST_METHOD', 'GET')
+    path_info = environ.get('PATH_INFO', '/').rstrip('/') or '/'
+
+    if method == 'OPTIONS':
+      start_response('204 No Content', [
+        ('Access-Control-Allow-Origin', '*'),
+        ('Access-Control-Allow-Methods', 'GET, POST, OPTIONS'),
+        ('Access-Control-Allow-Headers', 'Content-Type'),
+      ])
+      return [b'']
+
+    if method == 'GET':
+      if path_info == '/':
+        start_response('200 OK', [
+          ('Content-Type', 'text/html; charset=utf-8'),
+          ('Content-Length', str(len(html_bytes))),
+        ])
+        return [html_bytes]
+
+      if path_info == '/api':
+        api_models = [{'name': m['name'], 'endpoint': m['url'], 'method': 'POST'} for m in models]
+        body = json.dumps({'schema': schema, 'models': api_models}).encode('utf-8')
+        start_response('200 OK', [
+          ('Content-Type', 'application/json; charset=utf-8'),
+          ('Content-Length', str(len(body))),
+          ('Access-Control-Allow-Origin', '*'),
+        ])
+        return [body]
+
+      if path_info == '/api/openapi.json':
+        body = json.dumps(generate_openapi_spec(schema)).encode('utf-8')
+        start_response('200 OK', [
+          ('Content-Type', 'application/json; charset=utf-8'),
+          ('Content-Length', str(len(body))),
+          ('Access-Control-Allow-Origin', '*'),
+        ])
+        return [body]
+
+      if path_info == '/static/jsee.js' and runtime_code:
+        body = runtime_code.encode('utf-8')
+        start_response('200 OK', [
+          ('Content-Type', 'application/javascript; charset=utf-8'),
+          ('Content-Length', str(len(body))),
+        ])
+        return [body]
+
+      # Static files from schema directory
+      rel = path_info.lstrip('/')
+      filepath = os.path.normpath(os.path.join(schema_cwd, rel))
+      if filepath.startswith(os.path.normpath(schema_cwd)) and os.path.isfile(filepath):
+        ext = os.path.splitext(filepath)[1].lower()
+        content_type = mime_types.get(ext, 'application/octet-stream')
+        with open(filepath, 'rb') as f:
+          body = f.read()
+        start_response('200 OK', [
+          ('Content-Type', content_type),
+          ('Content-Length', str(len(body))),
+        ])
+        return [body]
+
+      start_response('404 Not Found', [('Content-Type', 'text/plain')])
+      return [b'Not Found']
+
+    if method == 'POST':
+      model_name_req = path_info.lstrip('/')
+      if model_name_req not in funcs:
+        body = json.dumps({'error': 'Unknown model: ' + model_name_req}).encode('utf-8')
+        start_response('404 Not Found', [
+          ('Content-Type', 'application/json; charset=utf-8'),
+          ('Content-Length', str(len(body))),
+          ('Access-Control-Allow-Origin', '*'),
+        ])
+        return [body]
+
+      content_length = int(environ.get('CONTENT_LENGTH', 0) or 0)
+      raw_body = environ['wsgi.input'].read(content_length) if content_length else b'{}'
+      content_type = environ.get('CONTENT_TYPE', '')
+
+      try:
+        if 'multipart/form-data' in content_type:
+          data = _parse_multipart(content_type, raw_body)
+        else:
+          data = json.loads(raw_body)
+      except (json.JSONDecodeError, ValueError) as e:
+        body = json.dumps({'error': 'Invalid request: ' + str(e)}).encode('utf-8')
+        start_response('400 Bad Request', [
+          ('Content-Type', 'application/json; charset=utf-8'),
+          ('Content-Length', str(len(body))),
+          ('Access-Control-Allow-Origin', '*'),
+        ])
+        return [body]
+
+      try:
+        result = funcs[model_name_req](**data)
+        body = json.dumps(_serialize_result(result)).encode('utf-8')
+        start_response('200 OK', [
+          ('Content-Type', 'application/json; charset=utf-8'),
+          ('Content-Length', str(len(body))),
+          ('Access-Control-Allow-Origin', '*'),
+        ])
+        return [body]
+      except Exception as e:
+        body = json.dumps({'error': str(e)}).encode('utf-8')
+        start_response('500 Internal Server Error', [
+          ('Content-Type', 'application/json; charset=utf-8'),
+          ('Content-Length', str(len(body))),
+          ('Access-Control-Allow-Origin', '*'),
+        ])
+        return [body]
+
+    start_response('405 Method Not Allowed', [('Content-Type', 'text/plain')])
+    return [b'Method Not Allowed']
+
+  return app
