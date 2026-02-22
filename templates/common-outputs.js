@@ -4,7 +4,7 @@ import showdown from 'showdown'
 
 const { sanitizeName } = require('../src/utils.js')
 
-const mdConverter = new showdown.Converter()
+const mdConverter = new showdown.Converter({ tables: true })
 
 const Blob = window['Blob']
 

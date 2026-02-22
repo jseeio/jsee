@@ -7,3 +7,5 @@ example/
 npm-debug.log
 *.dump.txt
 dump.sh
+test-results/
+playwright-report/
