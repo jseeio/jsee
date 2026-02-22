@@ -1,0 +1,32 @@
+<html>
+  <div id="jsee-container"></div>
+  <script src="/dist/jsee.js"></script>
+  <script>
+    new JSEE({
+      schema: {
+        model: {
+          code: function (data) { return data },
+          worker: false,
+          autorun: true
+        },
+        inputs: [
+          { name: 'query', type: 'string', default: 'hello world' },
+          { name: 'limit', type: 'slider', min: 1, max: 100, default: 10 },
+          {
+            name: 'advanced',
+            type: 'group',
+            label: 'Advanced Options',
+            collapsed: true,
+            elements: [
+              { name: 'threshold', type: 'slider', min: 0, max: 1, step: 0.01, default: 0.5 },
+              { name: 'algorithm', type: 'radio', options: ['greedy', 'beam', 'sampling'], default: 'greedy' },
+              { name: 'temperature', type: 'slider', min: 0, max: 2, step: 0.1, default: 1.0 },
+              { name: 'debug', type: 'toggle', default: false }
+            ]
+          }
+        ]
+      },
+      container: '#jsee-container'
+    })
+  </script>
+</html>

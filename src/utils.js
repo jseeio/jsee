@@ -110,7 +110,8 @@ const VALID_INPUT_TYPES = [
   'radio',
   'toggle',
   'date',
-  'multi-select'
+  'multi-select',
+  'range'
 ]
 
 const VALID_MODEL_TYPES = [

@@ -84,6 +84,9 @@ function resetInputs (inputs, example) {
         case 'slider':
           input.value = input.min || 0
           break
+        case 'range':
+          input.value = [input.min || 0, input.max || 100]
+          break
         case 'radio':
           input.value = input.options ? input.options[0] : ''
           break

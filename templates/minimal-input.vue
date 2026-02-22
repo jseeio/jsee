@@ -64,6 +64,37 @@
   box-shadow: 0 1px 3px rgba(0,0,0,0.3);
   &.active { left: 18px; }
 }
+.jsee-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  input[type="range"] { flex: 1; }
+  .jsee-range-value { font-size: 12px; min-width: 30px; text-align: center; }
+}
+.jsee-accordion-header {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 0;
+  font-size: 12px;
+  &:hover { color: #00d1b2; }
+}
+.jsee-accordion-arrow {
+  display: inline-block;
+  width: 0; height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid currentColor;
+  margin-right: 6px;
+  transition: transform 0.2s;
+  &.collapsed { transform: rotate(-90deg); }
+}
+.jsee-accordion-body {
+  overflow: hidden;
+  transition: max-height 0.25s ease;
+  &.collapsed { max-height: 0 !important; }
+}
 .jsee-btn {
   display: block;
   width: 100%;
@@ -137,6 +168,34 @@
       type="range"
       style="width: 100%"
     >
+  </div>
+
+  <div class="jsee-field" v-if="input.type == 'range'">
+    <label class="jsee-label">
+      {{ input.name }}: <strong>{{ (input.value || [])[0] }} – {{ (input.value || [])[1] }}</strong>
+    </label>
+    <div class="jsee-range">
+      <span class="jsee-range-value">{{ (input.value || [])[0] }}</span>
+      <input
+        v-bind:value="(input.value || [])[0]"
+        v-on:input="input.value = [Number($event.target.value), (input.value || [])[1]]; changeHandler()"
+        v-bind:min="input.min || 0"
+        v-bind:max="(input.value || [])[1]"
+        v-bind:step="input.step || 1"
+        v-bind:disabled="input.disabled"
+        type="range"
+      >
+      <input
+        v-bind:value="(input.value || [])[1]"
+        v-on:input="input.value = [(input.value || [])[0], Number($event.target.value)]; changeHandler()"
+        v-bind:min="(input.value || [])[0]"
+        v-bind:max="input.max || 100"
+        v-bind:step="input.step || 1"
+        v-bind:disabled="input.disabled"
+        type="range"
+      >
+      <span class="jsee-range-value">{{ (input.value || [])[1] }}</span>
+    </div>
   </div>
 
   <div class="jsee-field" v-if="input.type == 'date'">
@@ -233,7 +292,11 @@
   </div>
 
   <div class="jsee-field" v-if="input.type == 'group'">
-    <div class="jsee-group">
+    <div class="jsee-accordion-header" v-if="input.label || input.collapsed !== undefined" v-on:click="toggleCollapsed">
+      <span class="jsee-accordion-arrow" v-bind:class="{ collapsed: collapsed }"></span>
+      <strong>{{ input.label || input.name }}</strong>
+    </div>
+    <div class="jsee-group" v-bind:class="{ 'jsee-accordion-body': input.label || input.collapsed !== undefined, collapsed: collapsed }" style="max-height: 2000px;">
       <vue-input v-for="(el, index) in input.elements" v-bind:input="el"></vue-input>
     </div>
   </div>

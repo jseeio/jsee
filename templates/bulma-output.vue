@@ -91,6 +91,9 @@
       <div class="content" :id="outputName" v-else-if="output.type === 'markdown'">
         <div v-html="renderMarkdown(output.value)"></div>
       </div>
+      <div class="content" :id="outputName" v-else-if="output.type === 'image'">
+        <img :src="output.value" style="max-width: 100%; height: auto;" />
+      </div>
       <div class="content" :id="outputName" v-else-if="output.type == 'blank'">
         <!-- will be filled by custom render function -->
       </div>

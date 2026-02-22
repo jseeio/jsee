@@ -118,6 +118,9 @@ const component = {
           case 'markdown':
             extension = 'md'
             break
+          case 'image':
+            extension = 'png'
+            break
           default:
             extension = 'txt'
         }
@@ -125,6 +128,16 @@ const component = {
       }
 
       // Prepare blob
+      if (this.output.type === 'image') {
+        fetch(this.output.value)
+          .then(r => r.blob())
+          .then(blob => saveAs(blob, filename))
+          .catch(() => {
+            let blob = new Blob([this.output.value], {type: 'text/plain;charset=utf-8'})
+            saveAs(blob, filename)
+          })
+        return
+      }
       if (this.output.type === 'function') {
         domtoimage.toBlob(this.$refs.customContainer)
           .then(blob => {
@@ -157,6 +170,19 @@ const component = {
             console.error('Failed to generate image blob: ', err);
             this.$emit('notification', 'Failed to generate image');
           });
+      } else if (this.output.type === 'image') {
+        fetch(this.output.value)
+          .then(r => r.blob())
+          .then(blob => {
+            const item = new ClipboardItem({ [blob.type]: blob })
+            navigator.clipboard.write([item])
+              .then(() => this.$emit('notification', 'Image copied to clipboard'))
+              .catch(() => this.$emit('notification', 'Failed to copy image'))
+          })
+          .catch(() => {
+            navigator.clipboard.writeText(this.output.value)
+            this.$emit('notification', 'Copied image URL')
+          })
       } else if (this.output.type === 'table') {
         let value = this.tableToDelimited('\t')
         navigator.clipboard.writeText(value)
