@@ -716,7 +716,18 @@ async function importScripts (...imports) {
   }
 }
 
-function getModelFuncAPI (model, log=console.log) {
+function parseSSELine (line) {
+  if (!line.startsWith('data:')) return null
+  const payload = line.slice(5).trim()
+  if (payload === '[DONE]') return null
+  try {
+    return JSON.parse(payload)
+  } catch (e) {
+    return payload
+  }
+}
+
+function getModelFuncAPI (model, log=console.log, onChunk) {
   switch (model.type) {
     case 'get':
       return (data) => {
@@ -730,17 +741,111 @@ function getModelFuncAPI (model, log=console.log) {
     case 'post':
       return (data) => {
         log('Sending POST request to', model.url)
-        const resPromise = fetch(model.url, {
+        const accept = model.stream ? 'text/event-stream' : 'application/json'
+        return fetch(model.url, {
           method: 'POST',
           headers: {
-            'Accept': 'application/json',
+            'Accept': accept,
             'Content-Type': 'application/json'
           },
           body: JSON.stringify(data)
-        }).then(response => response.json())
-        return resPromise
+        }).then(async (response) => {
+          const contentType = response.headers.get('content-type') || ''
+          // SSE streaming response
+          if (contentType.includes('text/event-stream') && response.body && onChunk) {
+            const reader = response.body.getReader()
+            const decoder = new TextDecoder()
+            let buffer = ''
+            let lastResult = null
+            while (true) {
+              const { done, value } = await reader.read()
+              if (done) break
+              buffer += decoder.decode(value, { stream: true })
+              const lines = buffer.split('\n')
+              buffer = lines.pop()
+              for (const line of lines) {
+                const trimmed = line.trim()
+                if (!trimmed) continue
+                const parsed = parseSSELine(trimmed)
+                if (parsed !== null) {
+                  lastResult = parsed
+                  onChunk(parsed)
+                }
+              }
+            }
+            // Process any remaining buffer
+            buffer += decoder.decode()
+            if (buffer.trim()) {
+              const parsed = parseSSELine(buffer.trim())
+              if (parsed !== null) {
+                lastResult = parsed
+                onChunk(parsed)
+              }
+            }
+            return lastResult
+          }
+          return response.json()
+        })
       }
   }
+}
+
+const TYPED_ARRAY_CONSTRUCTORS = {
+  float32: Float32Array,
+  float64: Float64Array,
+  int8: Int8Array,
+  int16: Int16Array,
+  int32: Int32Array,
+  uint8: Uint8Array,
+  uint16: Uint16Array,
+  uint32: Uint32Array,
+}
+
+function toTypedArray (value, dtype) {
+  if (!dtype || !TYPED_ARRAY_CONSTRUCTORS[dtype]) return value
+  const Ctor = TYPED_ARRAY_CONSTRUCTORS[dtype]
+  if (value instanceof Ctor) return value
+  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
+    return new Ctor(value instanceof ArrayBuffer ? value : value.buffer)
+  }
+  if (Array.isArray(value)) return new Ctor(value)
+  return value
+}
+
+function fromTypedArray (value) {
+  if (ArrayBuffer.isView(value)) return Array.from(value)
+  return value
+}
+
+function collectTransferables (value, seen) {
+  if (!value || typeof value !== 'object') return []
+  if (!seen) seen = new WeakSet()
+  if (seen.has(value)) return []
+  seen.add(value)
+  const buffers = []
+  if (value instanceof ArrayBuffer) {
+    buffers.push(value)
+  } else if (ArrayBuffer.isView(value)) {
+    buffers.push(value.buffer)
+  } else if (Array.isArray(value)) {
+    value.forEach(item => buffers.push(...collectTransferables(item, seen)))
+  } else {
+    Object.keys(value).forEach(key => {
+      buffers.push(...collectTransferables(value[key], seen))
+    })
+  }
+  return buffers
+}
+
+function wrapTypedArrayInputs (inputs, inputConfigs) {
+  if (!isObject(inputs) || !Array.isArray(inputConfigs)) return inputs
+  const wrapped = Object.assign({}, inputs)
+  inputConfigs.forEach(cfg => {
+    if (cfg.arrayBuffer && cfg.name && typeof wrapped[cfg.name] !== 'undefined') {
+      wrapped[cfg.name] = toTypedArray(wrapped[cfg.name], cfg.dtype || 'float64')
+    }
+  })
+  return wrapped
 }
 
 async function delay (ms) {
@@ -1104,5 +1209,10 @@ module.exports = {
   jseeInputsToJsonSchema,
   generateOpenAPISpec,
   serializeResult,
-  parseMultipart
+  parseMultipart,
+  parseSSELine,
+  toTypedArray,
+  fromTypedArray,
+  wrapTypedArrayInputs,
+  collectTransferables
 }

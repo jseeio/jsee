@@ -217,6 +217,20 @@ Extra blocks can be provided for further customization:
 
   Works with both Workers (postMessage) and server POST — no special execution mode needed. Python shorthand: `jsee.serve(fn, chat=True)` auto-generates the schema from `fn(message, history) -> str`
 
+- **Input persistence** — by default, JSEE saves input values to `localStorage` and restores them on page refresh. Priority: URL params > localStorage > schema defaults. Set `persist: false` in the schema to disable. Clicking Reset clears saved values
+- **Notifications** — set `notify: true` in the schema to show a browser notification when a run completes while the tab is hidden. JSEE requests permission on first load and fires `new Notification()` after successful runs only
+- **Streaming outputs (SSE)** — set `model.stream: true` to enable Server-Sent Events streaming. The POST handler reads `text/event-stream` responses and calls `output()` on each `data:` line for progressive results. Python generators are auto-detected:
+  ```python
+  def stream_count(n: int = 5):
+      for i in range(n):
+          yield {'count': i}
+  jsee.serve(stream_count, stream=True)
+  ```
+- **Efficient binary outputs** — large base64 image data URLs (>50KB) in `image` outputs are automatically converted to `URL.createObjectURL()` blob URLs, reducing memory usage by ~33%. Previous blob URLs are revoked on each update
+- **Typed array passing** — declare `arrayBuffer: true` on an input to convert JS arrays to typed arrays before passing to workers/WASM. Set `dtype` to control the type (`float32`, `float64`, `uint8`, `int32`, etc., default: `float64`). Typed arrays are transferred with zero-copy semantics via `postMessage` transferables
+  ```json
+  "inputs": [{ "name": "data", "type": "string", "arrayBuffer": true, "dtype": "float32" }]
+  ```
 - Runtime cancellation: call `jsee.cancelCurrentRun()` on the JSEE instance to request stop of the active run. Long-running models should check `ctx.isCancelled()` and return early
 - Schema validation — JSEE validates schema structure during initialization and logs warnings for non-critical issues (e.g. unknown input types, malformed aliases)
 - `jsee.download(title)` — Downloads a self-contained HTML file that works offline. All external scripts are inlined and the schema/model/imports are cached. `title` defaults to `'output'`

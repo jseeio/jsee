@@ -24,6 +24,44 @@ const filtrex = require('filtrex')
 const JsonViewer = require('vue3-json-viewer').default
 const { sanitizeName, debounce } = require('./utils.js')
 
+const STORAGE_KEY = 'jsee:inputs'
+
+function saveInputsToStorage (inputs) {
+  try {
+    const values = {}
+    inputs.forEach((input, index) => {
+      if (input.type === 'file' || input.type === 'action' || input.type === 'button') return
+      if (input.type === 'group') return // skip groups for now
+      const key = input.name || `input_${index}`
+      values[key] = input.value
+    })
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(values))
+  } catch (e) { /* quota exceeded or private mode */ }
+}
+
+function loadInputsFromStorage (inputs) {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return false
+    const values = JSON.parse(raw)
+    let restored = false
+    inputs.forEach((input, index) => {
+      if (input.type === 'file' || input.type === 'action' || input.type === 'button') return
+      if (input.type === 'group') return
+      const key = input.name || `input_${index}`
+      if (typeof values[key] !== 'undefined') {
+        input.value = values[key]
+        restored = true
+      }
+    })
+    return restored
+  } catch (e) { return false }
+}
+
+function clearInputsStorage () {
+  try { localStorage.removeItem(STORAGE_KEY) } catch (e) { /* ignore */ }
+}
+
 function setInputValue (input, value) {
   if (input.type === 'file') {
     // For file inputs, we need to set the url
@@ -115,6 +153,12 @@ function createVueApp (env, mountedCallback, logMain) {
   // Reset input values to default ones
   resetInputs(dataInit.inputs)
 
+  // Restore saved inputs from localStorage (unless URL params are present or persist: false)
+  const hasUrlParams = new URLSearchParams(window.location.search).toString().length > 0
+  if (env.schema.persist !== false && !hasUrlParams) {
+    loadInputsFromStorage(dataInit.inputs)
+  }
+
   if (!('outputs' in dataInit)) {
     dataInit.outputs = []
   }
@@ -200,6 +244,9 @@ function createVueApp (env, mountedCallback, logMain) {
         // Per-input reactivity uses the 'inchange' event from inputs with reactive: true.
         handler: debounce(function (v) {
           this.dataChanged = true
+          if (env.schema.persist !== false) {
+            saveInputsToStorage(this.inputs)
+          }
           if (env.schema.reactive) {
             this.run('reactive')
           }
@@ -220,6 +267,7 @@ function createVueApp (env, mountedCallback, logMain) {
         // Reset input values to default ones
         // If example is provided, use it as a new default
         resetInputs(this.inputs, example)
+        clearInputsStorage()
         this.$nextTick(() => {
           this.dataChanged = false
         })

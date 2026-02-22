@@ -275,6 +275,12 @@ export default class JSEE {
     this.streamInputConfig = collectStreamInputConfig(this.schema.inputs)
     await this.initVue() // Inits: this.app, this.data
     await this.initPipeline() // Inits: this.pipeline (function)
+
+    // Request notification permission if schema opts in
+    if (this.schema.notify && typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      Notification.requestPermission()
+    }
+
     if (this.schema.autorun || this.schema.inputs.some(input => input.disabled && input.reactive)) {
       // 1. If autorun is enabled in the schema, run the model immediately
       // 2. Server-side inputs: If there are inputs with disabled and reactive flags
@@ -673,7 +679,13 @@ export default class JSEE {
           reject(e)
         }
         try {
-          worker.postMessage(payload)
+          // Transfer ArrayBuffers for zero-copy WASM passing
+          const transferables = utils.collectTransferables(payload)
+          if (transferables.length) {
+            worker.postMessage(payload, transferables)
+          } else {
+            worker.postMessage(payload)
+          }
         } catch (error) {
           const hasBinaryPayload = utils.containsBinaryPayload(payload)
           if (hasBinaryPayload) {
@@ -779,8 +791,11 @@ export default class JSEE {
       // Worker:
       this.worker.postMessage(model)
     } else {
-      // Main:
-      return utils.getModelFuncAPI(model, log)
+      // Main: pass onChunk callback for SSE streaming
+      const onChunk = model.stream ? (chunk) => {
+        this.output(chunk)
+      } : undefined
+      return utils.getModelFuncAPI(model, log, onChunk)
     }
   }
 
@@ -816,6 +831,7 @@ export default class JSEE {
     const data = this.data
     this.running = true
     this.cancelled = false
+    let runSucceeded = false
     // Run token to detect stale results when worker.onmessage gets rebound
     const runToken = this._runToken = {}
 
@@ -848,6 +864,9 @@ export default class JSEE {
         this._lastChatMessage = inputValues.message || ''
       }
 
+      // Convert declared arrayBuffer inputs to typed arrays for WASM efficiency
+      inputValues = utils.wrapTypedArrayInputs(inputValues, schema.inputs)
+
       log('Input values:', inputValues)
       this.overlay.show()
       if (this.stopElement) {
@@ -873,6 +892,8 @@ export default class JSEE {
         this._lastChatMessage = null
       }
 
+      runSucceeded = true
+
       // Check if interval is defined
       if (utils.shouldContinueInterval(schema.interval, this.running, this.isCancelled(), caller)) {
         log('Interval is defined:', schema.interval)
@@ -890,6 +911,13 @@ export default class JSEE {
         this.stopElement.style.display = 'none'
       }
       this.running = false
+
+      // Notify user when tab is hidden and run succeeded
+      if (runSucceeded && schema.notify && document.hidden
+          && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        const title = this.model[0] && (this.model[0].title || this.model[0].name) || 'JSEE'
+        new Notification('Run complete', { body: title })
+      }
 
       // Drain queued run if a manual click arrived while we were running
       if (this._pendingRun) {
@@ -915,7 +943,28 @@ export default class JSEE {
           || (output.alias && res[output.alias])
         if (typeof r !== 'undefined') {
           log(`Updating output: ${output.name} with data: ${typeof r}`)
-          output.value = r
+          // Convert large base64 image data URLs to blob URLs for efficiency
+          if (output.type === 'image' && typeof r === 'string'
+              && r.startsWith('data:') && r.length > 50000) {
+            // Revoke previous blob URL
+            if (output._objectUrl) {
+              URL.revokeObjectURL(output._objectUrl)
+            }
+            try {
+              const [header, b64] = r.split(',')
+              const mime = header.match(/data:([^;]+)/)[1]
+              const binary = atob(b64)
+              const bytes = new Uint8Array(binary.length)
+              for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+              const blob = new Blob([bytes], { type: mime })
+              output._objectUrl = URL.createObjectURL(blob)
+              output.value = output._objectUrl
+            } catch (e) {
+              output.value = r
+            }
+          } else {
+            output.value = r
+          }
         }
       }
     })

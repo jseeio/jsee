@@ -19,7 +19,12 @@ const {
   getUrlParam,
   coerceParam,
   serializeResult,
-  parseMultipart
+  parseMultipart,
+  parseSSELine,
+  toTypedArray,
+  fromTypedArray,
+  wrapTypedArrayInputs,
+  collectTransferables
 } = require('../../src/utils')
 
 describe('isObject', () => {
@@ -624,7 +629,10 @@ describe('getModelFuncAPI', () => {
   })
 
   test('creates POST function', async () => {
-    global.fetch.mockResolvedValue({ json: () => Promise.resolve({ result: 99 }) })
+    global.fetch.mockResolvedValue({
+      headers: { get: () => 'application/json' },
+      json: () => Promise.resolve({ result: 99 })
+    })
     const fn = getModelFuncAPI({ type: 'post', url: 'https://api.example.com/run' }, mockLog)
     const result = await fn({ x: 10 })
     expect(result).toEqual({ result: 99 })
@@ -994,5 +1002,130 @@ describe('error scenarios', () => {
     test('returns empty object for invalid content type', () => {
       expect(parseMultipart('text/plain', Buffer.from(''))).toEqual({})
     })
+  })
+})
+
+describe('parseSSELine', () => {
+  test('parses JSON data line', () => {
+    expect(parseSSELine('data: {"result": 42}')).toEqual({ result: 42 })
+  })
+
+  test('parses data line with extra whitespace', () => {
+    expect(parseSSELine('data:  {"a":1} ')).toEqual({ a: 1 })
+  })
+
+  test('returns null for [DONE] sentinel', () => {
+    expect(parseSSELine('data: [DONE]')).toBeNull()
+  })
+
+  test('returns plain string for non-JSON data', () => {
+    expect(parseSSELine('data: hello world')).toBe('hello world')
+  })
+
+  test('returns null for non-data lines', () => {
+    expect(parseSSELine('event: update')).toBeNull()
+    expect(parseSSELine(': comment')).toBeNull()
+    expect(parseSSELine('')).toBeNull()
+  })
+})
+
+describe('toTypedArray', () => {
+  test('converts JS array to Float64Array', () => {
+    const result = toTypedArray([1, 2, 3], 'float64')
+    expect(result).toBeInstanceOf(Float64Array)
+    expect(Array.from(result)).toEqual([1, 2, 3])
+  })
+
+  test('converts JS array to Float32Array', () => {
+    const result = toTypedArray([1.5, 2.5], 'float32')
+    expect(result).toBeInstanceOf(Float32Array)
+    expect(result.length).toBe(2)
+  })
+
+  test('converts JS array to Uint8Array', () => {
+    const result = toTypedArray([0, 128, 255], 'uint8')
+    expect(result).toBeInstanceOf(Uint8Array)
+    expect(Array.from(result)).toEqual([0, 128, 255])
+  })
+
+  test('returns same typed array if already correct type', () => {
+    const arr = new Float64Array([1, 2])
+    expect(toTypedArray(arr, 'float64')).toBe(arr)
+  })
+
+  test('returns value unchanged for unknown dtype', () => {
+    expect(toTypedArray([1, 2], 'unknown')).toEqual([1, 2])
+  })
+
+  test('returns value unchanged when no dtype', () => {
+    expect(toTypedArray([1, 2], null)).toEqual([1, 2])
+  })
+})
+
+describe('fromTypedArray', () => {
+  test('converts typed array to plain array', () => {
+    expect(fromTypedArray(new Float64Array([1, 2, 3]))).toEqual([1, 2, 3])
+  })
+
+  test('returns non-typed-array as-is', () => {
+    expect(fromTypedArray([1, 2])).toEqual([1, 2])
+    expect(fromTypedArray('hello')).toBe('hello')
+  })
+})
+
+describe('wrapTypedArrayInputs', () => {
+  test('converts declared arrayBuffer inputs', () => {
+    const inputs = { data: [1, 2, 3], name: 'test' }
+    const configs = [
+      { name: 'data', arrayBuffer: true, dtype: 'float32' },
+      { name: 'name', type: 'string' }
+    ]
+    const wrapped = wrapTypedArrayInputs(inputs, configs)
+    expect(wrapped.data).toBeInstanceOf(Float32Array)
+    expect(wrapped.name).toBe('test')
+  })
+
+  test('skips inputs without arrayBuffer flag', () => {
+    const inputs = { data: [1, 2] }
+    const configs = [{ name: 'data', type: 'string' }]
+    const wrapped = wrapTypedArrayInputs(inputs, configs)
+    expect(Array.isArray(wrapped.data)).toBe(true)
+  })
+
+  test('defaults dtype to float64', () => {
+    const inputs = { data: [1, 2] }
+    const configs = [{ name: 'data', arrayBuffer: true }]
+    const wrapped = wrapTypedArrayInputs(inputs, configs)
+    expect(wrapped.data).toBeInstanceOf(Float64Array)
+  })
+
+  test('returns inputs unchanged if configs is not array', () => {
+    expect(wrapTypedArrayInputs({ a: 1 }, null)).toEqual({ a: 1 })
+  })
+})
+
+describe('collectTransferables', () => {
+  test('collects ArrayBuffer from typed array', () => {
+    const arr = new Float32Array([1, 2, 3])
+    const result = collectTransferables({ data: arr })
+    expect(result.length).toBe(1)
+    expect(result[0]).toBe(arr.buffer)
+  })
+
+  test('collects nested ArrayBuffers', () => {
+    const a = new Uint8Array([1])
+    const b = new Float64Array([2])
+    const result = collectTransferables({ a, nested: { b } })
+    expect(result.length).toBe(2)
+  })
+
+  test('returns empty array for plain objects', () => {
+    expect(collectTransferables({ a: 1, b: 'hello' })).toEqual([])
+  })
+
+  test('handles null and primitives', () => {
+    expect(collectTransferables(null)).toEqual([])
+    expect(collectTransferables(42)).toEqual([])
+    expect(collectTransferables('str')).toEqual([])
   })
 })

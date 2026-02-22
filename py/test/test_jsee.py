@@ -1036,3 +1036,60 @@ class TestServerWithChat:
         resp = urlopen(req)
         result = json.loads(resp.read())
         assert result == {'chat': 'Turn 2: WORLD'}
+
+
+# ---------------------------------------------------------------------------
+# SSE / Generator streaming tests
+# ---------------------------------------------------------------------------
+
+class TestSchemaWithStream:
+    """Tests for stream=True schema generation."""
+
+    def test_stream_kwarg_sets_model_flag(self):
+        schema = generate_schema(add, stream=True)
+        assert schema['model']['stream'] is True
+
+    def test_no_stream_by_default(self):
+        schema = generate_schema(add)
+        assert 'stream' not in schema['model']
+
+
+class TestServerWithGenerator:
+    """Tests for generator functions served as SSE."""
+
+    @classmethod
+    def setup_class(cls):
+        def count_up(n: int = 3):
+            for i in range(n):
+                yield {'count': i}
+        cls.port = 15071
+        cls.thread = _start_server(count_up, cls.port, stream=True)
+        cls.base = 'http://localhost:{}'.format(cls.port)
+
+    def test_schema_has_stream_flag(self):
+        resp = urlopen(self.base + '/api')
+        data = json.loads(resp.read())
+        assert data['schema']['model']['stream'] is True
+
+    def test_generator_returns_sse(self):
+        req = Request(
+            self.base + '/count_up',
+            data=json.dumps({'n': 3}).encode(),
+            headers={'Content-Type': 'application/json'}
+        )
+        resp = urlopen(req)
+        assert 'text/event-stream' in resp.headers.get('Content-Type', '')
+        body = resp.read().decode('utf-8')
+        lines = [l for l in body.strip().split('\n') if l.startswith('data:')]
+        # Should have 3 data lines + 1 [DONE]
+        assert len(lines) == 4
+        # Parse first three
+        chunks = []
+        for line in lines[:3]:
+            payload = json.loads(line[5:].strip())
+            chunks.append(payload)
+        assert chunks[0] == {'count': 0}
+        assert chunks[1] == {'count': 1}
+        assert chunks[2] == {'count': 2}
+        # Last line is [DONE]
+        assert lines[3].strip() == 'data: [DONE]'

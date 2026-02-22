@@ -3,6 +3,7 @@
 import base64
 import datetime
 import enum
+import inspect
 import io
 import json
 import os
@@ -253,6 +254,8 @@ def generate_schema(target, host='0.0.0.0', port=5050, **kwargs):
     schema['examples'] = kwargs['examples']
   if kwargs.get('reactive'):
     schema['reactive'] = True
+  if kwargs.get('stream'):
+    schema['model']['stream'] = True
   return schema
 
 
@@ -603,7 +606,24 @@ def serve(target, host='0.0.0.0', port=5050, **kwargs):
 
       try:
         result = funcs[model_name](**data)
-        self._send_json(_serialize_result(result))
+        # Generator → SSE streaming response
+        if inspect.isgenerator(result) or inspect.isasyncgen(result):
+          self.send_response(200)
+          self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+          self.send_header('Cache-Control', 'no-cache')
+          self.send_header('Access-Control-Allow-Origin', '*')
+          self.end_headers()
+          try:
+            for chunk in result:
+              payload = json.dumps(_serialize_result(chunk))
+              self.wfile.write('data: {}\n\n'.format(payload).encode('utf-8'))
+              self.wfile.flush()
+            self.wfile.write('data: [DONE]\n\n'.encode('utf-8'))
+            self.wfile.flush()
+          except (BrokenPipeError, ConnectionResetError):
+            pass
+        else:
+          self._send_json(_serialize_result(result))
       except Exception as e:
         self._send_error(str(e), 500)
 

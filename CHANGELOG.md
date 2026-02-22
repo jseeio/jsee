@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.0
+### Features:
+- Input persistence: save/restore input values to `localStorage` across page refreshes (priority: URL params > localStorage > defaults; opt-out with `persist: false`; Reset clears storage)
+- Notifications: `schema.notify: true` fires browser `Notification` when a run completes while the tab is hidden (permission requested on init)
+- Streaming outputs (SSE): `model.stream: true` enables Server-Sent Events; POST handler reads `text/event-stream` responses with incremental `output()` calls per `data:` line
+- Python SSE support: generator functions are auto-detected and served as `text/event-stream` with `data: {json}\n\n` framing; `stream=True` kwarg in `generate_schema()`/`serve()`
+- Efficient binary outputs: large base64 image data URLs (>50KB) in `image` outputs are auto-converted to `URL.createObjectURL()` blob URLs (33% memory saving); previous blob URLs are revoked on update
+- Typed array passing for WASM: `arrayBuffer: true` on inputs converts JS arrays to typed arrays (`dtype`: `float32`, `float64`, `uint8`, etc.) before worker/WASM dispatch; uses `postMessage` transferables for zero-copy transfer
+- `collectTransferables()` utility for extracting `ArrayBuffer` references from nested payloads
+
 ## 0.6.0
 ### Features:
 - Python: richer type introspection — `Literal` → select, `Enum` → select, `Annotated[T, jsee.Slider()]` → slider, `Optional` unwrapping, `datetime.date` → date picker, plus `Text`, `Radio`, `Select`, `MultiSelect`, `Range`, `Color` annotation descriptors
