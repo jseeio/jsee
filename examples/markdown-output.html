@@ -1,0 +1,38 @@
+<html>
+  <div id="jsee-container"></div>
+  <script src="/dist/jsee.js"></script>
+  <script>
+    new JSEE({
+      schema: {
+        model: {
+          code: function (data) {
+            return {
+              report: '# Analysis Report\n\n'
+                + '## Input\n\n'
+                + 'Name: **' + data.name + '**\n\n'
+                + 'Score: **' + data.score + '** / 100\n\n'
+                + '## Results\n\n'
+                + '| Metric | Value |\n'
+                + '| --- | --- |\n'
+                + '| Percentile | ' + data.score + '% |\n'
+                + '| Grade | ' + (data.score >= 90 ? 'A' : data.score >= 80 ? 'B' : data.score >= 70 ? 'C' : 'D') + ' |\n'
+                + '| Status | ' + (data.score >= 60 ? 'Pass' : 'Fail') + ' |\n\n'
+                + '---\n\n'
+                + '*Generated at ' + new Date().toLocaleTimeString() + '*'
+            }
+          },
+          worker: false,
+          autorun: true
+        },
+        inputs: [
+          { name: 'name', type: 'string', default: 'Alice' },
+          { name: 'score', type: 'slider', min: 0, max: 100, default: 85 }
+        ],
+        outputs: [
+          { name: 'report', type: 'markdown' }
+        ]
+      },
+      container: '#jsee-container'
+    })
+  </script>
+</html>

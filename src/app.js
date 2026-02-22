@@ -8,12 +8,20 @@ import { createApp, h } from 'vue' // <- resolved in webpack.config based on RUN
 import bulmaApp from '../templates/bulma-app.vue'
 import bulmaInput from '../templates/bulma-input.vue'
 import bulmaOutput from '../templates/bulma-output.vue'
+import minimalApp from '../templates/minimal-app.vue'
+import minimalInput from '../templates/minimal-input.vue'
+import minimalOutput from '../templates/minimal-output.vue'
 
 const components = {
   'bulma': {
     'app': bulmaApp,
     'input': bulmaInput,
     'output': bulmaOutput
+  },
+  'minimal': {
+    'app': minimalApp,
+    'input': minimalInput,
+    'output': minimalOutput
   }
 }
 

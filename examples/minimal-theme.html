@@ -1,0 +1,44 @@
+<html>
+  <div id="jsee-container"></div>
+  <script src="/dist/jsee.js"></script>
+  <script>
+    new JSEE({
+      schema: {
+        model: {
+          code: function (data) {
+            var results = []
+            for (var i = 0; i < data.count; i++) {
+              results.push(Math.round(Math.random() * (data.max - data.min) + data.min))
+            }
+            var sum = results.reduce(function (a, b) { return a + b }, 0)
+            return {
+              numbers: results.join(', '),
+              stats: '## Statistics\n\n'
+                + '- Count: **' + results.length + '**\n'
+                + '- Sum: **' + sum + '**\n'
+                + '- Mean: **' + (sum / results.length).toFixed(2) + '**\n'
+                + '- Min: **' + Math.min.apply(null, results) + '**\n'
+                + '- Max: **' + Math.max.apply(null, results) + '**'
+            }
+          },
+          worker: false,
+          autorun: true
+        },
+        design: {
+          framework: 'minimal'
+        },
+        inputs: [
+          { name: 'count', type: 'slider', min: 1, max: 50, default: 10 },
+          { name: 'min', type: 'int', default: 0 },
+          { name: 'max', type: 'int', default: 100 },
+          { name: 'sorted', type: 'toggle', default: false }
+        ],
+        outputs: [
+          { name: 'numbers', type: 'code' },
+          { name: 'stats', type: 'markdown' }
+        ]
+      },
+      container: '#jsee-container'
+    })
+  </script>
+</html>

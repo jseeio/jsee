@@ -1,0 +1,29 @@
+<html>
+  <div id="jsee-container"></div>
+  <script src="/dist/jsee.js"></script>
+  <script>
+    new JSEE({
+      schema: {
+        model: {
+          code: function (data) { return data },
+          worker: false,
+          autorun: true
+        },
+        inputs: [
+          { name: 'name', type: 'string', default: 'Alice' },
+          { name: 'age', type: 'int', default: 30 },
+          { name: 'score', type: 'slider', min: 0, max: 100, step: 1, default: 75 },
+          { name: 'temperature', type: 'slider', min: 0, max: 1, step: 0.01, default: 0.7 },
+          { name: 'start_date', type: 'date', default: '2025-01-01' },
+          { name: 'enabled', type: 'checkbox', default: true },
+          { name: 'dark_mode', type: 'toggle', default: false },
+          { name: 'mode', type: 'select', options: ['fast', 'balanced', 'accurate'], default: 'balanced' },
+          { name: 'algorithm', type: 'radio', options: ['linear', 'quadratic', 'exponential'], default: 'linear' },
+          { name: 'features', type: 'multi-select', options: ['color', 'size', 'shape', 'weight'] },
+          { name: 'notes', type: 'text', default: 'Enter notes here...' }
+        ]
+      },
+      container: '#jsee-container'
+    })
+  </script>
+</html>

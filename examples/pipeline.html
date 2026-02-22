@@ -1,0 +1,50 @@
+<html>
+  <div id="jsee-container"></div>
+  <script src="/dist/jsee.js"></script>
+  <script>
+    new JSEE({
+      schema: {
+        model: [
+          {
+            name: 'generate',
+            code: function (data) {
+              var text = data.text || 'hello world'
+              return {
+                text: text,
+                words: text.split(/\s+/),
+                char_count: text.length,
+                word_count: text.split(/\s+/).length
+              }
+            },
+            worker: false
+          },
+          {
+            name: 'transform',
+            code: function (data) {
+              var text = data.text
+              if (data.uppercase) text = text.toUpperCase()
+              if (data.reverse) text = text.split('').reverse().join('')
+              return {
+                result: text,
+                summary: '**Processed:** ' + data.word_count + ' words, '
+                  + data.char_count + ' chars\n\n'
+                  + 'Output: `' + text + '`'
+              }
+            },
+            worker: false
+          }
+        ],
+        inputs: [
+          { name: 'text', type: 'string', default: 'The quick brown fox' },
+          { name: 'uppercase', type: 'toggle', default: false },
+          { name: 'reverse', type: 'toggle', default: false }
+        ],
+        outputs: [
+          { name: 'result', type: 'code' },
+          { name: 'summary', type: 'markdown' }
+        ]
+      },
+      container: '#jsee-container'
+    })
+  </script>
+</html>

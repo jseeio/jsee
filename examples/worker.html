@@ -1,0 +1,40 @@
+<html>
+  <div id="jsee-container"></div>
+  <script src="/dist/jsee.js"></script>
+  <script>
+    new JSEE({
+      schema: {
+        model: {
+          code: function (data, ctx) {
+            // Runs in Web Worker — won't block the UI
+            var n = data.iterations
+            var inside = 0
+            for (var i = 0; i < n; i++) {
+              var x = Math.random()
+              var y = Math.random()
+              if (x * x + y * y <= 1) inside++
+              if (i % 100000 === 0) ctx.progress(i / n * 100)
+            }
+            ctx.progress(100)
+            var pi = 4 * inside / n
+            return {
+              result: '## Monte Carlo Pi Estimation\n\n'
+                + '- Iterations: **' + n.toLocaleString() + '**\n'
+                + '- Points inside circle: **' + inside.toLocaleString() + '**\n'
+                + '- Estimated Pi: **' + pi.toFixed(8) + '**\n'
+                + '- Error: **' + Math.abs(pi - Math.PI).toFixed(8) + '**'
+            }
+          },
+          worker: true
+        },
+        inputs: [
+          { name: 'iterations', type: 'select', options: [100000, 1000000, 10000000], default: 1000000 }
+        ],
+        outputs: [
+          { name: 'result', type: 'markdown' }
+        ]
+      },
+      container: '#jsee-container'
+    })
+  </script>
+</html>
