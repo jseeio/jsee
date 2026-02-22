@@ -663,6 +663,27 @@ test.describe('Per-input reactive', () => {
   })
 })
 
+test.describe('Output alias', () => {
+  test('matches model result key via alias', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { r: 'ALIAS_HIT:' + data.x } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 7 }
+      ],
+      outputs: [
+        { name: 'result', type: 'code', alias: 'r' }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    await page.click('button:has-text("Run")')
+    await expect(page.locator('body')).toContainText('ALIAS_HIT:7')
+  })
+})
+
 test.describe('File output', () => {
   test('renders download button', async ({ page }) => {
     const schema = {
