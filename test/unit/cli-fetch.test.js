@@ -2,7 +2,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const gen = require('../../src/cli')
-const { collectFetchBundleBlocks, resolveLocalImportFile, resolveFetchImport, resolveRuntimeMode } = gen
+const { collectFetchBundleBlocks, resolveLocalImportFile, resolveFetchImport, resolveRuntimeMode, needsFullBundle } = gen
 
 describe('collectFetchBundleBlocks', () => {
   test('collects model, view and render blocks', () => {
@@ -192,6 +192,43 @@ describe('resolveRuntimeMode', () => {
     expect(resolveRuntimeMode('./dist/jsee.js', false, false)).toBe('./dist/jsee.js')
     expect(resolveRuntimeMode('https://example.com/jsee.js', false, true)).toBe('https://example.com/jsee.js')
     expect(resolveRuntimeMode('./node_modules/@jseeio/jsee/dist/jsee.js', true, true)).toBe('./node_modules/@jseeio/jsee/dist/jsee.js')
+  })
+})
+
+describe('needsFullBundle', () => {
+  test('returns false for schema without outputs', () => {
+    expect(needsFullBundle({})).toBe(false)
+    expect(needsFullBundle({ outputs: [] })).toBe(false)
+  })
+
+  test('returns false for basic output types', () => {
+    expect(needsFullBundle({ outputs: [{ type: 'table' }, { type: 'image' }] })).toBe(false)
+  })
+
+  test('returns true for chart output', () => {
+    expect(needsFullBundle({ outputs: [{ type: 'chart' }] })).toBe(true)
+  })
+
+  test('returns true for 3d output', () => {
+    expect(needsFullBundle({ outputs: [{ type: '3d' }] })).toBe(true)
+  })
+
+  test('returns true for map output', () => {
+    expect(needsFullBundle({ outputs: [{ type: 'map' }] })).toBe(true)
+  })
+
+  test('returns true for pdf output', () => {
+    expect(needsFullBundle({ outputs: [{ type: 'pdf' }] })).toBe(true)
+  })
+
+  test('returns true for nested full types in groups', () => {
+    expect(needsFullBundle({
+      outputs: [{ type: 'group', elements: [{ type: 'chart' }] }]
+    })).toBe(true)
+  })
+
+  test('returns false for gallery and highlight (zero-cost)', () => {
+    expect(needsFullBundle({ outputs: [{ type: 'gallery' }, { type: 'highlight' }] })).toBe(false)
   })
 })
 

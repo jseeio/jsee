@@ -2,7 +2,7 @@ import { saveAs } from 'file-saver'
 import domtoimage from 'dom-to-image'
 import showdown from 'showdown'
 
-const { sanitizeName } = require('../src/utils.js')
+const { sanitizeName, columnsToRows } = require('../src/utils.js')
 
 const mdConverter = new showdown.Converter({ tables: true })
 
@@ -22,6 +22,13 @@ const component = {
       outputName: 'output',
       isFullScreen: false,
       activeOutputTab: 0,
+      lightboxSrc: null,
+      _threeScene: null,
+      _threeRenderer: null,
+      _threeAnimId: null,
+      _leafletMap: null,
+      _pdfCurrentPage: 1,
+      _pdfDoc: null,
     }
   },
   mounted() {
@@ -35,6 +42,9 @@ const component = {
   },
   beforeUnmount() {
     document.removeEventListener('fullscreenchange', this.onFullScreenChange)
+    if (this._threeAnimId) cancelAnimationFrame(this._threeAnimId)
+    if (this._threeRenderer) this._threeRenderer.dispose()
+    if (this._leafletMap) this._leafletMap.remove()
   },
   // updated() {
   //   this.executeRenderFunction()
@@ -44,6 +54,10 @@ const component = {
       if (newValue !== oldValue) {
         this.$nextTick(() => {
           this.executeRenderFunction()
+          if (this.output.type === 'chart') this.renderChart()
+          if (this.output.type === '3d') this.render3D()
+          if (this.output.type === 'map') this.renderMap()
+          if (this.output.type === 'pdf') this.renderPDF()
         })
       }
     },
@@ -61,6 +75,18 @@ const component = {
   computed: {
     isRenderFunction() {
       return typeof this.output.value === 'function'
+    },
+    hasPlot() {
+      return typeof window !== 'undefined' && !!window.Plot
+    },
+    hasThree() {
+      return typeof window !== 'undefined' && !!window.THREE
+    },
+    hasLeaflet() {
+      return typeof window !== 'undefined' && !!window.L
+    },
+    hasPdfjs() {
+      return typeof window !== 'undefined' && !!window.pdfjsLib
     }
   },
   methods: {
@@ -132,6 +158,9 @@ const component = {
           case 'image':
             extension = 'png'
             break
+          case 'chart':
+            extension = 'svg'
+            break
           default:
             extension = 'txt'
         }
@@ -139,6 +168,14 @@ const component = {
       }
 
       // Prepare blob
+      if (this.output.type === 'chart' && this.$refs.chartContainer) {
+        const svg = this.$refs.chartContainer.querySelector('svg')
+        if (svg) {
+          let blob = new Blob([svg.outerHTML], { type: 'image/svg+xml;charset=utf-8' })
+          saveAs(blob, filename)
+        }
+        return
+      }
       if (this.output.type === 'image') {
         fetch(this.output.value)
           .then(r => r.blob())
@@ -224,6 +261,225 @@ const component = {
     renderMarkdown (text) {
       if (typeof text !== 'string') return ''
       return mdConverter.makeHtml(text)
+    },
+    renderChart() {
+      if (!this.hasPlot || !this.$refs.chartContainer) return
+      const container = this.$refs.chartContainer
+      const data = this.output.value
+      if (!data) return
+      container.innerHTML = ''
+      try {
+        let plotConfig
+        if (data && data.marks) {
+          // Full Plot config passed directly
+          plotConfig = data
+        } else {
+          // Build config from schema props + data
+          let rows = Array.isArray(data) ? data : columnsToRows(data)
+          if (!Array.isArray(rows)) return
+          const mark = this.output.mark || 'dot'
+          const x = this.output.x || (rows[0] && Object.keys(rows[0])[0])
+          const y = this.output.y || (rows[0] && Object.keys(rows[0])[1])
+          const color = this.output.color
+          const markOpts = { x, y }
+          if (color) markOpts.fill = color
+          const Plot = window.Plot
+          const markFn = Plot[mark] || Plot.dot
+          plotConfig = {
+            marks: [markFn(rows, markOpts)],
+            width: this.output.width || 640,
+            height: this.output.height || 400
+          }
+        }
+        const svg = window.Plot.plot(plotConfig)
+        container.appendChild(svg)
+      } catch (e) {
+        container.textContent = 'Chart error: ' + e.message
+      }
+    },
+    render3D() {
+      if (!this.hasThree || !this.$refs.threeDContainer) return
+      const container = this.$refs.threeDContainer
+      const data = this.output.value
+      if (!data) return
+      // Dispose previous scene
+      if (this._threeAnimId) cancelAnimationFrame(this._threeAnimId)
+      if (this._threeRenderer) {
+        this._threeRenderer.dispose()
+        if (this._threeRenderer.domElement && this._threeRenderer.domElement.parentNode) {
+          this._threeRenderer.domElement.parentNode.removeChild(this._threeRenderer.domElement)
+        }
+      }
+      const THREE = window.THREE
+      const width = container.clientWidth || 640
+      const height = this.output.height || 400
+      const scene = new THREE.Scene()
+      scene.background = new THREE.Color(0xf0f0f0)
+      const camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 1000)
+      camera.position.set(0, 1, 3)
+      const renderer = new THREE.WebGLRenderer({ antialias: true })
+      renderer.setSize(width, height)
+      // Remove only previous canvas, keep missing-message divs
+      const oldCanvas = container.querySelector('canvas')
+      if (oldCanvas) oldCanvas.remove()
+      container.appendChild(renderer.domElement)
+      scene.add(new THREE.AmbientLight(0xcccccc, 0.6))
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.8)
+      dirLight.position.set(1, 2, 3)
+      scene.add(dirLight)
+      this._threeScene = scene
+      this._threeRenderer = renderer
+      const animate = () => {
+        this._threeAnimId = requestAnimationFrame(animate)
+        renderer.render(scene, camera)
+      }
+      if (typeof data === 'object' && data.vertices) {
+        // Programmatic geometry
+        const geom = new THREE.BufferGeometry()
+        geom.setAttribute('position', new THREE.Float32BufferAttribute(data.vertices, 3))
+        if (data.faces) geom.setIndex(data.faces)
+        geom.computeVertexNormals()
+        const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ color: 0x00d1b2 }))
+        scene.add(mesh)
+        animate()
+      } else if (typeof data === 'string') {
+        // URL to GLTF/GLB — needs GLTFLoader loaded via imports
+        if (THREE.GLTFLoader) {
+          const loader = new THREE.GLTFLoader()
+          loader.load(data, (gltf) => {
+            scene.add(gltf.scene)
+            // Auto-fit camera
+            const box = new THREE.Box3().setFromObject(gltf.scene)
+            const center = box.getCenter(new THREE.Vector3())
+            const size = box.getSize(new THREE.Vector3()).length()
+            camera.position.copy(center).add(new THREE.Vector3(0, size * 0.5, size))
+            camera.lookAt(center)
+            animate()
+          })
+        } else {
+          container.textContent = '3D URL loading requires GLTFLoader in imports'
+        }
+      }
+    },
+    renderMap() {
+      if (!this.hasLeaflet || !this.$refs.mapContainer) return
+      const container = this.$refs.mapContainer
+      const data = this.output.value
+      if (!data) return
+      const L = window.L
+      // Destroy previous map
+      if (this._leafletMap) {
+        this._leafletMap.remove()
+        this._leafletMap = null
+      }
+      // Remove any existing map container content except missing message
+      const existingMap = container.querySelector('.leaflet-container')
+      if (existingMap) existingMap.remove()
+      const mapDiv = document.createElement('div')
+      mapDiv.style.width = '100%'
+      mapDiv.style.height = '100%'
+      container.appendChild(mapDiv)
+      const zoom = this.output.zoom || data.zoom || 13
+      const tiles = this.output.tiles || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+      const map = L.map(mapDiv)
+      L.tileLayer(tiles, { attribution: '&copy; OpenStreetMap' }).addTo(map)
+      this._leafletMap = map
+      // GeoJSON
+      if (data.type === 'FeatureCollection' || data.type === 'Feature') {
+        const layer = L.geoJSON(data).addTo(map)
+        map.fitBounds(layer.getBounds())
+        return
+      }
+      // Markers from array or object
+      const markers = Array.isArray(data) ? data : (data.markers || [])
+      const center = this.output.center || data.center
+      const bounds = []
+      markers.forEach(m => {
+        const latlng = [m.lat, m.lng]
+        const marker = L.marker(latlng).addTo(map)
+        if (m.popup) marker.bindPopup(m.popup)
+        bounds.push(latlng)
+      })
+      if (center) {
+        map.setView(center, zoom)
+      } else if (bounds.length) {
+        map.fitBounds(bounds)
+      } else {
+        map.setView([0, 0], 2)
+      }
+    },
+    renderPDF() {
+      if (!this.hasPdfjs || !this.$refs.pdfContainer) return
+      const container = this.$refs.pdfContainer
+      const data = this.output.value
+      if (!data) return
+      container.innerHTML = ''
+      const pdfjsLib = window.pdfjsLib
+      const self = this
+      let loadingTask
+      if (typeof data === 'string') {
+        loadingTask = pdfjsLib.getDocument(data)
+      } else if (data instanceof Uint8Array || data instanceof ArrayBuffer) {
+        loadingTask = pdfjsLib.getDocument({ data })
+      } else {
+        container.textContent = 'Unsupported PDF data format'
+        return
+      }
+      loadingTask.promise.then(pdf => {
+        self._pdfDoc = pdf
+        self._pdfCurrentPage = self.output.page || 1
+        const renderPage = (pageNum) => {
+          // Keep controls, clear canvases
+          const canvases = container.querySelectorAll('canvas')
+          canvases.forEach(c => c.remove())
+          pdf.getPage(pageNum).then(page => {
+            const containerWidth = container.clientWidth || 600
+            const unscaledViewport = page.getViewport({ scale: 1 })
+            const scale = containerWidth / unscaledViewport.width
+            const viewport = page.getViewport({ scale })
+            const canvas = document.createElement('canvas')
+            canvas.width = viewport.width
+            canvas.height = viewport.height
+            canvas.style.display = 'block'
+            canvas.style.maxWidth = '100%'
+            container.appendChild(canvas)
+            page.render({ canvasContext: canvas.getContext('2d'), viewport })
+          })
+        }
+        // Controls
+        const controls = document.createElement('div')
+        controls.className = 'jsee-pdf-controls'
+        const prevBtn = document.createElement('button')
+        prevBtn.textContent = 'Prev'
+        const nextBtn = document.createElement('button')
+        nextBtn.textContent = 'Next'
+        const pageInfo = document.createElement('span')
+        const updateInfo = () => {
+          pageInfo.textContent = 'Page ' + self._pdfCurrentPage + ' / ' + pdf.numPages
+        }
+        prevBtn.addEventListener('click', () => {
+          if (self._pdfCurrentPage > 1) {
+            self._pdfCurrentPage--
+            updateInfo()
+            renderPage(self._pdfCurrentPage)
+          }
+        })
+        nextBtn.addEventListener('click', () => {
+          if (self._pdfCurrentPage < pdf.numPages) {
+            self._pdfCurrentPage++
+            updateInfo()
+            renderPage(self._pdfCurrentPage)
+          }
+        })
+        controls.appendChild(prevBtn)
+        controls.appendChild(pageInfo)
+        controls.appendChild(nextBtn)
+        container.appendChild(controls)
+        updateInfo()
+        renderPage(self._pdfCurrentPage)
+      }).catch(err => {
+        container.textContent = 'PDF error: ' + err.message
+      })
     },
     executeRenderFunction() {
       if (this.isRenderFunction && this.$refs.customContainer) {

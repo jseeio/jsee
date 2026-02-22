@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.8.0
+### Features:
+- Full bundle: new build target `jsee.full.js` that includes Observable Plot, Three.js, Leaflet, and pdf.js for rich output types out of the box. The CLI and Python server auto-select `jsee.full.js` vs `jsee.core.js` based on schema output types. Build with `npm run build-full`
+- Bundle rename: `jsee.runtime.js` → `jsee.core.js`, new `jsee.full.js` (was `jsee.runtime.extended.js`). `dist/jsee.runtime.js` is still produced as a backward-compatible copy of `jsee.core.js`
+- `chart` output type: SVG charts via Observable Plot — supports line, dot, bar, area, and more. Model returns array of objects, column-oriented data `{x: [...], y: [...]}`, or a full Plot config `{marks: [...]}`. Schema props: `mark`, `x`, `y`, `color`, `width`, `height`
+- `3d` output type: 3D model viewer via Three.js — renders programmatic geometry `{vertices, faces}` or GLTF/GLB URLs. Auto-creates scene with lighting and camera
+- `map` output type: interactive maps via Leaflet — supports markers `[{lat, lng, popup}]`, GeoJSON, and `{center, markers, zoom}` objects. Auto-fits bounds. Schema props: `height`, `zoom`, `center`, `tiles`
+- `pdf` output type: PDF viewer via pdf.js — renders from URL, data URL, or Uint8Array. Prev/next page navigation, auto-scales to container width. Schema props: `height`, `page`
+- `gallery` output type (zero-cost, core bundle): CSS grid of images with click-to-expand lightbox. Model returns array of URLs. Schema props: `columns`, `gap`
+- `highlight` output type (zero-cost, core bundle): colored text spans with label badges. Model returns `[{text, label, color}]` segments
+- Graceful degradation: library-dependent output types show a helpful message with link when the library is not loaded, instead of crashing
+- `columnsToRows()` utility for converting column-oriented to row-oriented data
+- Schema-driven theming: `design.primary`, `design.secondary`, `design.bg`, `design.fg`, `design.font`, `design.radius` — set accent colors, background, text, font family, and border radius directly from the schema without custom CSS
+
+### Breaking changes:
+- Drop `jsee.js` build (Vue template compiler). Only two bundles now: `jsee.core.js` and `jsee.full.js`. The `design.template` schema option is no longer supported — use the default render function instead
+- All HTML files should update `<script src="/dist/jsee.js">` to `<script src="/dist/jsee.core.js">`
+
+## 0.7.1
+### Features:
+- Per-input validation: `validate` (filtrex expression) and `required: true` with `error` message display; invalid inputs show red border + error text and block model execution
+- Textarea autosize: `text` inputs auto-grow to fit content (up to 400px max-height), with manual resize still available
+- `audio` output type: HTML5 `<audio>` player from URL or data URL
+- `video` output type: HTML5 `<video>` player from URL or data URL
+
 ## 0.7.0
 ### Features:
 - Input persistence: save/restore input values to `localStorage` across page refreshes (priority: URL params > localStorage > defaults; opt-out with `persist: false`; Reset clears storage)

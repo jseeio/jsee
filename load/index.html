@@ -23,9 +23,9 @@
   <body>
     <div id="loader-tip">Tip: schema inputs can be prefilled via query params, including file URLs that now auto-load.</div>
     <div id="jsee-container"></div>
-    <script src="/dist/jsee.js" type="text/javascript"></script>
-    <script>window.JSEE || document.write('<script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@latest/dist/jsee.runtime.js">\x3C/script>')</script>
-    <script>window.JSEE || document.write('<script src="https://unpkg.com/@jseeio/jsee@latest/dist/jsee.runtime.js">\x3C/script>')</script>
+    <script src="/dist/jsee.core.js" type="text/javascript"></script>
+    <script>window.JSEE || document.write('<script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@latest/dist/jsee.core.js">\x3C/script>')</script>
+    <script>window.JSEE || document.write('<script src="https://unpkg.com/@jseeio/jsee@latest/dist/jsee.core.js">\x3C/script>')</script>
     <script>
       var params = new URLSearchParams(window.location.search)
       var schemaStr = params.get('s')

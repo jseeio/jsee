@@ -19,12 +19,32 @@ from .types import (
 )
 
 
-def _find_runtime():
-  """Find jsee.runtime.js — check bundled static/ first, then monorepo dist/."""
+FULL_BUNDLE_TYPES = {'chart', '3d', 'map', 'pdf'}
+
+
+def _needs_full_bundle(schema):
+  """Check if schema outputs require the full bundle."""
+  outputs = schema.get('outputs', [])
+  for o in outputs:
+    if o.get('type') in FULL_BUNDLE_TYPES:
+      return True
+    if o.get('type') == 'group' and o.get('elements'):
+      for el in o['elements']:
+        if el.get('type') in FULL_BUNDLE_TYPES:
+          return True
+  return False
+
+
+def _find_runtime(schema=None):
+  """Find jsee runtime — auto-selects core or full based on schema outputs."""
   pkg_dir = os.path.dirname(os.path.abspath(__file__))
+  bundle = 'jsee.full.js' if (schema and _needs_full_bundle(schema)) else 'jsee.core.js'
   candidates = [
-    os.path.join(pkg_dir, 'static', 'jsee.runtime.js'),
-    os.path.join(pkg_dir, '..', '..', 'dist', 'jsee.runtime.js'),
+    os.path.join(pkg_dir, 'static', bundle),
+    os.path.join(pkg_dir, '..', '..', 'dist', bundle),
+    # Fallback to core if full not found
+    os.path.join(pkg_dir, 'static', 'jsee.core.js'),
+    os.path.join(pkg_dir, '..', '..', 'dist', 'jsee.core.js'),
   ]
   for c in candidates:
     if os.path.isfile(c):
@@ -49,7 +69,7 @@ TEMPLATE = """<!DOCTYPE html>
     <h1>{name}</h1>
     <div id="jsee-container"></div>
   </div>
-  <script src="/static/jsee.runtime.js"></script>
+  <script src="/static/jsee.js"></script>
   <script>
     var env = new JSEE({{
       container: document.getElementById('jsee-container'),
@@ -495,7 +515,7 @@ def serve(target, host='0.0.0.0', port=5050, **kwargs):
     m['url'] = '/{}'.format(name)
     m['worker'] = False
 
-  runtime_path = _find_runtime()
+  runtime_path = _find_runtime(schema)
   runtime_code = None
   if runtime_path:
     with open(runtime_path, 'r') as f:
@@ -558,7 +578,7 @@ def serve(target, host='0.0.0.0', port=5050, **kwargs):
       if pathname == '/api/openapi.json':
         return self._send_json(generate_openapi_spec(schema))
 
-      if pathname == '/static/jsee.runtime.js' and runtime_code:
+      if pathname == '/static/jsee.js' and runtime_code:
         body = runtime_code.encode('utf-8')
         self.send_response(200)
         self.send_header('Content-Type', 'application/javascript; charset=utf-8')

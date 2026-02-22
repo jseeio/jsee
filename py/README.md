@@ -271,7 +271,7 @@ JSEE is not a Gradio replacement for complex apps. It's a lightweight alternativ
 
 ## Offline
 
-The JSEE runtime (`jsee.runtime.js`, ~300 KB) is bundled with the package. No CDN or internet access required. The server works fully offline.
+The JSEE runtime (`jsee.core.js` / `jsee.full.js`) is bundled with the package. The server auto-selects the right bundle based on output types. No CDN or internet access required. The server works fully offline.
 
 ## Development
 

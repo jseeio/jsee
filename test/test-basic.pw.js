@@ -96,7 +96,7 @@ test.describe('Arrow function as model.code', () => {
   })
 })
 
-test.describe('Runtime build (jsee.runtime.js)', () => {
+test.describe('Core build (jsee.core.js)', () => {
   test('Arrow function in worker', async ({ page }) => {
     await page.goto(urlHTML('runtime-arrow'))
     await page.fill('#a', '8')
@@ -612,5 +612,18 @@ test.describe('Streamed file inputs', () => {
     await expect(page.locator('body')).toContainText('true')
     await expect(page.locator('body')).toContainText('header')
     await expect(page.locator('body')).toContainText('name,age')
+  })
+})
+
+test.describe('Backward-compatible jsee.runtime.js', () => {
+  test('loads and works but shows deprecation warning', async ({ page }) => {
+    const warnings = []
+    page.on('console', msg => {
+      if (msg.type() === 'warning') warnings.push(msg.text())
+    })
+    await page.goto(urlHTML('runtime-compat'))
+    await page.click('button:has-text("Run")')
+    await expect(page.locator('body')).toContainText('142')
+    expect(warnings.some(w => w.includes('jsee.runtime.js is deprecated'))).toBe(true)
   })
 })

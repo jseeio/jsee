@@ -17,8 +17,10 @@
   --jsee-toggle-active: #00d1b2;
   --jsee-gradient-start: #4395d0;
   --jsee-gradient-end: #00d1b2;
+  --jsee-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --jsee-radius: 6px;
 
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--jsee-font);
   font-size: 14px;
   line-height: 1.5;
   color: var(--jsee-text);
@@ -68,7 +70,7 @@
 
   .jsee-card {
     border: 1px solid var(--jsee-border);
-    border-radius: 6px;
+    border-radius: var(--jsee-radius);
     background: var(--jsee-card-bg);
     position: relative;
   }
@@ -97,7 +99,7 @@
     display: flex;
     border-top: 1px solid var(--jsee-border);
     background: linear-gradient(90deg, var(--jsee-gradient-start) 0%, var(--jsee-gradient-end) 100%);
-    border-radius: 0 0 6px 6px;
+    border-radius: 0 0 var(--jsee-radius) var(--jsee-radius);
   }
   .jsee-card-footer.reset {
     background: linear-gradient(90deg, #ff577f 0%, var(--jsee-gradient-start) 50%, var(--jsee-gradient-end) 100%);
@@ -117,9 +119,15 @@
   .jsee-reset-btn {
     text-align: left;
   }
+  .jsee-reset-btn::before {
+    content: '\2715  ';
+  }
   .jsee-run-btn {
     text-align: right;
     border-left: 1px dashed rgba(255,255,255,0.5);
+  }
+  .jsee-run-btn::after {
+    content: ' \25B8';
   }
 
   .jsee-examples {
@@ -167,7 +175,7 @@
 
 <template>
   <section>
-    <div class="jsee-app" :data-theme="$parent.design && $parent.design.theme ? $parent.design.theme : undefined">
+    <div class="jsee-app" :data-theme="$parent.design && $parent.design.theme ? $parent.design.theme : undefined" :style="designStyle">
       <div class="jsee-header" v-if="$parent.model">
         <h2 class="jsee-title" v-if="$parent.model.title">{{ $parent.model.title }}</h2>
         <p class="jsee-description" v-if="$parent.model.description">{{ $parent.model.description }}</p>
@@ -196,13 +204,13 @@
                 v-if="$parent.inputs && $parent.inputs.length > 0 && $parent.dataChanged"
                 class="jsee-reset-btn"
               >
-                ✕ Reset
+                Reset
               </button>
               <button
                 v-on:click="$parent.run('run')"
                 class="jsee-run-btn"
               >
-                Run ▸
+                Run
               </button>
             </div>
           </div>
@@ -240,5 +248,71 @@
 </template>
 
 <script>
-  export default {}
+  function hexToRgb (hex) {
+    if (typeof hex !== 'string' || hex[0] !== '#') return null
+    const n = parseInt(hex.slice(1), 16)
+    if (hex.length === 4) {
+      return [(n >> 8 & 0xf) * 17, (n >> 4 & 0xf) * 17, (n & 0xf) * 17]
+    }
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+  }
+
+  function mix (c, white, t) {
+    return c.map((v, i) => Math.round(v + (white[i] - v) * t))
+  }
+
+  function rgbHex (c) {
+    return '#' + c.map(v => v.toString(16).padStart(2, '0')).join('')
+  }
+
+  function lighter (hex, t) {
+    const c = hexToRgb(hex)
+    return c ? rgbHex(mix(c, [255, 255, 255], t)) : hex
+  }
+
+  function darker (hex, t) {
+    const c = hexToRgb(hex)
+    return c ? rgbHex(mix(c, [0, 0, 0], t)) : hex
+  }
+
+  export default {
+    computed: {
+      designStyle () {
+        const d = this.$parent.design
+        if (!d) return undefined
+        const s = {}
+        if (d.primary) {
+          s['--jsee-primary'] = d.primary
+          s['--jsee-primary-dark'] = darker(d.primary, 0.4)
+          s['--jsee-gradient-end'] = d.primary
+          s['--jsee-toggle-active'] = d.primary
+        }
+        if (d.secondary) {
+          s['--jsee-gradient-start'] = d.secondary
+        } else if (d.primary) {
+          s['--jsee-gradient-start'] = darker(d.primary, 0.25)
+        }
+        if (d.bg) {
+          s['--jsee-bg'] = d.bg
+          s['--jsee-bg-secondary'] = darker(d.bg, 0.04)
+          s['--jsee-card-bg'] = d.bg
+          s['--jsee-input-bg'] = d.bg
+          s['--jsee-label-bg'] = darker(d.bg, 0.05)
+          s['--jsee-border'] = darker(d.bg, 0.12)
+          s['--jsee-input-border'] = darker(d.bg, 0.13)
+        }
+        if (d.fg) {
+          s['--jsee-text'] = d.fg
+          s['--jsee-text-secondary'] = lighter(d.fg, 0.4)
+        }
+        if (d.font) {
+          s['--jsee-font'] = d.font
+        }
+        if (typeof d.radius !== 'undefined') {
+          s['--jsee-radius'] = typeof d.radius === 'number' ? d.radius + 'px' : d.radius
+        }
+        return Object.keys(s).length ? s : undefined
+      }
+    }
+  }
 </script>

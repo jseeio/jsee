@@ -25,6 +25,10 @@ const Overlay = require('./overlay')
 
 require('notyf/notyf.min.css')
 
+if (typeof EXTENDED !== 'undefined' && EXTENDED) {
+  require('./extended-imports')
+}
+
 const fetch = window['fetch']
 const Blob = window['Blob']
 

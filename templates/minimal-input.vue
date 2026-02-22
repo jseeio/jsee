@@ -29,7 +29,9 @@
 }
 .jsee-textarea {
   min-height: 60px;
+  max-height: 400px;
   resize: vertical;
+  overflow-y: auto;
 }
 .jsee-checkbox-label, .jsee-radio-label {
   display: block;
@@ -96,6 +98,15 @@
   transition: max-height 0.25s ease;
   &.collapsed { max-height: 0 !important; }
 }
+.jsee-input-error {
+  display: block;
+  font-size: 11px;
+  color: var(--jsee-error, #e74c3c);
+  margin-top: 2px;
+}
+.jsee-input-invalid {
+  border-color: var(--jsee-error, #e74c3c) !important;
+}
 .jsee-btn {
   display: block;
   width: 100%;
@@ -149,8 +160,10 @@
       v-bind:disabled="input.disabled"
       v-on:change="changeHandler"
       class="jsee-input"
+      v-bind:class="{ 'jsee-input-invalid': input._error }"
       type="number"
     >
+    <span class="jsee-input-error" v-if="input._error">{{ input._error }}</span>
   </div>
 
   <div class="jsee-field" v-if="input.type == 'string' || input.type == 'color'">
@@ -162,7 +175,9 @@
       v-on:change="changeHandler"
       v-on:keydown.enter="input.enter ? $emit('inchange') : null"
       class="jsee-input"
+      v-bind:class="{ 'jsee-input-invalid': input._error }"
     >
+    <span class="jsee-input-error" v-if="input._error">{{ input._error }}</span>
   </div>
 
   <div class="jsee-field" v-if="input.type == 'text'">
@@ -172,8 +187,11 @@
       v-bind:id="input.name"
       v-bind:placeholder="input.placeholder ? input.placeholder : input.name"
       v-on:change="changeHandler"
+      v-on:input="autosize"
       class="jsee-textarea"
+      v-bind:class="{ 'jsee-input-invalid': input._error }"
     ></textarea>
+    <span class="jsee-input-error" v-if="input._error">{{ input._error }}</span>
   </div>
 
   <div class="jsee-field" v-if="input.type == 'slider'">
@@ -229,8 +247,10 @@
       v-bind:disabled="input.disabled"
       v-on:change="changeHandler"
       class="jsee-input"
+      v-bind:class="{ 'jsee-input-invalid': input._error }"
       type="date"
     >
+    <span class="jsee-input-error" v-if="input._error">{{ input._error }}</span>
   </div>
 
   <div class="jsee-field" v-if="input.type == 'checkbox' || input.type == 'bool'">
@@ -263,9 +283,11 @@
       v-bind:id="input.name"
       v-on:change="changeHandler"
       class="jsee-select"
+      v-bind:class="{ 'jsee-input-invalid': input._error }"
     >
       <option v-for="(option, oi) in input.options">{{ option }}</option>
     </select>
+    <span class="jsee-input-error" v-if="input._error">{{ input._error }}</span>
   </div>
 
   <div class="jsee-field" v-if="input.type == 'radio'">

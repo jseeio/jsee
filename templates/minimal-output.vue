@@ -1,7 +1,7 @@
 <style scoped>
 .jsee-output-card {
   border: 1px solid var(--jsee-border, #e0e0e0);
-  border-radius: 6px;
+  border-radius: var(--jsee-radius, 6px);
   background: var(--jsee-card-bg, #fff);
   margin-bottom: 16px;
 }
@@ -133,6 +133,71 @@
   color: var(--jsee-text, #333);
   border-bottom-left-radius: 4px;
 }
+.jsee-output-missing {
+  padding: 24px;
+  text-align: center;
+  color: var(--jsee-text-secondary, #888);
+  font-size: 13px;
+  background: var(--jsee-bg-secondary, #f9f9f9);
+  border-radius: 4px;
+}
+.jsee-output-missing a {
+  color: var(--jsee-primary, #00d1b2);
+}
+.jsee-gallery-grid {
+  display: grid;
+  gap: 8px;
+}
+.jsee-gallery-grid img {
+  width: 100%;
+  height: auto;
+  object-fit: cover;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.jsee-gallery-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.jsee-gallery-lightbox img {
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
+}
+.jsee-highlight-segment {
+  padding: 2px 4px;
+  border-radius: 3px;
+  position: relative;
+  display: inline;
+}
+.jsee-highlight-label {
+  font-size: 10px;
+  font-weight: 600;
+  margin-left: 2px;
+  opacity: 0.7;
+  vertical-align: super;
+}
+.jsee-pdf-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 13px;
+}
+.jsee-pdf-controls button {
+  padding: 2px 10px;
+  border: 1px solid var(--jsee-border, #e0e0e0);
+  border-radius: 3px;
+  background: var(--jsee-bg-secondary, #f5f5f5);
+  cursor: pointer;
+  font-size: 12px;
+}
 </style>
 
 <template>
@@ -193,6 +258,56 @@
       </div>
       <div :id="outputName" v-else-if="output.type === 'image'">
         <img :src="output.value" style="max-width: 100%; height: auto;" />
+      </div>
+      <div :id="outputName" v-else-if="output.type === 'audio'">
+        <audio controls :src="output.value" style="width: 100%;"></audio>
+      </div>
+      <div :id="outputName" v-else-if="output.type === 'video'">
+        <video controls :src="output.value" style="max-width: 100%; height: auto;"></video>
+      </div>
+      <div :id="outputName" v-else-if="output.type === 'chart'" ref="chartContainer">
+        <div v-if="!hasPlot" class="jsee-output-missing">
+          Chart requires <a href="https://observablehq.com/plot/" target="_blank">Observable Plot</a>.
+          Add to imports or use the full bundle.
+        </div>
+      </div>
+      <div :id="outputName" v-else-if="output.type === '3d'" ref="threeDContainer"
+        :style="{ height: (output.height || 400) + 'px' }">
+        <div v-if="!hasThree" class="jsee-output-missing">
+          3D viewer requires <a href="https://threejs.org/" target="_blank">Three.js</a>.
+          Add to imports or use the full bundle.
+        </div>
+      </div>
+      <div :id="outputName" v-else-if="output.type === 'map'" ref="mapContainer"
+        :style="{ height: (output.height || 400) + 'px' }">
+        <div v-if="!hasLeaflet" class="jsee-output-missing">
+          Map requires <a href="https://leafletjs.com/" target="_blank">Leaflet</a>.
+          Add to imports or use the full bundle.
+        </div>
+      </div>
+      <div :id="outputName" v-else-if="output.type === 'pdf'" ref="pdfContainer"
+        :style="{ height: (output.height || 600) + 'px', overflow: 'auto' }">
+        <div v-if="!hasPdfjs" class="jsee-output-missing">
+          PDF viewer requires <a href="https://mozilla.github.io/pdf.js/" target="_blank">pdf.js</a>.
+          Add to imports or use the full bundle.
+        </div>
+      </div>
+      <div :id="outputName" v-else-if="output.type === 'gallery'">
+        <div class="jsee-gallery-grid"
+          :style="{ gridTemplateColumns: 'repeat(' + (output.columns || 3) + ', 1fr)', gap: (output.gap || 8) + 'px' }">
+          <img v-for="(src, gi) in (output.value || [])" :key="gi" :src="src"
+            @click="lightboxSrc = src" />
+        </div>
+        <div v-if="lightboxSrc" class="jsee-gallery-lightbox" @click="lightboxSrc = null">
+          <img :src="lightboxSrc" />
+        </div>
+      </div>
+      <div :id="outputName" v-else-if="output.type === 'highlight'">
+        <span v-for="(seg, si) in (output.value || [])" :key="si">
+          <span v-if="seg.label" class="jsee-highlight-segment"
+            :style="{ background: seg.color || '#e3f2fd' }">{{ seg.text }}<span class="jsee-highlight-label">{{ seg.label }}</span></span>
+          <span v-else>{{ seg.text }}</span>
+        </span>
       </div>
       <div :id="outputName" v-else-if="output.type === 'chat'" class="jsee-chat">
         <div class="jsee-chat-messages" ref="chatMessages">

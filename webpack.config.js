@@ -8,7 +8,7 @@ module.exports = (env) => {
   const config = {
     entry: './src/main.js',
     output: {
-      filename: env.RUNTIME ? 'jsee.runtime.js' : 'jsee.js',
+      filename: env.FULL ? 'jsee.full.js' : 'jsee.core.js',
       path: path.resolve(__dirname, 'dist'),
       publicPath: '/dist/', // Should fix Uncaught Error when downloaded: Automatic publicPath is not supported in this browser
       library: {
@@ -61,23 +61,20 @@ module.exports = (env) => {
       // Replace those values in the code
       new webpack.DefinePlugin({
         'VERSION': JSON.stringify(package.version),
-        'RUNTIME': JSON.stringify(env.RUNTIME),
+        'EXTENDED': JSON.stringify(!!env.FULL),
       })
     ],
-    // Load different versions of vue based on RUNTIME value
     resolve: {
       alias: {
-        vue$: env.RUNTIME
-          ? 'vue/dist/vue.runtime.esm-bundler.js'
-          : 'vue/dist/vue.esm-bundler'
+        vue$: 'vue/dist/vue.runtime.esm-bundler.js'
       },
       fallback: {}
     },
     // Update recommended size limit
     performance: {
       hints: false,
-      maxEntrypointSize: 512000,
-      maxAssetSize: 512000
+      maxEntrypointSize: env.FULL ? 2048000 : 512000,
+      maxAssetSize: env.FULL ? 2048000 : 512000
     },
     // Remove comments
     optimization: {

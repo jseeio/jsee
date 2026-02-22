@@ -2,13 +2,14 @@
   "name": "@jseeio/jsee",
   "version": "0.5.1",
   "description": "JavaScript Execution Environment",
-  "main": "dist/jsee.js",
-  "unpkg": "dist/jsee.js",
-  "jsdelivr": "dist/jsee.js",
+  "main": "dist/jsee.core.js",
+  "unpkg": "dist/jsee.core.js",
+  "jsdelivr": "dist/jsee.core.js",
   "private": false,
   "scripts": {
-    "build-dev": "webpack --mode=development --progress --stats-children --env DEVELOPMENT",
-    "build": "webpack --mode=production --progress && webpack --mode=production --progress --env RUNTIME && npm test",
+    "build-dev": "webpack --mode=development --progress --stats-children --env DEVELOPMENT && node scripts/compat-runtime.js",
+    "build-full": "webpack --mode=production --progress --env FULL",
+    "build": "webpack --mode=production --progress && webpack --mode=production --progress --env FULL && node scripts/compat-runtime.js && npm test",
     "watch-dev": "nodemon --watch . --ignore dist,.git --ext vue,js,css,html --exec 'npm run build-dev'",
     "watch": "nodemon --watch . --ignore dist,.git --ext vue,js,css,html --exec 'npm run build-dev && npm run test:basic'",
     "prepublishOnly": "npm run build",
@@ -20,7 +21,7 @@
     "test:python": "npx playwright test test/test-python.pw.js",
     "test-head": "HEADLESS=false npm test",
     "lint": "eslint src/ test/",
-    "copy-runtime-py": "mkdir -p py/jsee/static && cp dist/jsee.runtime.js py/jsee/static/jsee.runtime.js"
+    "copy-runtime-py": "mkdir -p py/jsee/static && cp dist/jsee.core.js py/jsee/static/jsee.core.js && cp dist/jsee.full.js py/jsee/static/jsee.full.js"
   },
   "bin": {
     "jsee": "./bin/jsee"
@@ -37,6 +38,7 @@
   },
   "dependencies": {
     "@mdi/font": "^6.5.95",
+    "@observablehq/plot": "^0.6",
     "csv-parse": "^5.6.0",
     "dom-to-image": "^2.6.0",
     "express": "^4.21.2",
@@ -44,10 +46,13 @@
     "filtrex": "^2.2.3",
     "jsdoc-to-markdown": "^8.0.1",
     "katex": "^0.16.22",
+    "leaflet": "^1.9",
     "minimist": "^1.2.8",
     "notyf": "^3.10.0",
+    "pdfjs-dist": "^4.0",
     "showdown": "^1.9.1",
     "showdown-katex": "^0.8.0",
+    "three": "^0.170",
     "vue": "^3.2.47",
     "vue-file-picker": "^0.0.2",
     "vue-style-loader": "^4.1.3",

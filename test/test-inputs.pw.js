@@ -819,3 +819,116 @@ test.describe('Output group blocks', () => {
     await expect(page.locator('.jsee-tab-btn')).toHaveCount(0)
   })
 })
+
+test.describe('Custom design colors', () => {
+  test('design.primary sets accent CSS variables', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { result: 'OK' } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 1 }
+      ],
+      design: {
+        primary: '#e74c3c'
+      }
+    }
+    await page.goto(urlQueryEscaped(schema))
+    const app = page.locator('.jsee-app')
+    const primary = await app.evaluate(el => getComputedStyle(el).getPropertyValue('--jsee-primary'))
+    expect(primary.trim()).toBe('#e74c3c')
+    const gradEnd = await app.evaluate(el => getComputedStyle(el).getPropertyValue('--jsee-gradient-end'))
+    expect(gradEnd.trim()).toBe('#e74c3c')
+  })
+
+  test('design.bg and design.fg set background and text variables', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { result: 'OK' } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 1 }
+      ],
+      design: {
+        bg: '#fdf6e3',
+        fg: '#657b83'
+      }
+    }
+    await page.goto(urlQueryEscaped(schema))
+    const app = page.locator('.jsee-app')
+    const bg = await app.evaluate(el => getComputedStyle(el).getPropertyValue('--jsee-bg'))
+    expect(bg.trim()).toBe('#fdf6e3')
+    const text = await app.evaluate(el => getComputedStyle(el).getPropertyValue('--jsee-text'))
+    expect(text.trim()).toBe('#657b83')
+  })
+
+  test('design.font sets font family', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { result: 'OK' } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 1 }
+      ],
+      design: {
+        font: 'Georgia, serif'
+      }
+    }
+    await page.goto(urlQueryEscaped(schema))
+    const app = page.locator('.jsee-app')
+    const font = await app.evaluate(el => getComputedStyle(el).getPropertyValue('--jsee-font'))
+    expect(font.trim()).toBe('Georgia, serif')
+  })
+
+  test('design.radius sets border radius', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { result: 'OK' } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 1 }
+      ],
+      design: {
+        radius: 12
+      }
+    }
+    await page.goto(urlQueryEscaped(schema))
+    const app = page.locator('.jsee-app')
+    const radius = await app.evaluate(el => getComputedStyle(el).getPropertyValue('--jsee-radius'))
+    expect(radius.trim()).toBe('12px')
+  })
+
+  test('design.primary works with dark theme', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { result: 'OK' } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 1 }
+      ],
+      design: {
+        theme: 'dark',
+        primary: '#e74c3c'
+      }
+    }
+    await page.goto(urlQueryEscaped(schema))
+    const app = page.locator('.jsee-app')
+    await expect(app).toHaveAttribute('data-theme', 'dark')
+    // Custom primary should override via inline style
+    const primary = await app.evaluate(el => getComputedStyle(el).getPropertyValue('--jsee-primary'))
+    expect(primary.trim()).toBe('#e74c3c')
+    // Dark bg should still be applied from CSS (no bg override)
+    const bg = await app.evaluate(el => getComputedStyle(el).getPropertyValue('--jsee-bg'))
+    expect(bg.trim()).toBe('#1a1a1a')
+  })
+})

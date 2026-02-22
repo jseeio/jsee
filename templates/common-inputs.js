@@ -27,8 +27,24 @@ const component = {
     toggleCollapsed () {
       this.collapsed = !this.collapsed
     },
+    autosize (e) {
+      const el = e.target
+      el.style.height = 'auto'
+      el.style.height = el.scrollHeight + 'px'
+    },
     call (method) {
       console.log('calling: ', method)
+    }
+  },
+  mounted () {
+    if (this.input.type === 'text' && this.input.value) {
+      this.$nextTick(() => {
+        const el = this.$el.querySelector('textarea')
+        if (el) {
+          el.style.height = 'auto'
+          el.style.height = el.scrollHeight + 'px'
+        }
+      })
     }
   }
 }

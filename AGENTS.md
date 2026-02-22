@@ -42,9 +42,9 @@ test/
   test-python.pw.js    # Playwright E2E: Pyodide integration
   fixtures/      # Test fixtures (lodash-like.js, upload-sample.csv)
 examples/        # Self-contained HTML examples demonstrating JSEE patterns
-dist/            # Build output: jsee.js (dev), jsee.runtime.js (production)
+dist/            # Build output: jsee.core.js (lean), jsee.full.js (with viz libs)
 apps/            # Example apps (hashr, detect, qrcode, etc.)
-webpack.config.js  # Two build targets: full (jsee.js) and runtime (jsee.runtime.js)
+webpack.config.js  # Two build targets: jsee.core.js, jsee.full.js
 ```
 
 

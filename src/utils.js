@@ -887,12 +887,16 @@ function getName (code) {
   switch (typeof code) {
     case 'function':
       if (!code.name) return undefined
-      // Arrow functions get an inferred .name from property assignment
-      // (e.g. { code: (a) => a } → code.name === "code") which is misleading.
-      // Only trust .name when toString() confirms a real named declaration.
+      // JS infers .name from property assignment for ALL function forms:
+      // { code: (a) => a } and { code: function(a) {} } both get .name === "code".
+      // Only trust .name when the name actually appears in the source text.
       const src = code.toString().trimStart()
-      if (src.startsWith('function') || src.startsWith('async function')) {
-        return code.name
+      const keyword = src.startsWith('async function') ? 'async function'
+        : src.startsWith('function') ? 'function'
+        : null
+      if (keyword) {
+        const afterKeyword = src.slice(keyword.length).trimStart()
+        if (afterKeyword.startsWith(code.name)) return code.name
       }
       return undefined
     case 'string':
@@ -1182,6 +1186,59 @@ function parseMultipart (contentType, body) {
   return data
 }
 
+// Convert column-oriented data {x: [1,2], y: [3,4]} to row-oriented [{x:1, y:3}, {x:2, y:4}]
+function columnsToRows (data) {
+  if (!isObject(data)) return data
+  const keys = Object.keys(data)
+  if (keys.length === 0) return []
+  const firstArray = data[keys[0]]
+  if (!Array.isArray(firstArray)) return data
+  // Ensure all values are arrays of the same length
+  const len = firstArray.length
+  if (!keys.every(k => Array.isArray(data[k]) && data[k].length === len)) return data
+  const rows = []
+  for (let i = 0; i < len; i++) {
+    const row = {}
+    keys.forEach(k => { row[k] = data[k][i] })
+    rows.push(row)
+  }
+  return rows
+}
+
+function createValidateFn (input, filtrexCompile, filtrexOptions) {
+  if (input.validate) {
+    const expr = input.validate.replace(/\'/g, '"')
+    const f = filtrexCompile(expr, filtrexOptions)
+    const msg = input.error || 'Invalid value'
+    return function (value) {
+      try {
+        return f({ value }) ? null : msg
+      } catch (e) {
+        return msg
+      }
+    }
+  } else if (input.required) {
+    const msg = input.error || 'Required'
+    return function (value) {
+      if (value === null || value === undefined || value === '') return msg
+      if (Array.isArray(value) && value.length === 0) return msg
+      return null
+    }
+  }
+  return null
+}
+
+function runValidation (inputs, validateFunctions) {
+  let hasErrors = false
+  inputs.forEach((input, index) => {
+    if (index < validateFunctions.length && validateFunctions[index]) {
+      input._error = validateFunctions[index](input.value)
+      if (input._error) hasErrors = true
+    }
+  })
+  return hasErrors
+}
+
 module.exports = {
   isObject,
   loadFromDOM,
@@ -1214,5 +1271,8 @@ module.exports = {
   toTypedArray,
   fromTypedArray,
   wrapTypedArrayInputs,
-  collectTransferables
+  collectTransferables,
+  columnsToRows,
+  createValidateFn,
+  runValidation
 }

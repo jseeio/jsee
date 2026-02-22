@@ -22,7 +22,7 @@ const components = {
 
 const filtrex = require('filtrex')
 const JsonViewer = require('vue3-json-viewer').default
-const { sanitizeName, debounce } = require('./utils.js')
+const { sanitizeName, debounce, createValidateFn, runValidation } = require('./utils.js')
 
 const STORAGE_KEY = 'jsee:inputs'
 
@@ -176,6 +176,19 @@ function createVueApp (env, mountedCallback, logMain) {
     extraFunctions: { len }
   }
 
+  // Initialize _error property on all inputs for reactivity
+  dataInit.inputs.forEach(input => {
+    input._error = null
+    if (input.type === 'group' && input.elements) {
+      input.elements.forEach(el => { el._error = null })
+    }
+  })
+
+  // Prepare validation functions for inputs with validate or required
+  const validateFunctions = dataInit.inputs.map(input =>
+    createValidateFn(input, filtrex.compileExpression, filtrexOptions)
+  )
+
   // Prepare functions that determine if inputs should be displayed
   const displayFunctions = dataInit.inputs.map(input => {
     if (input.display && input.display.length) {
@@ -210,28 +223,12 @@ function createVueApp (env, mountedCallback, logMain) {
     ? env.schema.design.framework
     : 'minimal'
 
-  let template
-  let render
-  if (
-    env.schema.design
-    && env.schema.design.template
-    && (
-      typeof env.schema.design.template === 'string'
-      || env.schema.design.template === false
-    )
-  ) {
-    template = env.schema.design.template
-    render = null
-  } else {
-    template = null //'<vue-app/>'
-    render = () => {
-      return h(components[framework].app)
-    }
+  const render = () => {
+    return h(components[framework].app)
   }
 
   log('Initializing Vue app...')
   const app = createApp({
-    template,
     render,
     data () {
       return dataInit
@@ -247,6 +244,7 @@ function createVueApp (env, mountedCallback, logMain) {
           if (env.schema.persist !== false) {
             saveInputsToStorage(this.inputs)
           }
+          runValidation(this.inputs, validateFunctions)
           if (env.schema.reactive) {
             this.run('reactive')
           }
@@ -273,6 +271,7 @@ function createVueApp (env, mountedCallback, logMain) {
         })
       },
       run (caller) {
+        if (runValidation(this.inputs, validateFunctions)) return
         this.clickRun = true
         // Catch to prevent unhandled rejection from button/autorun clicks
         env.run(caller).catch(err => console.error('Run error:', err))

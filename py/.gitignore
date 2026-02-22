@@ -3,4 +3,5 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-jsee/static/jsee.runtime.js
+jsee/static/jsee.core.js
+jsee/static/jsee.full.js

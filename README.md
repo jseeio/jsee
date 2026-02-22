@@ -6,7 +6,7 @@ Minimal example:
 ```html
 <html>
   <div id="jsee-container">
-  <script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@latest/dist/jsee.runtime.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@latest/dist/jsee.core.js"></script>
   <script>
     function mul (a, b) {
       return a * b
@@ -22,7 +22,7 @@ Minimal example:
 
 **Browser (CDN):**
 ```html
-<script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@latest/dist/jsee.runtime.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@latest/dist/jsee.core.js"></script>
 ```
 
 **npm (for CLI or Node.js projects):**
@@ -36,6 +36,12 @@ npx @jseeio/jsee schema.json -o app.html
 ```
 
 Run `jsee --help` for all CLI options.
+
+**Full bundle** (includes Observable Plot, Three.js, Leaflet, pdf.js):
+```html
+<script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@latest/dist/jsee.full.js"></script>
+```
+The full bundle adds `chart`, `3d`, `map`, and `pdf` output types out of the box. The core bundle stays lightweight (~97KB gzip) — you can still use these output types by loading the libraries manually via schema `imports`. The CLI and Python server auto-select the right bundle based on schema output types.
 
 ## Inputs and outputs
 
@@ -151,13 +157,20 @@ Extra blocks can be provided for further customization:
 - `design` — Design parameters
   - `layout` — Layout for the model/input/output blocks. If it's empty and the JSEE container is not, JSEE uses inner HTML as a template. If the container is empty too, it uses the default `blocks` template. Set `'sidebar'` for a fixed-width (280px) sticky input panel — inputs stay visible while scrolling outputs. Collapses to single column on mobile
   - `framework` — Design framework to use (`'minimal'` by default). If a JavaScript object with the same name is present in a global context, JSEE loads it too (using Vue's `use` method)
-  - `theme` — Color theme. Set `'dark'` for dark mode. All components use CSS custom properties (`--jsee-primary`, `--jsee-bg`, `--jsee-text`, `--jsee-border`, etc.) that can be overridden via CSS for custom themes
+  - `theme` — Color theme. Set `'dark'` for dark mode
+  - `primary` — Accent color (buttons, toggles, gradient). Hex string, e.g. `'#e74c3c'`
+  - `secondary` — Second gradient color. Defaults to a darker shade of `primary`
+  - `bg` — Background color. Derives card, input, and border colors automatically
+  - `fg` — Text color. Derives secondary text color automatically
+  - `font` — Font family string, e.g. `'Georgia, serif'`
+  - `radius` — Border radius in pixels (number) or CSS value (string)
+  - All components use CSS custom properties (`--jsee-primary`, `--jsee-bg`, `--jsee-text`, `--jsee-border`, etc.) that can also be overridden via CSS
 - `inputs` — Inputs definition
   - `name`* — Name of the input
   - `type`* — Type. Possible types:
     - `int`, `float` or `number` — Number
     - `string` — String
-    - `text` — Textarea
+    - `text` — Textarea (auto-resizes to fit content, up to 400px)
     - `checkbox` or `bool` — Checkbox
     - `select` or `categorical` — Select (one of many `options`)
     - `slider` — Range slider (`min`, `max`, `step`)
@@ -180,6 +193,9 @@ Extra blocks can be provided for further customization:
   - `enter` (boolean) — If `true` on a `string` input, pressing Enter triggers a model run (useful for chat or search inputs)
   - `raw` (boolean, file input only) — If `true`, pass the raw source to the model instead of reading text in the UI (`File` object for disk files or `{ kind: 'url', url: '...' }` for URL input)
   - `stream` (boolean, file input only) — If `true`, pass an async iterable `ChunkedReader` to the model instead of raw source handles. Supports `for await (const chunk of reader)`, `await reader.text()`, `await reader.bytes()`, and `for await (const line of reader.lines())`. Works in both main-thread and worker execution. Reader metadata (`reader.name`, `reader.size`, `reader.type`) is preserved and remains available in downstream pipeline models
+  - `validate` (string) — Filtrex expression for input validation. The variable `value` holds the current input value. Expression must return truthy for valid input. E.g. `"validate": "value >= 0 and value <= 150"`. Runs on every input change (debounced). Invalid inputs show an error message and block model execution
+  - `required` (boolean) — Shorthand validation: rejects empty strings, null, undefined, and empty arrays
+  - `error` (string) — Custom error message for `validate` or `required` failures (default: `"Invalid value"` / `"Required"`)
   - URL params for file inputs (e.g. `?file=https://...`) auto-load on init, so bookmarkable links run without an extra Load click
 - `outputs` — Outputs definition. Outputs also support `alias` (string) for matching model result keys by alternative names
   - `name`* — Name of the output
@@ -190,9 +206,17 @@ Extra blocks can be provided for further customization:
     - `code` — Code block
     - `markdown` — Rendered Markdown (supports tables, headings, lists, etc.)
     - `image` — Image (`<img>` tag from data URL or URL)
+    - `audio` — Audio player (`<audio>` from URL or data URL)
+    - `video` — Video player (`<video>` from URL or data URL)
     - `table` — Virtualized table with scrolling
     - `chat` — Chat message list. Accumulates `{role, content}` messages across runs instead of replacing. Renders user/assistant bubbles with Markdown support, auto-scrolls to latest message. See **Chat mode** below
     - `group` — Group of outputs. Use `elements` array for child outputs. Supports `style: 'tabs'` for tabbed display or default blocks (stacked). Child outputs are matched by name against model results
+    - `chart` — SVG chart via [Observable Plot](https://observablehq.com/plot/). Model returns array of objects, column-oriented data, or a full Plot config. Schema props: `mark` (line/dot/bar/area/etc.), `x`, `y`, `color`, `width`, `height`. Included in full bundle or load Plot via `imports`
+    - `3d` — 3D model viewer via [Three.js](https://threejs.org/). Model returns a URL (GLTF/GLB), data URL, or geometry object `{vertices, faces}`. Schema props: `width`, `height`. Included in full bundle or load Three.js via `imports`
+    - `map` — Interactive map via [Leaflet](https://leafletjs.com/). Model returns markers `[{lat, lng, popup}]`, `{center, markers, zoom}`, or GeoJSON. Schema props: `height`, `zoom`, `center`, `tiles`. Included in full bundle or load Leaflet via `imports`
+    - `pdf` — PDF viewer via [pdf.js](https://mozilla.github.io/pdf.js/). Model returns a URL, data URL, or Uint8Array. Prev/next page controls. Schema props: `height`, `page`. Included in full bundle or load pdf.js via `imports`
+    - `gallery` — CSS grid of images. Model returns array of URLs/data URLs. Click to expand lightbox. Schema props: `columns` (default 3), `gap` (default 8px). Zero-cost, included in core bundle
+    - `highlight` — Highlighted text with labels. Model returns `[{text, label, color}]` segments. Unlabeled segments render as plain text. Zero-cost, included in core bundle
     - `function` — Render function. Rather than returning a value, a model returns a function that JSEE will call passing the container element
     - `blank` — Blank block (can be alternative to `function` and useful for custom renderers)
 - `examples` — List of examples

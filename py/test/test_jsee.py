@@ -271,8 +271,14 @@ class TestFindRuntime:
     def test_finds_runtime(self):
         path = _find_runtime()
         assert path is not None
-        assert path.endswith('jsee.runtime.js')
+        assert path.endswith('jsee.core.js')
         assert os.path.isfile(path)
+
+    def test_finds_full_bundle_for_chart_output(self):
+        schema = {'outputs': [{'name': 'plot', 'type': 'chart'}]}
+        path = _find_runtime(schema)
+        if path and 'jsee.full.js' in path:
+            assert os.path.isfile(path)
 
 
 # ---------------------------------------------------------------------------
@@ -375,11 +381,11 @@ class TestServerWithFunction:
         resp = urlopen(self.base + '/')
         html = resp.read().decode()
         assert '<!DOCTYPE html>' in html
-        assert '/static/jsee.runtime.js' in html
+        assert '/static/jsee.js' in html
         assert 'add' in html
 
     def test_runtime_js_served_locally(self):
-        resp = urlopen(self.base + '/static/jsee.runtime.js')
+        resp = urlopen(self.base + '/static/jsee.js')
         js = resp.read()
         assert len(js) > 10000  # runtime is ~300KB
 

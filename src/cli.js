@@ -166,14 +166,32 @@ function resolveOutputPath (cwd, outputPath) {
   return path.join(cwd, outputPath)
 }
 
-async function loadRuntimeCode (version) {
-  if (version === 'dev') {
-    return fs.readFileSync(path.join(__dirname, '..', 'dist', 'jsee.js'), 'utf8')
+const FULL_BUNDLE_TYPES = ['chart', '3d', 'map', 'pdf']
+
+function needsFullBundle (schema) {
+  const outputs = schema.outputs || []
+  const check = (list) => list.some(o => {
+    if (FULL_BUNDLE_TYPES.includes(o.type)) return true
+    if (o.type === 'group' && o.elements) return check(o.elements)
+    return false
+  })
+  return check(outputs)
+}
+
+function getBundleFilename (schema) {
+  return needsFullBundle(schema) ? 'jsee.full.js' : 'jsee.core.js'
+}
+
+async function loadRuntimeCode (version, schema) {
+  const bundle = schema ? getBundleFilename(schema) : 'jsee.core.js'
+  if (version === 'dev' || version === 'latest') {
+    const filePath = path.join(__dirname, '..', 'dist', bundle)
+    if (fs.existsSync(filePath)) {
+      return fs.readFileSync(filePath, 'utf8')
+    }
+    return fs.readFileSync(path.join(__dirname, '..', 'dist', 'jsee.core.js'), 'utf8')
   }
-  if (version === 'latest') {
-    return fs.readFileSync(path.join(__dirname, '..', 'dist', 'jsee.runtime.js'), 'utf8')
-  }
-  const response = await fetch(`https://cdn.jsdelivr.net/npm/@jseeio/jsee@${version}/dist/jsee.runtime.js`)
+  const response = await fetch(`https://cdn.jsdelivr.net/npm/@jseeio/jsee@${version}/dist/${bundle}`)
   return response.text()
 }
 
@@ -859,7 +877,7 @@ Documentation: https://jsee.org
   const runtimeMode = resolveRuntimeMode(argv.runtime, argv.fetch, hasOutputs)
   if (argv.fetch) {
     // Fetch jsee code from the CDN or local server
-    const jseeCode = await loadRuntimeCode(argv.version)
+    const jseeCode = await loadRuntimeCode(argv.version, schema)
     jseeHtml = `<script>${jseeCode}</script>`
     // Fetch model files and store them in hidden elements
     hiddenElementHtml += '<div id="hidden-storage" style="display: none;">'
@@ -933,14 +951,14 @@ Documentation: https://jsee.org
     hiddenElementHtml += '</div>'
   } else {
     if (runtimeMode === 'inline') {
-      const jseeCode = await loadRuntimeCode(argv.version)
+      const jseeCode = await loadRuntimeCode(argv.version, schema)
       jseeHtml = `<script>${jseeCode}</script>`
     } else if (runtimeMode === 'cdn') {
-      jseeHtml = `<script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@${argv.version}/dist/jsee.runtime.js"></script>`
+      const bundle = getBundleFilename(schema)
+      jseeHtml = `<script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@${argv.version}/dist/${bundle}"></script>`
     } else if (runtimeMode === 'local') {
-      jseeHtml = argv.version === 'dev'
-        ? `<script src="http://localhost:${argv.port}/dist/jsee.js"></script>`
-        : `<script src="http://localhost:${argv.port}/dist/jsee.runtime.js"></script>`
+      const bundle = getBundleFilename(schema)
+      jseeHtml = `<script src="http://localhost:${argv.port}/dist/${bundle}"></script>`
     } else {
       // Custom path/URL passed via --runtime (e.g. ./node_modules/.../jsee.js)
       jseeHtml = `<script src="${runtimeMode}"></script>`
@@ -1117,3 +1135,4 @@ module.exports.resolveLocalImportFile = resolveLocalImportFile
 module.exports.resolveFetchImport = resolveFetchImport
 module.exports.resolveRuntimeMode = resolveRuntimeMode
 module.exports.resolveOutputPath = resolveOutputPath
+module.exports.needsFullBundle = needsFullBundle

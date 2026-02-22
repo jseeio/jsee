@@ -24,7 +24,10 @@ const {
   toTypedArray,
   fromTypedArray,
   wrapTypedArrayInputs,
-  collectTransferables
+  collectTransferables,
+  columnsToRows,
+  createValidateFn,
+  runValidation
 } = require('../../src/utils')
 
 describe('isObject', () => {
@@ -475,13 +478,15 @@ describe('getName', () => {
     const obj = { code: (a, b) => a + b }
     expect(getName(obj.code)).toBeUndefined()
   })
-  test('anonymous function reference returns undefined', () => {
+  test('anonymous function assigned to variable returns undefined', () => {
     const fn = function () {}
-    // When assigned to a variable, .name is inferred, but toString() doesn't
-    // start with 'function <name>' — it starts with 'function ()'
-    // For this case getName should still work because fn.name = 'fn'
-    // and fn.toString() starts with 'function'
-    expect(getName(fn)).toBe('fn')
+    // .name is inferred as "fn" but toString() is "function () {}" — no name in source
+    expect(getName(fn)).toBeUndefined()
+  })
+  test('anonymous function on object property returns undefined', () => {
+    const obj = { code: function (data, ctx) { return data } }
+    // .name is inferred as "code" but toString() is "function (data, ctx) { ... }"
+    expect(getName(obj.code)).toBeUndefined()
   })
   test('async function reference', () => {
     async function fetchData () {}
@@ -1127,5 +1132,179 @@ describe('collectTransferables', () => {
     expect(collectTransferables(null)).toEqual([])
     expect(collectTransferables(42)).toEqual([])
     expect(collectTransferables('str')).toEqual([])
+  })
+})
+
+describe('createValidateFn', () => {
+  // Simple filtrex-like compiler for testing
+  const mockCompile = (expr, opts) => {
+    return (ctx) => {
+      const { value } = ctx
+      const { extraFunctions } = opts || {}
+      // Support simple expressions for testing
+      if (expr === 'value >= 0 and value <= 150') return value >= 0 && value <= 150
+      if (expr === 'value > 0') return value > 0
+      if (expr === 'len(value) > 0') return extraFunctions.len(value) > 0
+      return true
+    }
+  }
+  const filtrexOptions = { extraFunctions: { len: s => (s && s.length) || 0 } }
+
+  test('returns null for input without validate or required', () => {
+    const fn = createValidateFn({ name: 'x', type: 'string' }, mockCompile, filtrexOptions)
+    expect(fn).toBeNull()
+  })
+
+  test('validates with filtrex expression — valid value', () => {
+    const fn = createValidateFn(
+      { name: 'age', type: 'int', validate: 'value >= 0 and value <= 150' },
+      mockCompile, filtrexOptions
+    )
+    expect(fn(25)).toBeNull()
+  })
+
+  test('validates with filtrex expression — invalid value', () => {
+    const fn = createValidateFn(
+      { name: 'age', type: 'int', validate: 'value >= 0 and value <= 150' },
+      mockCompile, filtrexOptions
+    )
+    expect(fn(200)).toBe('Invalid value')
+  })
+
+  test('uses custom error message', () => {
+    const fn = createValidateFn(
+      { name: 'age', type: 'int', validate: 'value > 0', error: 'Must be positive' },
+      mockCompile, filtrexOptions
+    )
+    expect(fn(0)).toBe('Must be positive')
+    expect(fn(5)).toBeNull()
+  })
+
+  test('required rejects empty string', () => {
+    const fn = createValidateFn(
+      { name: 'name', type: 'string', required: true },
+      mockCompile, filtrexOptions
+    )
+    expect(fn('')).toBe('Required')
+    expect(fn('hello')).toBeNull()
+  })
+
+  test('required rejects null and undefined', () => {
+    const fn = createValidateFn(
+      { name: 'x', type: 'string', required: true },
+      mockCompile, filtrexOptions
+    )
+    expect(fn(null)).toBe('Required')
+    expect(fn(undefined)).toBe('Required')
+  })
+
+  test('required rejects empty array', () => {
+    const fn = createValidateFn(
+      { name: 'tags', type: 'multi-select', required: true },
+      mockCompile, filtrexOptions
+    )
+    expect(fn([])).toBe('Required')
+    expect(fn(['a'])).toBeNull()
+  })
+
+  test('required with custom error message', () => {
+    const fn = createValidateFn(
+      { name: 'x', type: 'string', required: true, error: 'Please fill this in' },
+      mockCompile, filtrexOptions
+    )
+    expect(fn('')).toBe('Please fill this in')
+  })
+
+  test('validate expression error returns error message', () => {
+    const throwingCompile = () => () => { throw new Error('bad') }
+    const fn = createValidateFn(
+      { name: 'x', type: 'string', validate: 'bad expr' },
+      throwingCompile, filtrexOptions
+    )
+    expect(fn('anything')).toBe('Invalid value')
+  })
+})
+
+describe('runValidation', () => {
+  test('sets _error on invalid inputs', () => {
+    const inputs = [
+      { name: 'a', value: '', _error: null },
+      { name: 'b', value: 5, _error: null }
+    ]
+    const fns = [
+      (v) => v === '' ? 'Required' : null,
+      null
+    ]
+    const hasErrors = runValidation(inputs, fns)
+    expect(hasErrors).toBe(true)
+    expect(inputs[0]._error).toBe('Required')
+    expect(inputs[1]._error).toBeNull()
+  })
+
+  test('clears _error on valid inputs', () => {
+    const inputs = [
+      { name: 'a', value: 'hello', _error: 'Required' }
+    ]
+    const fns = [(v) => v === '' ? 'Required' : null]
+    const hasErrors = runValidation(inputs, fns)
+    expect(hasErrors).toBe(false)
+    expect(inputs[0]._error).toBeNull()
+  })
+
+  test('returns false when no validation functions', () => {
+    const inputs = [
+      { name: 'a', value: '', _error: null }
+    ]
+    const hasErrors = runValidation(inputs, [null])
+    expect(hasErrors).toBe(false)
+  })
+
+  test('handles empty inputs', () => {
+    expect(runValidation([], [])).toBe(false)
+  })
+})
+
+describe('columnsToRows', () => {
+  test('converts column-oriented data to row-oriented', () => {
+    const result = columnsToRows({ x: [1, 2, 3], y: [4, 5, 6] })
+    expect(result).toEqual([
+      { x: 1, y: 4 },
+      { x: 2, y: 5 },
+      { x: 3, y: 6 }
+    ])
+  })
+
+  test('returns empty array for empty object', () => {
+    expect(columnsToRows({})).toEqual([])
+  })
+
+  test('returns input unchanged if not an object', () => {
+    expect(columnsToRows([1, 2])).toEqual([1, 2])
+    expect(columnsToRows('hello')).toBe('hello')
+    expect(columnsToRows(null)).toBe(null)
+    expect(columnsToRows(42)).toBe(42)
+  })
+
+  test('returns input unchanged if values are not arrays', () => {
+    expect(columnsToRows({ x: 1, y: 2 })).toEqual({ x: 1, y: 2 })
+  })
+
+  test('returns input unchanged if arrays have different lengths', () => {
+    const data = { x: [1, 2], y: [3] }
+    expect(columnsToRows(data)).toEqual(data)
+  })
+
+  test('handles single-column data', () => {
+    expect(columnsToRows({ x: [1, 2, 3] })).toEqual([
+      { x: 1 },
+      { x: 2 },
+      { x: 3 }
+    ])
+  })
+
+  test('handles single-row data', () => {
+    expect(columnsToRows({ x: [10], y: [20] })).toEqual([
+      { x: 10, y: 20 }
+    ])
   })
 })
