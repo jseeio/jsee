@@ -22,9 +22,15 @@ from jsee.jsee import (
     generate_openapi_spec,
     _find_runtime,
     _type_hint_to_jsee,
+    _return_hint_to_output,
+    _serialize_result,
+    _to_table_format,
     serve,
 )
-from jsee.types import Slider, Text, Radio, Select, MultiSelect, Range, Color
+from jsee.types import (
+    Slider, Text, Radio, Select, MultiSelect, Range, Color,
+    Markdown, Html, Code, Image, Table, Svg, File,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -734,3 +740,210 @@ class TestServerWithLiteralInput:
         resp = urlopen(req)
         result = json.loads(resp.read())
         assert result['result'] == -5
+
+
+# ---------------------------------------------------------------------------
+# Return type → outputs
+# ---------------------------------------------------------------------------
+
+class TestReturnHintToOutput:
+    def test_none(self):
+        assert _return_hint_to_output(None) is None
+
+    def test_str_returns_none(self):
+        """str return — auto-detect is fine, no explicit output."""
+        assert _return_hint_to_output(str) is None
+
+    def test_int_returns_none(self):
+        assert _return_hint_to_output(int) is None
+
+    def test_list_returns_table(self):
+        out = _return_hint_to_output(list)
+        assert out == [{'name': 'result', 'type': 'table'}]
+
+    def test_bytes_returns_image(self):
+        out = _return_hint_to_output(bytes)
+        assert out == [{'name': 'result', 'type': 'image'}]
+
+    def test_annotated_markdown(self):
+        out = _return_hint_to_output(Annotated[str, Markdown()])
+        assert out == [{'name': 'result', 'type': 'markdown'}]
+
+    def test_annotated_html(self):
+        out = _return_hint_to_output(Annotated[str, Html()])
+        assert out == [{'name': 'result', 'type': 'html'}]
+
+    def test_annotated_code(self):
+        out = _return_hint_to_output(Annotated[str, Code()])
+        assert out == [{'name': 'result', 'type': 'code'}]
+
+    def test_annotated_image(self):
+        out = _return_hint_to_output(Annotated[str, Image()])
+        assert out == [{'name': 'result', 'type': 'image'}]
+
+    def test_annotated_table(self):
+        out = _return_hint_to_output(Annotated[list, Table()])
+        assert out == [{'name': 'result', 'type': 'table'}]
+
+    def test_annotated_svg(self):
+        out = _return_hint_to_output(Annotated[str, Svg()])
+        assert out == [{'name': 'result', 'type': 'svg'}]
+
+    def test_annotated_file_with_filename(self):
+        out = _return_hint_to_output(Annotated[str, File('data.csv')])
+        assert out == [{'name': 'result', 'type': 'file', 'filename': 'data.csv'}]
+
+
+# ---------------------------------------------------------------------------
+# Schema with outputs
+# ---------------------------------------------------------------------------
+
+class TestSchemaOutputs:
+    def test_outputs_from_return_annotation(self):
+        def fn(x: int) -> Annotated[str, Markdown()]:
+            return '# hello'
+        schema = generate_schema(fn)
+        assert 'outputs' in schema
+        assert schema['outputs'] == [{'name': 'result', 'type': 'markdown'}]
+
+    def test_outputs_from_list_return(self):
+        def fn(x: int) -> list:
+            return [{'a': 1}]
+        schema = generate_schema(fn)
+        assert schema['outputs'] == [{'name': 'result', 'type': 'table'}]
+
+    def test_outputs_kwarg_dict(self):
+        schema = generate_schema(add, outputs={'data': 'table', 'chart': 'image'})
+        assert len(schema['outputs']) == 2
+        types = {o['name']: o['type'] for o in schema['outputs']}
+        assert types == {'data': 'table', 'chart': 'image'}
+
+    def test_outputs_kwarg_with_descriptors(self):
+        schema = generate_schema(add, outputs={'result': Table(), 'plot': Image()})
+        types = {o['name']: o['type'] for o in schema['outputs']}
+        assert types == {'result': 'table', 'plot': 'image'}
+
+    def test_outputs_kwarg_list(self):
+        out_list = [{'name': 'md', 'type': 'markdown'}]
+        schema = generate_schema(add, outputs=out_list)
+        assert schema['outputs'] == out_list
+
+    def test_outputs_kwarg_overrides_return_hint(self):
+        def fn(x: int) -> list:
+            return [1, 2]
+        schema = generate_schema(fn, outputs={'data': 'table'})
+        assert schema['outputs'] == [{'name': 'data', 'type': 'table'}]
+
+    def test_no_outputs_for_dict_return(self):
+        """dict return — auto-detect works, no explicit outputs needed."""
+        def fn(x: int) -> dict:
+            return {'a': 1}
+        schema = generate_schema(fn)
+        assert 'outputs' not in schema
+
+    def test_no_outputs_when_no_return_hint(self):
+        schema = generate_schema(add)
+        assert 'outputs' not in schema
+
+
+# ---------------------------------------------------------------------------
+# Table format conversion
+# ---------------------------------------------------------------------------
+
+class TestToTableFormat:
+    def test_list_of_dicts(self):
+        data = [{'name': 'Alice', 'age': 30}, {'name': 'Bob', 'age': 25}]
+        result = _to_table_format(data)
+        assert result == {'columns': ['name', 'age'], 'rows': [['Alice', 30], ['Bob', 25]]}
+
+    def test_empty_list(self):
+        assert _to_table_format([]) == []
+
+    def test_list_of_non_dicts(self):
+        assert _to_table_format([1, 2, 3]) == [1, 2, 3]
+
+
+# ---------------------------------------------------------------------------
+# Serialize result with nested values
+# ---------------------------------------------------------------------------
+
+class TestSerializeResultNested:
+    def test_dict_with_list_of_dicts(self):
+        result = {'data': [{'a': 1}, {'a': 2}], 'score': 42}
+        serialized = _serialize_result(result)
+        assert serialized['data'] == {'columns': ['a'], 'rows': [[1], [2]]}
+        assert serialized['score'] == 42
+
+    def test_dict_with_bytes_value(self):
+        result = {'image': b'\x89PNG', 'label': 'cat'}
+        serialized = _serialize_result(result)
+        assert serialized['image'].startswith('data:image/png;base64,')
+        assert serialized['label'] == 'cat'
+
+    def test_bare_list_of_dicts(self):
+        result = [{'x': 1}, {'x': 2}]
+        serialized = _serialize_result(result)
+        assert serialized['result'] == {'columns': ['x'], 'rows': [[1], [2]]}
+
+
+# ---------------------------------------------------------------------------
+# Server with table output
+# ---------------------------------------------------------------------------
+
+class TestServerWithTableOutput:
+    @classmethod
+    def setup_class(cls):
+        def get_data(n: int = 3) -> list:
+            return [{'i': i, 'sq': i * i} for i in range(n)]
+        cls.port = 15064
+        cls.thread = _start_server(get_data, cls.port)
+        cls.base = 'http://localhost:{}'.format(cls.port)
+
+    def test_schema_has_table_output(self):
+        resp = urlopen(self.base + '/api')
+        data = json.loads(resp.read())
+        assert 'outputs' in data['schema']
+        assert data['schema']['outputs'][0]['type'] == 'table'
+
+    def test_post_returns_table_format(self):
+        req = Request(
+            self.base + '/get_data',
+            data=json.dumps({'n': 2}).encode(),
+            headers={'Content-Type': 'application/json'}
+        )
+        resp = urlopen(req)
+        result = json.loads(resp.read())
+        assert result['result'] == {'columns': ['i', 'sq'], 'rows': [[0, 0], [1, 1]]}
+
+
+class TestServerWithOutputsKwarg:
+    @classmethod
+    def setup_class(cls):
+        def analyze(text: str) -> dict:
+            return {
+                'summary': '**Bold**: ' + text,
+                'stats': [{'metric': 'length', 'value': len(text)}]
+            }
+        cls.port = 15065
+        cls.thread = _start_server(
+            analyze, cls.port,
+            outputs={'summary': 'markdown', 'stats': 'table'}
+        )
+        cls.base = 'http://localhost:{}'.format(cls.port)
+
+    def test_schema_has_declared_outputs(self):
+        resp = urlopen(self.base + '/api')
+        data = json.loads(resp.read())
+        outputs = {o['name']: o['type'] for o in data['schema']['outputs']}
+        assert outputs == {'summary': 'markdown', 'stats': 'table'}
+
+    def test_post_serializes_nested(self):
+        req = Request(
+            self.base + '/analyze',
+            data=json.dumps({'text': 'hello'}).encode(),
+            headers={'Content-Type': 'application/json'}
+        )
+        resp = urlopen(req)
+        result = json.loads(resp.read())
+        assert result['summary'] == '**Bold**: hello'
+        assert result['stats'] == {'columns': ['metric', 'value'], 'rows': [['length', 5]]}

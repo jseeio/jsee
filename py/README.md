@@ -97,6 +97,41 @@ jsee.serve(predict)
 | `jsee.Range(min, max, step)` | `range` | Dual-handle slider |
 | `jsee.Color()` | `color` | Color picker |
 
+### Output types
+
+Use `typing.Annotated` with output descriptors on the return type, or declare outputs via the `outputs` kwarg:
+
+```python
+from typing import Annotated
+import jsee
+
+# Option 1: return type annotation
+def summarize(text: str) -> Annotated[str, jsee.Markdown()]:
+    return '## Summary\n\n' + text[:100] + '...'
+
+# Option 2: outputs kwarg (for multi-output dicts)
+def report(query: str) -> dict:
+    rows = [{'word': w, 'len': len(w)} for w in query.split()]
+    return {'summary': '**Found {}**'.format(len(rows)), 'data': rows}
+
+jsee.serve(report, outputs={'summary': jsee.Markdown(), 'data': jsee.Table()})
+```
+
+| Annotation | JSEE output type | Renders as |
+|---|---|---|
+| `jsee.Markdown()` | `markdown` | Formatted Markdown |
+| `jsee.Html()` | `html` | Raw HTML |
+| `jsee.Code()` | `code` | Code block (`<pre>`) |
+| `jsee.Image()` | `image` | `<img>` tag |
+| `jsee.Table()` | `table` | Sortable table |
+| `jsee.Svg()` | `svg` | Inline SVG |
+| `jsee.File(filename)` | `file` | Download button |
+
+Auto-detected output types:
+- `-> list` → `table` (list-of-dicts auto-converted to `{columns, rows}` format)
+- `-> bytes` → `image` (base64-encoded)
+- `-> dict` → runtime auto-detects per key (no explicit outputs needed)
+
 ## API
 
 ### `jsee.serve(target, host='0.0.0.0', port=5050, **kwargs)`
@@ -113,6 +148,7 @@ Keyword arguments (when target is a function):
 - `description` — page description (default: first line of docstring)
 - `examples` — list of dicts with clickable example inputs
 - `reactive` — `True` to auto-run on input change (no submit button)
+- `outputs` — dict or list of output type declarations
 
 ```python
 from typing import Literal
@@ -162,11 +198,15 @@ Every JSEE server exposes:
 | `/{model_name}` | POST | Execute model with JSON body |
 
 ```bash
-# Execute the model
+# Execute with JSON
 curl -X POST http://localhost:5050/sum \
   -H 'Content-Type: application/json' \
   -d '{"x": 3, "y": 4}'
 # → {"result": 7}
+
+# Execute with file upload (multipart/form-data)
+curl -X POST http://localhost:5050/analyze \
+  -F 'data=@myfile.txt'
 
 # Discover endpoints
 curl http://localhost:5050/api
@@ -179,11 +219,14 @@ curl http://localhost:5050/api/openapi.json
 
 | Python return | JSON response |
 |---|---|
-| `dict` | returned as-is: `{"key": "value"}` |
+| `dict` | returned as-is (each value serialized individually) |
 | `int`, `float`, `str` | wrapped: `{"result": value}` |
 | `tuple` | converted to list: `{"result": [a, b]}` |
 | `bytes` | base64 image: `{"result": "data:image/png;base64,..."}` |
 | PIL `Image` | base64 image (auto-detected) |
+| `list[dict]` | table format: `{"result": {"columns": [...], "rows": [...]}}` |
+
+Nested serialization: when returning a dict, each value is serialized individually. A dict value that is `bytes` becomes a base64 data URL, a `list[dict]` value becomes `{columns, rows}` table format, etc.
 
 ## Gradio comparison
 

@@ -4,7 +4,8 @@
 ### Features:
 - Python: richer type introspection — `Literal` → select, `Enum` → select, `Annotated[T, jsee.Slider()]` → slider, `Optional` unwrapping, `datetime.date` → date picker, plus `Text`, `Radio`, `Select`, `MultiSelect`, `Range`, `Color` annotation descriptors
 - Python: `serve()` keyword args — `title`, `description`, `examples`, `reactive`; auto-parses docstring for description
-- Python: result serialization — tuple → list, bytes/PIL Image → base64 data URL
+- Python: result serialization — tuple → list, bytes/PIL Image → base64 data URL, list-of-dicts → `{columns, rows}` table format, per-value serialization in dict results
+- Python: output type declarations — `Annotated[str, jsee.Markdown()]` return types, `outputs` kwarg for `serve()`/`generate_schema()`, auto-detect `list` → table and `bytes` → image; output descriptors: `Markdown`, `Html`, `Code`, `Image`, `Table`, `Svg`, `File`
 - Python: multipart/form-data file upload support in POST handler
 - Node.js: result serialization parity — `serializeResult()` wraps primitives, converts Buffer/Uint8Array to base64 image
 - Node.js: multipart/form-data POST support via `parseMultipart()` (zero new dependencies)

@@ -55,3 +55,55 @@ class Range:
 class Color:
   """String input rendered as a color picker."""
   pass
+
+
+# ---------------------------------------------------------------------------
+# Output descriptors — used in return type annotations or outputs kwarg
+# ---------------------------------------------------------------------------
+
+class Markdown:
+  """Output rendered as Markdown (headings, tables, links, etc.)."""
+  pass
+
+
+class Html:
+  """Output rendered as raw HTML."""
+  pass
+
+
+class Code:
+  """Output rendered in a <pre> code block."""
+  pass
+
+
+class Image:
+  """Output rendered as an <img> tag (expects URL or data URI)."""
+  pass
+
+
+class Table:
+  """Output rendered as a sortable, scrollable table."""
+  pass
+
+
+class Svg:
+  """Output rendered as inline SVG."""
+  pass
+
+
+class File:
+  """Output rendered as a download button (not displayed)."""
+  def __init__(self, filename=None):
+    self.filename = filename
+
+
+# Map descriptor class → JSEE output type string
+OUTPUT_TYPE_MAP = {
+  Markdown: 'markdown',
+  Html: 'html',
+  Code: 'code',
+  Image: 'image',
+  Table: 'table',
+  Svg: 'svg',
+  File: 'file',
+}

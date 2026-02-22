@@ -12,7 +12,10 @@ from inspect import signature, _empty
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.parse
 
-from .types import Slider, Text, Radio, Select, MultiSelect, Range, Color
+from .types import (
+  Slider, Text, Radio, Select, MultiSelect, Range, Color,
+  Markdown, Html, Code, Image, Table, Svg, File, OUTPUT_TYPE_MAP,
+)
 
 
 def _find_runtime():
@@ -121,6 +124,64 @@ def _type_hint_to_jsee(hint):
   return 'string', {}
 
 
+def _return_hint_to_output(hint):
+  """Map a return type annotation to a JSEE output descriptor.
+
+  Returns a list of output dicts, or None if no explicit output should be set.
+  """
+  if hint is None or hint is type(None):
+    return None
+
+  origin = typing.get_origin(hint)
+  args = typing.get_args(hint)
+
+  # Annotated[T, descriptor] — check for output descriptors
+  if origin is typing.Annotated:
+    base = args[0]
+    for meta in args[1:]:
+      meta_type = type(meta)
+      if meta_type in OUTPUT_TYPE_MAP:
+        out = {'name': 'result', 'type': OUTPUT_TYPE_MAP[meta_type]}
+        if isinstance(meta, File) and meta.filename:
+          out['filename'] = meta.filename
+        return [out]
+    # No output descriptor found, fall through to base type
+    return _return_hint_to_output(base)
+
+  # tuple[X, Y, ...] — multiple outputs (not supported for naming, skip)
+  # dict — auto-detect works fine (runtime creates outputs from keys)
+  # list — suggest table
+  if origin is list or hint is list:
+    return [{'name': 'result', 'type': 'table'}]
+  if hint is bytes or hint is bytearray:
+    return [{'name': 'result', 'type': 'image'}]
+
+  return None
+
+
+def _build_outputs(kwargs_outputs):
+  """Build outputs list from the outputs kwarg.
+
+  Accepts:
+    - dict mapping name → type string or descriptor instance
+    - list of output dicts (passed through)
+  """
+  if isinstance(kwargs_outputs, list):
+    return kwargs_outputs
+  outputs = []
+  for name, spec in kwargs_outputs.items():
+    if isinstance(spec, str):
+      outputs.append({'name': name, 'type': spec})
+    elif type(spec) in OUTPUT_TYPE_MAP:
+      out = {'name': name, 'type': OUTPUT_TYPE_MAP[type(spec)]}
+      if isinstance(spec, File) and spec.filename:
+        out['filename'] = spec.filename
+      outputs.append(out)
+    else:
+      outputs.append({'name': name, 'type': 'object'})
+  return outputs
+
+
 def generate_schema(target, host='0.0.0.0', port=5050, **kwargs):
   """Introspect a Python function and generate a JSEE schema.
 
@@ -129,6 +190,9 @@ def generate_schema(target, host='0.0.0.0', port=5050, **kwargs):
     description: str — page description (default: first line of docstring)
     examples: list[dict] — clickable example inputs
     reactive: bool — auto-run on input change (no submit button)
+    outputs: dict or list — output type declarations, e.g.
+      {'data': 'table', 'chart': jsee.Image()} or
+      [{'name': 'result', 'type': 'markdown'}]
   """
   hints = typing.get_type_hints(target, include_extras=True)
   sig = signature(target)
@@ -164,6 +228,15 @@ def generate_schema(target, host='0.0.0.0', port=5050, **kwargs):
     },
     'inputs': inputs,
   }
+
+  # Outputs — from kwarg, return type annotation, or omitted (runtime auto-detect)
+  if kwargs.get('outputs'):
+    schema['outputs'] = _build_outputs(kwargs['outputs'])
+  elif 'return' in hints:
+    auto_outputs = _return_hint_to_output(hints['return'])
+    if auto_outputs:
+      schema['outputs'] = auto_outputs
+
   if description:
     schema['model']['description'] = description
     schema['page'] = {'description': description}
@@ -311,30 +384,50 @@ def _parse_multipart(content_type, body):
   return data
 
 
+def _to_table_format(data):
+  """Convert list-of-dicts to {columns, rows} for JSEE table output.
+
+  This format enables save-as-CSV and copy-as-TSV in the runtime.
+  """
+  if not data or not isinstance(data[0], dict):
+    return data
+  columns = list(data[0].keys())
+  rows = [[row.get(c) for c in columns] for row in data]
+  return {'columns': columns, 'rows': rows}
+
+
+def _serialize_value(value):
+  """Serialize a single value (may be nested inside a dict result)."""
+  if isinstance(value, (bytes, bytearray)):
+    b64 = base64.b64encode(value).decode('ascii')
+    return 'data:image/png;base64,' + b64
+  if hasattr(value, 'save') and hasattr(value, 'mode'):
+    buf = io.BytesIO()
+    fmt = 'PNG' if value.mode == 'RGBA' else 'JPEG'
+    value.save(buf, format=fmt)
+    b64 = base64.b64encode(buf.getvalue()).decode('ascii')
+    mime = 'image/png' if fmt == 'PNG' else 'image/jpeg'
+    return 'data:{};base64,{}'.format(mime, b64)
+  if isinstance(value, list) and value and isinstance(value[0], dict):
+    return _to_table_format(value)
+  return value
+
+
 def _serialize_result(result):
   """Serialize a function result for JSON response.
 
-  Handles: dict, tuple, list, bytes, PIL Image, primitives.
+  Handles: dict, tuple, list, bytes, PIL Image, list-of-dicts, primitives.
   """
-  # Dict — return as-is
+  # Dict — serialize each value individually
   if isinstance(result, dict):
-    return result
+    return {k: _serialize_value(v) for k, v in result.items()}
   # Tuple — convert to list
   if isinstance(result, tuple):
-    return {'result': list(result)}
-  # Bytes — assume image, base64-encode
-  if isinstance(result, (bytes, bytearray)):
-    b64 = base64.b64encode(result).decode('ascii')
-    return {'result': 'data:image/png;base64,' + b64}
-  # PIL Image (duck-type check)
-  if hasattr(result, 'save') and hasattr(result, 'mode'):
-    buf = io.BytesIO()
-    fmt = 'PNG' if result.mode == 'RGBA' else 'JPEG'
-    result.save(buf, format=fmt)
-    b64 = base64.b64encode(buf.getvalue()).decode('ascii')
-    mime = 'image/png' if fmt == 'PNG' else 'image/jpeg'
-    return {'result': 'data:{};base64,{}'.format(mime, b64)}
-  # Everything else
+    return {'result': [_serialize_value(v) for v in result]}
+  # Top-level value
+  serialized = _serialize_value(result)
+  if serialized is not result:
+    return {'result': serialized}
   return {'result': result}
 
 
