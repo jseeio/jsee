@@ -97,6 +97,42 @@
 .jsee-file-download-btn:hover {
   background: var(--jsee-border, #e0e0e0);
 }
+.jsee-chat-messages {
+  max-height: 400px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+}
+.jsee-chat-msg {
+  display: flex;
+}
+.jsee-chat-user {
+  justify-content: flex-end;
+}
+.jsee-chat-assistant {
+  justify-content: flex-start;
+}
+.jsee-chat-bubble {
+  max-width: 80%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.jsee-chat-bubble p { margin: 0; }
+.jsee-chat-bubble p + p { margin-top: 4px; }
+.jsee-chat-user .jsee-chat-bubble {
+  background: var(--jsee-primary, #00d1b2);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+.jsee-chat-assistant .jsee-chat-bubble {
+  background: var(--jsee-bg-secondary, #f5f5f5);
+  color: var(--jsee-text, #333);
+  border-bottom-left-radius: 4px;
+}
 </style>
 
 <template>
@@ -123,11 +159,11 @@
   <div
     v-else
     class="jsee-output-card"
-    v-show="!(typeof output.value === 'undefined')"
+    v-show="!(typeof output.value === 'undefined') || output.type === 'chat'"
     :class="{ 'is-fullscreen': isFullScreen }"
     ref="cardRoot"
   >
-    <div class="jsee-output-header">
+    <div class="jsee-output-header" v-if="output.type !== 'chat'">
       <p class="jsee-output-title" v-if="output.name">{{ output.name }}</p>
       <div class="jsee-output-actions">
         <button v-on:click="save()">Save</button>
@@ -157,6 +193,14 @@
       </div>
       <div :id="outputName" v-else-if="output.type === 'image'">
         <img :src="output.value" style="max-width: 100%; height: auto;" />
+      </div>
+      <div :id="outputName" v-else-if="output.type === 'chat'" class="jsee-chat">
+        <div class="jsee-chat-messages" ref="chatMessages">
+          <div v-for="(msg, mi) in (output._messages || [])" :key="mi"
+            class="jsee-chat-msg" :class="'jsee-chat-' + msg.role">
+            <div class="jsee-chat-bubble" v-html="renderMarkdown(msg.content)"></div>
+          </div>
+        </div>
       </div>
       <div :id="outputName" v-else-if="output.type === 'file'" class="jsee-file-output">
         <button class="jsee-file-download-btn" v-on:click="downloadFile()">⬇ Download {{ output.filename || output.name || 'file' }}</button>

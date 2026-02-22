@@ -947,3 +947,92 @@ class TestServerWithOutputsKwarg:
         result = json.loads(resp.read())
         assert result['summary'] == '**Bold**: hello'
         assert result['stats'] == {'columns': ['metric', 'value'], 'rows': [['length', 5]]}
+
+
+# ---------------------------------------------------------------------------
+# Chat mode tests
+# ---------------------------------------------------------------------------
+
+class TestChatSchema:
+    """Tests for chat=True schema generation."""
+
+    def test_chat_schema_has_chat_output(self):
+        def chat(message: str, history: list = []) -> str:
+            return 'hello'
+        schema = generate_schema(chat, chat=True)
+        assert schema['outputs'] == [{'name': 'chat', 'type': 'chat'}]
+
+    def test_chat_schema_excludes_history_input(self):
+        def chat(message: str, history: list = []) -> str:
+            return 'hello'
+        schema = generate_schema(chat, chat=True)
+        names = [i['name'] for i in schema['inputs']]
+        assert 'history' not in names
+        assert 'message' in names
+
+    def test_chat_schema_message_has_enter(self):
+        def chat(message: str, history: list = []) -> str:
+            return 'hello'
+        schema = generate_schema(chat, chat=True)
+        msg_input = next(i for i in schema['inputs'] if i['name'] == 'message')
+        assert msg_input.get('enter') is True
+
+    def test_chat_schema_with_title(self):
+        def chat(message: str, history: list = []) -> str:
+            """My chatbot"""
+            return 'hello'
+        schema = generate_schema(chat, chat=True, title='Test Chat')
+        assert schema['model']['title'] == 'Test Chat'
+
+    def test_chat_schema_preserves_other_inputs(self):
+        def chat(message: str, temperature: float = 0.7, history: list = []) -> str:
+            return 'hello'
+        schema = generate_schema(chat, chat=True)
+        names = [i['name'] for i in schema['inputs']]
+        assert 'message' in names
+        assert 'temperature' in names
+        assert 'history' not in names
+
+
+class TestServerWithChat:
+    """Tests for chat=True server mode."""
+
+    @classmethod
+    def setup_class(cls):
+        def chat(message: str, history: list = []) -> str:
+            prefix = 'Turn {}: '.format(len(history) // 2 + 1)
+            return prefix + message.upper()
+        cls.port = 15070
+        cls.thread = _start_server(chat, cls.port, chat=True)
+        cls.base = 'http://localhost:{}'.format(cls.port)
+
+    def test_chat_schema_in_api(self):
+        resp = urlopen(self.base + '/api')
+        data = json.loads(resp.read())
+        outputs = data['schema']['outputs']
+        assert len(outputs) == 1
+        assert outputs[0]['type'] == 'chat'
+
+    def test_chat_post_wraps_string(self):
+        req = Request(
+            self.base + '/chat',
+            data=json.dumps({'message': 'hello', 'history': []}).encode(),
+            headers={'Content-Type': 'application/json'}
+        )
+        resp = urlopen(req)
+        result = json.loads(resp.read())
+        assert result == {'chat': 'Turn 1: HELLO'}
+
+    def test_chat_post_with_history(self):
+        history = [
+            {'role': 'user', 'content': 'hi'},
+            {'role': 'assistant', 'content': 'Turn 1: HI'}
+        ]
+        req = Request(
+            self.base + '/chat',
+            data=json.dumps({'message': 'world', 'history': history}).encode(),
+            headers={'Content-Type': 'application/json'}
+        )
+        resp = urlopen(req)
+        result = json.loads(resp.read())
+        assert result == {'chat': 'Turn 2: WORLD'}

@@ -46,6 +46,16 @@ const component = {
           this.executeRenderFunction()
         })
       }
+    },
+    'output._messages': {
+      deep: true,
+      handler () {
+        this.$nextTick(() => {
+          if (this.$refs.chatMessages) {
+            this.$refs.chatMessages.scrollTop = this.$refs.chatMessages.scrollHeight
+          }
+        })
+      }
     }
   },
   computed: {

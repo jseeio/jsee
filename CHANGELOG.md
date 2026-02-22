@@ -10,6 +10,7 @@
 - Node.js: result serialization parity — `serializeResult()` wraps primitives, converts Buffer/Uint8Array to base64 image
 - Node.js: multipart/form-data POST support via `parseMultipart()` (zero new dependencies)
 - Node.js: JSON 404 error for unknown model POST (was falling through to Express HTML 404)
+- Chat interface: new `chat` output type with message accumulation, history injection, Markdown-rendered bubbles, auto-scroll, Enter-to-send; Python `serve(fn, chat=True)` shorthand for `fn(message, history) → str` pattern
 
 ## 0.5.2
 ### Features:

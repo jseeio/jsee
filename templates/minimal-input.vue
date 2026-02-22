@@ -160,6 +160,7 @@
       v-bind:id="input.name"
       v-bind:placeholder="input.placeholder ? input.placeholder : input.name"
       v-on:change="changeHandler"
+      v-on:keydown.enter="input.enter ? $emit('inchange') : null"
       class="jsee-input"
     >
   </div>

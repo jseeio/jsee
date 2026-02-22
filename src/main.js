@@ -839,6 +839,15 @@ export default class JSEE {
       // Add caller to input values so we can change model behavior based on it
       inputValues.caller = caller
 
+      // Chat mode: inject history and capture user message
+      const chatOutput = this.data.outputs
+        ? this.data.outputs.find(o => o.type === 'chat')
+        : null
+      if (chatOutput) {
+        inputValues.history = chatOutput._messages || []
+        this._lastChatMessage = inputValues.message || ''
+      }
+
       log('Input values:', inputValues)
       this.overlay.show()
       if (this.stopElement) {
@@ -853,6 +862,16 @@ export default class JSEE {
 
       // Output results
       this.output(results)
+
+      // Chat mode: clear the text input for next message
+      if (chatOutput && this._lastChatMessage) {
+        data.inputs.forEach(input => {
+          if (input.name === 'message' || input.type === 'text') {
+            input.value = ''
+          }
+        })
+        this._lastChatMessage = null
+      }
 
       // Check if interval is defined
       if (utils.shouldContinueInterval(schema.interval, this.running, this.isCancelled(), caller)) {
@@ -922,6 +941,24 @@ export default class JSEE {
       delete res._log
       delete res._progress
       log('Processing results as an object:', res)
+
+      // Chat mode: accumulate messages instead of replacing output
+      if (this.data.outputs) {
+        this.data.outputs.forEach(output => {
+          if (output.type !== 'chat' || typeof res[output.name] === 'undefined') return
+          if (!output._messages) output._messages = []
+          if (this._lastChatMessage) {
+            output._messages.push({ role: 'user', content: this._lastChatMessage })
+          }
+          const response = res[output.name]
+          if (typeof response === 'string') {
+            output._messages.push({ role: 'assistant', content: response })
+          } else if (isObject(response) && response.content) {
+            output._messages.push({ role: response.role || 'assistant', content: response.content })
+          }
+          delete res[output.name]
+        })
+      }
 
       if (Object.keys(res).every(key => inputNames.includes(key))) {
         // Update input fields from results

@@ -193,6 +193,7 @@ def generate_schema(target, host='0.0.0.0', port=5050, **kwargs):
     outputs: dict or list — output type declarations, e.g.
       {'data': 'table', 'chart': jsee.Image()} or
       [{'name': 'result', 'type': 'markdown'}]
+    chat: bool — chat mode (text input + chat output, history injected by runtime)
   """
   hints = typing.get_type_hints(target, include_extras=True)
   sig = signature(target)
@@ -229,8 +230,16 @@ def generate_schema(target, host='0.0.0.0', port=5050, **kwargs):
     'inputs': inputs,
   }
 
+  # Chat mode: text input + chat output, exclude 'history' from inputs
+  if kwargs.get('chat'):
+    schema['inputs'] = [i for i in inputs if i['name'] != 'history']
+    # Set enter-to-send on message input
+    for inp in schema['inputs']:
+      if inp['name'] == 'message':
+        inp['enter'] = True
+    schema['outputs'] = [{'name': 'chat', 'type': 'chat'}]
   # Outputs — from kwarg, return type annotation, or omitted (runtime auto-detect)
-  if kwargs.get('outputs'):
+  elif kwargs.get('outputs'):
     schema['outputs'] = _build_outputs(kwargs['outputs'])
   elif 'return' in hints:
     auto_outputs = _return_hint_to_output(hints['return'])
@@ -440,7 +449,7 @@ def serve(target, host='0.0.0.0', port=5050, **kwargs):
     - A string path to schema.json
 
   Keyword args (passed to generate_schema when target is callable):
-    title, description, examples, reactive
+    title, description, examples, reactive, chat
   """
   funcs = {}
   schema_cwd = '.'
@@ -455,7 +464,17 @@ def serve(target, host='0.0.0.0', port=5050, **kwargs):
     schema = target
   elif callable(target):
     schema = generate_schema(target, host, port, **kwargs)
-    funcs[target.__name__] = target
+    if kwargs.get('chat'):
+      # Wrap function to return {chat: result} for string returns
+      original_fn = target
+      def _chat_wrapper(**data):
+        result = original_fn(**data)
+        if isinstance(result, str):
+          return {'chat': result}
+        return result
+      funcs[target.__name__] = _chat_wrapper
+    else:
+      funcs[target.__name__] = target
   else:
     raise ValueError('target must be a function, dict, or path to schema.json')
 

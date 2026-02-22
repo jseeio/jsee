@@ -149,6 +149,7 @@ Keyword arguments (when target is a function):
 - `examples` — list of dicts with clickable example inputs
 - `reactive` — `True` to auto-run on input change (no submit button)
 - `outputs` — dict or list of output type declarations
+- `chat` — `True` for chat mode (see below)
 
 ```python
 from typing import Literal
@@ -166,6 +167,28 @@ jsee.serve(
     reactive=True
 )
 ```
+
+### Chat mode
+
+Use `chat=True` to turn a function into a chat interface. The function receives `message` and `history`, returns a string response. The runtime accumulates messages and renders them as a chat conversation.
+
+```python
+import jsee
+
+def chat(message: str, history: list = []) -> str:
+    """My chatbot"""
+    return 'You said: ' + message
+
+jsee.serve(chat, chat=True)
+```
+
+How it works:
+- The runtime manages conversation state client-side
+- Each Run sends `{message, history}` to the server
+- `history` is a list of `{role: 'user'|'assistant', content: str}` dicts
+- String return is auto-wrapped as `{chat: response}`
+- The `chat` output type renders messages with Markdown support
+- Press Enter in the message field to send
 
 ### `jsee.generate_schema(target, host='0.0.0.0', port=5050, **kwargs)`
 
@@ -242,7 +265,7 @@ JSEE serves the same purpose as Gradio for simple use cases — zero-setup funct
 | Output types | text, image, table, JSON, HTML, markdown, SVG, code, file | 20+ component types |
 | Layout control | Schema-driven (sidebar, tabs, accordion) | Imperative Python API |
 | Streaming | Not yet | Yes (yield) |
-| Chat UI | No | Yes (ChatInterface) |
+| Chat UI | Yes (`chat=True`) | Yes (ChatInterface) |
 
 JSEE is not a Gradio replacement for complex apps. It's a lightweight alternative when you want instant GUI + API from a function with minimal overhead.
 
