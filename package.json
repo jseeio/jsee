@@ -19,7 +19,8 @@
     "test:inputs": "npx playwright test test/test-inputs.pw.js",
     "test:python": "npx playwright test test/test-python.pw.js",
     "test-head": "HEADLESS=false npm test",
-    "lint": "eslint src/ test/"
+    "lint": "eslint src/ test/",
+    "copy-runtime-py": "mkdir -p py/jsee/static && cp dist/jsee.runtime.js py/jsee/static/jsee.runtime.js"
   },
   "bin": {
     "jsee": "./bin/jsee"

@@ -940,6 +940,89 @@ function getUrlParam (urlParams, input) {
   return null
 }
 
+function jseeInputsToJsonSchema (inputs) {
+  const properties = {}
+  const required = []
+  for (const inp of (inputs || [])) {
+    const prop = {}
+    if (inp.description) prop.description = inp.description
+    switch (inp.type) {
+      case 'int':
+        prop.type = 'integer'
+        break
+      case 'float': case 'number':
+        prop.type = 'number'
+        break
+      case 'bool': case 'checkbox': case 'toggle':
+        prop.type = 'boolean'
+        break
+      case 'select': case 'categorical': case 'radio':
+        prop.type = 'string'
+        if (inp.options) prop.enum = inp.options
+        break
+      case 'slider':
+        prop.type = 'number'
+        if (inp.min !== undefined) prop.minimum = inp.min
+        if (inp.max !== undefined) prop.maximum = inp.max
+        if (inp.step !== undefined) prop.multipleOf = inp.step
+        break
+      case 'range':
+        prop.type = 'array'
+        prop.items = { type: 'number' }
+        prop.minItems = 2
+        prop.maxItems = 2
+        break
+      case 'multi-select':
+        prop.type = 'array'
+        prop.items = { type: 'string' }
+        if (inp.options) prop.items.enum = inp.options
+        break
+      default:
+        prop.type = 'string'
+    }
+    if (inp.default !== undefined) prop.default = inp.default
+    properties[inp.name] = prop
+    if (inp.default === undefined) required.push(inp.name)
+  }
+  return { type: 'object', properties, required }
+}
+
+function generateOpenAPISpec (schema) {
+  const models = Array.isArray(schema.model) ? schema.model : (schema.model ? [schema.model] : [])
+  const paths = {}
+  const inputSchema = jseeInputsToJsonSchema(schema.inputs)
+
+  for (const m of models) {
+    paths['/' + m.name] = {
+      post: {
+        summary: 'Run ' + m.name,
+        operationId: m.name,
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: inputSchema } }
+        },
+        responses: {
+          '200': {
+            description: 'Model output',
+            content: { 'application/json': { schema: { type: 'object' } } }
+          }
+        }
+      }
+    }
+  }
+
+  const title = schema.title
+    || (schema.page && schema.page.title)
+    || (models[0] && models[0].name)
+    || 'JSEE API'
+
+  return {
+    openapi: '3.1.0',
+    info: { title, version: '1.0.0' },
+    paths
+  }
+}
+
 module.exports = {
   isObject,
   loadFromDOM,
@@ -963,5 +1046,7 @@ module.exports = {
   isCssImport,
   isRelativeImport,
   getUrlParam,
-  coerceParam
+  coerceParam,
+  jseeInputsToJsonSchema,
+  generateOpenAPISpec
 }

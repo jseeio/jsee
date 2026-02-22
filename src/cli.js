@@ -20,7 +20,7 @@ const converter = new showdown.Converter({
 })
 showdown.setFlavor('github')
 
-const { getModelFuncJS, sanitizeName } = require('./utils.js')
+const { getModelFuncJS, sanitizeName, generateOpenAPISpec } = require('./utils.js')
 
 // left padding of multiple lines
 function pad (str, len, start=0) {
@@ -1037,10 +1037,31 @@ Documentation: https://jsee.org
     const express = require('express')
     const app = express()
     app.use(express.json())
+    // CORS
+    app.use((req, res, next) => {
+      res.header('Access-Control-Allow-Origin', '*')
+      res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+      res.header('Access-Control-Allow-Headers', 'Content-Type')
+      if (req.method === 'OPTIONS') return res.sendStatus(204)
+      next()
+    })
+    // API discovery
+    app.get('/api', (req, res) => {
+      const models = schema.model.map(m => ({
+        name: m.name,
+        endpoint: m.url || '/' + m.name,
+        method: 'POST'
+      }))
+      res.json({ schema, models })
+    })
+    // OpenAPI spec
+    app.get('/api/openapi.json', (req, res) => {
+      res.json(generateOpenAPISpec(schema))
+    })
     if (argv.execute) {
       // Create post endpoint for executing the model
       schema.model.forEach(m => {
-        app.post(m.url, (req, res) => {
+        app.post(m.url, async (req, res) => {
           log(`Executing model: ${m.name}`)
           if (m.name in modelFuncs) {
             const modelFunc = modelFuncs[m.name]
@@ -1049,7 +1070,7 @@ Documentation: https://jsee.org
               const dataFromGUI = req.body
               const data = { ...dataFromGUI, ...dataFromArgv }
               log('Data for model execution:', data)
-              const result = modelFunc(data)
+              const result = await modelFunc(data)
               res.json(result)
               log(`Model ${m.name} executed successfully: `, result)
             } catch (error) {

@@ -3,6 +3,9 @@
 ## 0.5.2
 ### Features:
 - Add `design.layout: 'sidebar'` option — fixed-width (280px) sticky input panel that stays visible while scrolling outputs, collapses to single column on mobile
+- Add server API endpoints: `GET /api` (schema discovery), `GET /api/openapi.json` (auto-generated OpenAPI 3.1 spec), CORS support
+- Fix async model execution in server-side mode (`--execute`)
+- Move Python package into monorepo (`py/`): zero-dependency stdlib server with offline runtime, unified API surface matching Node.js
 
 ## 0.5.1
 ### Features:

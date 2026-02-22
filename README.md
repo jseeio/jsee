@@ -245,6 +245,48 @@ With `--execute` (`-e`), JSEE loads each model's JS file on the server (via `req
 jsee schema.json -e -p 3000
 ```
 
+## API endpoints
+
+Every server (both Node.js with `--execute` and Python) exposes these endpoints:
+
+| Route | Method | Description |
+|---|---|---|
+| `/` | GET | Interactive GUI |
+| `/api` | GET | Schema and endpoint discovery |
+| `/api/openapi.json` | GET | Auto-generated OpenAPI 3.1 spec |
+| `/{modelName}` | POST | Execute model with JSON input |
+
+```bash
+# Run the model via API
+curl -X POST http://localhost:3000/modelName \
+  -H 'Content-Type: application/json' \
+  -d '{"x": 3, "y": 4}'
+
+# Get OpenAPI spec
+curl http://localhost:3000/api/openapi.json
+```
+
+# Python
+
+JSEE also ships a Python package (`py/`) that turns Python functions into web apps with the same GUI and API. Zero dependencies beyond Python stdlib.
+
+```bash
+cd py && pip install -e .
+jsee example.py sum
+```
+
+Or programmatically:
+```python
+import jsee
+
+def multiply(a: float, b: float = 2.0) -> float:
+    return a * b
+
+jsee.serve(multiply, port=5050)
+```
+
+See [`py/README.md`](py/README.md) for full Python documentation.
+
 # Changelog
 
 See `CHANGELOG.md`.

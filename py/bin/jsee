@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+
+import argparse
+import importlib
+import importlib.util
+import os
+import sys
+
+import jsee
+
+
+parser = argparse.ArgumentParser(
+  description='JSEE — turn Python functions into web apps with GUI and REST API'
+)
+parser.add_argument('target', help='Python file with function (e.g. example.py) or schema.json')
+parser.add_argument('function', nargs='?', default=None, help='Function name (required for .py files)')
+parser.add_argument('--host', default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
+parser.add_argument('--port', type=int, default=5050, help='Port to listen on (default: 5050)')
+
+args = parser.parse_args()
+
+sys.path.insert(1, os.getcwd())
+
+if args.target.endswith('.json'):
+  # Schema mode
+  jsee.serve(args.target, args.host, args.port)
+elif args.target.endswith('.py'):
+  # Function mode
+  if not args.function:
+    print('Error: function name required for .py files', file=sys.stderr)
+    print('Usage: jsee example.py function_name', file=sys.stderr)
+    sys.exit(1)
+  module_name = os.path.splitext(os.path.basename(args.target))[0]
+  spec = importlib.util.spec_from_file_location(module_name, os.path.abspath(args.target))
+  module = importlib.util.module_from_spec(spec)
+  spec.loader.exec_module(module)
+  target = getattr(module, args.function)
+  jsee.serve(target, args.host, args.port)
+else:
+  # Try as module name (legacy compat)
+  module = importlib.import_module(args.target.split('.')[0])
+  if args.function:
+    target = getattr(module, args.function)
+    jsee.serve(target, args.host, args.port)
+  else:
+    print('Error: function name required', file=sys.stderr)
+    sys.exit(1)

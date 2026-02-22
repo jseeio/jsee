@@ -1,0 +1,136 @@
+# JSEE for Python
+
+Turn Python functions into web apps with auto-generated GUI and REST API. Zero dependencies beyond Python stdlib.
+
+## Install
+
+```bash
+pip install jsee
+```
+
+## Quick start
+
+### CLI
+
+```bash
+# Serve a function from a Python file
+jsee example.py sum
+
+# Serve from a JSEE schema
+jsee schema.json
+
+# Custom port
+jsee example.py sum --port 8080
+```
+
+### Programmatic
+
+```python
+import jsee
+
+def multiply(a: float, b: float = 2.0) -> float:
+    return a * b
+
+jsee.serve(multiply, port=5050)
+```
+
+This starts a server at `http://localhost:5050` with:
+- Interactive GUI at `/`
+- REST API at `POST /multiply`
+- Schema discovery at `/api`
+- OpenAPI spec at `/api/openapi.json`
+
+## How it works
+
+JSEE introspects your function's type hints and default values to generate a schema describing inputs and their types. The schema drives both the GUI (rendered by the JSEE runtime in the browser) and the API endpoints.
+
+```
+Python function          JSEE schema             Server
+  def sum(               {                       GET  /          → GUI
+    x: int,      →         "inputs": [           GET  /api       → schema
+    y: int = 1               {"name":"x",         GET  /api/openapi.json
+  ) -> int:                   "type":"int"},      POST /sum      → execute
+    return x+y               {"name":"y",
+                              "type":"int",
+                              "default":1}]
+                         }
+```
+
+### Type mapping
+
+| Python type | JSEE input type | GUI widget |
+|---|---|---|
+| `int` | `int` | Number field |
+| `float` | `float` | Number field |
+| `bool` | `checkbox` | Checkbox |
+| `str` (or no hint) | `string` | Text field |
+
+## API
+
+### `jsee.serve(target, host='0.0.0.0', port=5050)`
+
+Start a server with GUI and JSON API.
+
+`target` can be:
+- **A function** — schema auto-generated from type hints
+- **A dict** — pre-built JSEE schema object
+- **A string** — path to `schema.json` file
+
+### `jsee.generate_schema(target, host='0.0.0.0', port=5050)`
+
+Generate a JSEE schema dict from a function without starting a server. Useful for inspecting or customizing the schema before serving.
+
+```python
+import jsee
+
+def predict(text: str, temperature: float = 0.7) -> str:
+    return text.upper()
+
+schema = jsee.generate_schema(predict)
+# Customize schema
+schema['inputs'][1]['min'] = 0.0
+schema['inputs'][1]['max'] = 2.0
+schema['inputs'][1]['type'] = 'slider'
+# Serve customized schema with function
+jsee.serve(predict, port=5050)
+```
+
+### Server endpoints
+
+Every JSEE server exposes:
+
+| Route | Method | Description |
+|---|---|---|
+| `/` | GET | Interactive GUI |
+| `/api` | GET | Schema and endpoint discovery |
+| `/api/openapi.json` | GET | Auto-generated OpenAPI 3.1 spec |
+| `/{model_name}` | POST | Execute model with JSON body |
+
+```bash
+# Execute the model
+curl -X POST http://localhost:5050/sum \
+  -H 'Content-Type: application/json' \
+  -d '{"x": 3, "y": 4}'
+# → {"result": 7}
+
+# Discover endpoints
+curl http://localhost:5050/api
+
+# Get OpenAPI spec
+curl http://localhost:5050/api/openapi.json
+```
+
+## Offline
+
+The JSEE runtime (`jsee.runtime.js`, ~300 KB) is bundled with the package. No CDN or internet access required. The server works fully offline.
+
+## Development
+
+This package lives in the [JSEE monorepo](https://github.com/jseeio/jsee) under `py/`.
+
+```bash
+# From the jsee repo root
+npm run build-dev && npm run copy-runtime-py
+cd py && pip install -e .
+python -m pytest test/ -v
+```
