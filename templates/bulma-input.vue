@@ -2,6 +2,34 @@
   .control {
     margin-top: -1px;
   }
+  .jsee-toggle {
+    position: relative;
+    display: inline-block;
+    width: 36px;
+    height: 20px;
+    input { opacity: 0; width: 0; height: 0; position: absolute; }
+  }
+  .jsee-toggle-track {
+    position: absolute;
+    inset: 0;
+    border-radius: 10px;
+    background: #ccc;
+    transition: background 0.2s;
+    cursor: pointer;
+    &.active { background: #00d1b2; }
+  }
+  .jsee-toggle-thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #fff;
+    transition: left 0.2s;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    &.active { left: 18px; }
+  }
 </style>
 
 <template>
@@ -49,15 +77,61 @@
     </div>
   </div>
 
+  <div class="field" v-if="input.type == 'slider'">
+    <label v-bind:for="input.name" class="is-size-7">
+      {{ input.name }}: <strong>{{ input.value }}</strong>
+    </label>
+    <div class="control">
+      <input
+        v-model.number="input.value"
+        v-bind:id="input.name"
+        v-bind:min="input.min || 0"
+        v-bind:max="input.max || 100"
+        v-bind:step="input.step || 1"
+        v-bind:disabled="input.disabled"
+        v-on:input="changeHandler"
+        type="range"
+        style="width: 100%"
+      >
+    </div>
+  </div>
+
+  <div class="field" v-if="input.type == 'date'">
+    <label v-bind:for="input.name" class="is-size-7">{{ input.name }}</label>
+    <div class="control">
+      <input
+        v-model="input.value"
+        v-bind:id="input.name"
+        v-bind:disabled="input.disabled"
+        v-on:change="changeHandler"
+        class="input"
+        type="date"
+      >
+    </div>
+  </div>
+
   <div class="field" v-if="input.type == 'checkbox' || input.type == 'bool'">
     <div class="control">
       <label class="checkbox is-size-7">
-        <input 
+        <input
           v-model="input.value"
           v-bind:id="input.name"
           v-on:change="changeHandler"
           type="checkbox"
         >
+        {{ input.name }}
+      </label>
+    </div>
+  </div>
+
+  <div class="field" v-if="input.type == 'toggle'">
+    <div class="control">
+      <label class="is-size-7" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+        <span class="jsee-toggle">
+          <input type="checkbox" v-model="input.value" v-bind:id="input.name" v-on:change="changeHandler">
+          <span class="jsee-toggle-track" v-bind:class="{ active: input.value }"></span>
+          <span class="jsee-toggle-thumb" v-bind:class="{ active: input.value }"></span>
+        </span>
         {{ input.name }}
       </label>
     </div>
@@ -77,6 +151,26 @@
           >{{ option }}</option>
         </select>
       </div>
+    </div>
+  </div>
+
+  <div class="field" v-if="input.type == 'radio'">
+    <label class="is-size-7">{{ input.name }}</label>
+    <div class="control">
+      <label v-for="option in input.options" :key="option" class="radio is-size-7" style="display: block; margin-left: 0;">
+        <input type="radio" v-model="input.value" :value="option" :name="input.name" v-on:change="changeHandler">
+        {{ option }}
+      </label>
+    </div>
+  </div>
+
+  <div class="field" v-if="input.type == 'multi-select'">
+    <label class="is-size-7">{{ input.name }}</label>
+    <div class="control">
+      <label v-for="option in input.options" :key="option" class="checkbox is-size-7" style="display: block;">
+        <input type="checkbox" :value="option" v-model="input.value" v-on:change="changeHandler">
+        {{ option }}
+      </label>
     </div>
   </div>
 

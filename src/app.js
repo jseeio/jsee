@@ -73,6 +73,21 @@ function resetInputs (inputs, example) {
           input.file = null
           input.value = ''
           break
+        case 'slider':
+          input.value = input.min || 0
+          break
+        case 'radio':
+          input.value = input.options ? input.options[0] : ''
+          break
+        case 'toggle':
+          input.value = false
+          break
+        case 'date':
+          input.value = ''
+          break
+        case 'multi-select':
+          input.value = []
+          break
         case 'group':
           resetInputs(input.elements)
           break

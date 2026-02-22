@@ -1,7 +1,10 @@
 import { saveAs } from 'file-saver'
 import domtoimage from 'dom-to-image'
+import showdown from 'showdown'
 
 const { sanitizeName } = require('../src/utils.js')
+
+const mdConverter = new showdown.Converter()
 
 const Blob = window['Blob']
 
@@ -79,6 +82,21 @@ const component = {
     onFullScreenChange() {
       this.isFullScreen = !!document.fullscreenElement
     },
+    tableToDelimited (delim) {
+      const d = this.output.value
+      if (!d || !d.columns) return ''
+      const esc = (v) => {
+        const s = String(v == null ? '' : v)
+        return s.indexOf(delim) >= 0 || s.indexOf('"') >= 0 || s.indexOf('\n') >= 0
+          ? '"' + s.replace(/"/g, '""') + '"'
+          : s
+      }
+      const lines = [d.columns.map(esc).join(delim)]
+      for (const row of d.rows) {
+        lines.push(row.map(esc).join(delim))
+      }
+      return lines.join('\n')
+    },
     save () {
       // Prepare filename
       let filename
@@ -94,6 +112,12 @@ const component = {
           case 'svg':
             extension = 'svg'
             break
+          case 'table':
+            extension = 'csv'
+            break
+          case 'markdown':
+            extension = 'md'
+            break
           default:
             extension = 'txt'
         }
@@ -106,8 +130,11 @@ const component = {
           .then(blob => {
             saveAs(blob, filename)
           })
+        return
       }
-      let value = stringify(this.output.value)
+      let value = this.output.type === 'table'
+        ? this.tableToDelimited(',')
+        : stringify(this.output.value)
       let blob = new Blob([value], {type: 'text/plain;charset=utf-8'})
       saveAs(blob, filename)
     },
@@ -130,11 +157,19 @@ const component = {
             console.error('Failed to generate image blob: ', err);
             this.$emit('notification', 'Failed to generate image');
           });
+      } else if (this.output.type === 'table') {
+        let value = this.tableToDelimited('\t')
+        navigator.clipboard.writeText(value)
+        this.$emit('notification', 'Copied as TSV')
       } else {
         let value = stringify(this.output.value)
         navigator.clipboard.writeText(value)
         this.$emit('notification', 'Copied')
       }
+    },
+    renderMarkdown (text) {
+      if (typeof text !== 'string') return ''
+      return mdConverter.makeHtml(text)
     },
     executeRenderFunction() {
       if (this.isRenderFunction && this.$refs.customContainer) {

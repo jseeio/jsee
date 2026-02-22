@@ -264,6 +264,11 @@ export default class JSEE {
       progress.style.transform = 'none'
       progress.style.width = `${progressState.value}%`
     }
+
+    // Overlay progress bar
+    if (this.overlay) {
+      this.overlay.setProgress(progressState)
+    }
   }
 
   async init () {

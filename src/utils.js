@@ -105,7 +105,12 @@ const VALID_INPUT_TYPES = [
   'file',
   'group',
   'action',
-  'button'
+  'button',
+  'slider',
+  'radio',
+  'toggle',
+  'date',
+  'multi-select'
 ]
 
 const VALID_MODEL_TYPES = [

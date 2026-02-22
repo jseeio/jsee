@@ -85,6 +85,12 @@
       <div class="content" :id="outputName" v-else-if="output.type == 'function'">
         <div class="custom-container" ref="customContainer"></div>
       </div>
+      <div class="content" :id="outputName" v-else-if="output.type === 'table'">
+        <virtual-table :data="output.value" />
+      </div>
+      <div class="content" :id="outputName" v-else-if="output.type === 'markdown'">
+        <div v-html="renderMarkdown(output.value)"></div>
+      </div>
       <div class="content" :id="outputName" v-else-if="output.type == 'blank'">
         <!-- will be filled by custom render function -->
       </div>
@@ -96,6 +102,11 @@
 </template>
 
 <script>
-  export { component as default } from "./common-outputs.js"
+  import { component } from "./common-outputs.js"
+  import VirtualTable from "./virtual-table.vue"
+  export default {
+    ...component,
+    components: { ...(component.components || {}), VirtualTable }
+  }
 </script>
 
