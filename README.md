@@ -217,6 +217,9 @@ Extra blocks can be provided for further customization:
     - `pdf` — PDF viewer via [pdf.js](https://mozilla.github.io/pdf.js/). Model returns a URL, data URL, or Uint8Array. Prev/next page controls. Schema props: `height`, `page`. Included in full bundle or load pdf.js via `imports`
     - `gallery` — CSS grid of images. Model returns array of URLs/data URLs. Click to expand lightbox. Schema props: `columns` (default 3), `gap` (default 8px). Zero-cost, included in core bundle
     - `highlight` — Highlighted text with labels. Model returns `[{text, label, color}]` segments. Unlabeled segments render as plain text. Zero-cost, included in core bundle
+    - `gauge` — Semicircle gauge. Model returns a number or `{value, label}`. Schema props: `min` (default 0), `max` (default 100), `label`, `color`. Zero-cost, included in core bundle
+    - `number` — Large KPI number display. Model returns a number or `{value, delta, label}`. Delta shown with colored up/down arrow. Schema props: `label`, `prefix` (e.g. `"$"`), `suffix` (e.g. `"%"`), `precision`
+    - `alert` — Colored status banner with left accent border. Model returns a string or `{message, type}`. Four variants: `info` (blue, default), `success` (green), `warning` (amber), `error` (red). Schema prop: `alertType` (default type when value is a string)
     - `function` — Render function. Rather than returning a value, a model returns a function that JSEE will call passing the container element
     - `blank` — Blank block (can be alternative to `function` and useful for custom renderers)
 - `examples` — List of examples

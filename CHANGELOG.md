@@ -10,6 +10,9 @@
 - `pdf` output type: PDF viewer via pdf.js — renders from URL, data URL, or Uint8Array. Prev/next page navigation, auto-scales to container width. Schema props: `height`, `page`
 - `gallery` output type (zero-cost, core bundle): CSS grid of images with click-to-expand lightbox. Model returns array of URLs. Schema props: `columns`, `gap`
 - `highlight` output type (zero-cost, core bundle): colored text spans with label badges. Model returns `[{text, label, color}]` segments
+- `gauge` output type (zero-cost, core bundle): SVG semicircle gauge. Model returns number or `{value, label}`. Schema props: `min`, `max`, `label`, `color`
+- `number` output type (zero-cost, core bundle): large KPI number with optional delta indicator (green up-arrow / red down-arrow). Model returns number or `{value, delta, label}`. Schema props: `label`, `prefix`, `suffix`, `precision`
+- `alert` output type (zero-cost, core bundle): colored status banner with 4 variants (info/success/warning/error). Model returns string or `{message, type}`. Schema prop: `alertType`
 - Graceful degradation: library-dependent output types show a helpful message with link when the library is not loaded, instead of crashing
 - `columnsToRows()` utility for converting column-oriented to row-oriented data
 - Schema-driven theming: `design.primary`, `design.secondary`, `design.bg`, `design.fg`, `design.font`, `design.radius` — set accent colors, background, text, font family, and border radius directly from the schema without custom CSS

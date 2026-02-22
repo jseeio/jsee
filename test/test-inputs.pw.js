@@ -820,6 +820,117 @@ test.describe('Output group blocks', () => {
   })
 })
 
+test.describe('Gauge output', () => {
+  test('renders gauge with numeric value', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { score: 73 } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 1 }
+      ],
+      outputs: [
+        { name: 'score', type: 'gauge', min: 0, max: 100 }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    await page.click('button:has-text("Run")')
+    await expect(page.locator('.jsee-gauge')).toBeVisible()
+    await expect(page.locator('.jsee-gauge-value')).toContainText('73')
+  })
+
+  test('renders gauge with object value and label', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { score: { value: 85, label: 'Great' } } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 1 }
+      ],
+      outputs: [
+        { name: 'score', type: 'gauge', min: 0, max: 100 }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    await page.click('button:has-text("Run")')
+    await expect(page.locator('.jsee-gauge-value')).toContainText('85')
+    await expect(page.locator('.jsee-gauge-label')).toContainText('Great')
+  })
+})
+
+test.describe('Number output', () => {
+  test('renders number with delta', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { users: { value: 1234, delta: 56 } } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 1 }
+      ],
+      outputs: [
+        { name: 'users', type: 'number', label: 'Active Users' }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    await page.click('button:has-text("Run")')
+    await expect(page.locator('.jsee-number-value')).toBeVisible()
+    await expect(page.locator('.jsee-number-delta')).toContainText('56')
+    await expect(page.locator('.jsee-number-delta')).toHaveClass(/positive/)
+    await expect(page.locator('.jsee-number-label')).toContainText('Active Users')
+  })
+})
+
+test.describe('Alert output', () => {
+  test('renders alert from string value', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { status: 'All systems operational' } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 1 }
+      ],
+      outputs: [
+        { name: 'status', type: 'alert' }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    await page.click('button:has-text("Run")')
+    const alert = page.locator('.jsee-alert')
+    await expect(alert).toBeVisible()
+    await expect(alert).toContainText('All systems operational')
+    await expect(alert).toHaveAttribute('data-type', 'info')
+  })
+
+  test('renders alert from object value with type', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { status: { message: 'Disk full', type: 'error' } } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 1 }
+      ],
+      outputs: [
+        { name: 'status', type: 'alert' }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    await page.click('button:has-text("Run")')
+    const alert = page.locator('.jsee-alert')
+    await expect(alert).toContainText('Disk full')
+    await expect(alert).toHaveAttribute('data-type', 'error')
+  })
+})
+
 test.describe('Custom design colors', () => {
   test('design.primary sets accent CSS variables', async ({ page }) => {
     const schema = {

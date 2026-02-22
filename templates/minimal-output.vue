@@ -183,6 +183,27 @@
   opacity: 0.7;
   vertical-align: super;
 }
+.jsee-gauge { text-align: center; }
+.jsee-gauge-track { fill: none; stroke: var(--jsee-border, #e0e0e0); stroke-width: 12; stroke-linecap: round; }
+.jsee-gauge-fill { fill: none; stroke-width: 12; stroke-linecap: round; }
+.jsee-gauge-value { font-size: 28px; font-weight: 600; fill: var(--jsee-text, #333); }
+.jsee-gauge-label { font-size: 12px; fill: var(--jsee-text-secondary, #666); }
+
+.jsee-number { text-align: center; padding: 12px 0; }
+.jsee-number-value { font-size: 36px; font-weight: 700; color: var(--jsee-text, #333); }
+.jsee-number-prefix, .jsee-number-suffix { font-size: 20px; font-weight: 400; opacity: 0.6; }
+.jsee-number-delta { font-size: 14px; margin-top: 4px; }
+.jsee-number-delta.positive { color: #27ae60; }
+.jsee-number-delta.negative { color: #e74c3c; }
+.jsee-number-delta.neutral { color: var(--jsee-text-secondary, #666); }
+.jsee-number-label { font-size: 13px; color: var(--jsee-text-secondary, #666); margin-top: 4px; }
+
+.jsee-alert { padding: 12px 16px; border-radius: 4px; border-left: 4px solid; font-size: 13px; line-height: 1.5; }
+.jsee-alert[data-type="info"] { background: #e3f2fd; border-color: #2196f3; color: #1565c0; }
+.jsee-alert[data-type="success"] { background: #e8f5e9; border-color: #4caf50; color: #2e7d32; }
+.jsee-alert[data-type="warning"] { background: #fff8e1; border-color: #ff9800; color: #e65100; }
+.jsee-alert[data-type="error"] { background: #ffebee; border-color: #f44336; color: #c62828; }
+
 .jsee-pdf-controls {
   display: flex;
   align-items: center;
@@ -308,6 +329,39 @@
             :style="{ background: seg.color || '#e3f2fd' }">{{ seg.text }}<span class="jsee-highlight-label">{{ seg.label }}</span></span>
           <span v-else>{{ seg.text }}</span>
         </span>
+      </div>
+      <div :id="outputName" v-else-if="output.type === 'gauge'" class="jsee-gauge">
+        <svg viewBox="0 0 200 120" style="max-width: 220px; margin: 0 auto; display: block;">
+          <path class="jsee-gauge-track" d="M 20 90 A 80 80 0 0 1 180 90" />
+          <path class="jsee-gauge-fill"
+            :stroke="output.color || 'var(--jsee-primary, #00d1b2)'"
+            d="M 20 90 A 80 80 0 0 1 180 90"
+            :stroke-dasharray="(Math.min(1, Math.max(0, ((typeof output.value === 'object' && output.value !== null ? output.value.value : output.value) - (output.min != null ? output.min : 0)) / ((output.max != null ? output.max : 100) - (output.min != null ? output.min : 0)))) * 251.33) + ' 251.33'" />
+          <text class="jsee-gauge-value" x="100" y="88" text-anchor="middle">{{ typeof output.value === 'object' && output.value !== null ? output.value.value : output.value }}</text>
+          <text class="jsee-gauge-label" x="100" y="108" text-anchor="middle">{{ (typeof output.value === 'object' && output.value !== null ? output.value.label : null) || output.label || '' }}</text>
+        </svg>
+      </div>
+      <div :id="outputName" v-else-if="output.type === 'number'" class="jsee-number">
+        <template v-if="output.value != null">
+          <div class="jsee-number-value">
+            <span v-if="output.prefix" class="jsee-number-prefix">{{ output.prefix }}</span>{{ output.precision != null
+              ? (typeof output.value === 'object' && output.value !== null ? output.value.value : output.value).toFixed(output.precision)
+              : (typeof output.value === 'object' && output.value !== null ? output.value.value : output.value).toLocaleString() }}<span v-if="output.suffix" class="jsee-number-suffix">{{ output.suffix }}</span>
+          </div>
+          <div v-if="typeof output.value === 'object' && output.value !== null && output.value.delta != null"
+            class="jsee-number-delta"
+            :class="output.value.delta > 0 ? 'positive' : output.value.delta < 0 ? 'negative' : 'neutral'">
+            {{ output.value.delta > 0 ? '\u25B2' : output.value.delta < 0 ? '\u25BC' : '\u2013' }} {{ Math.abs(output.value.delta) }}
+          </div>
+          <div v-if="output.label || (typeof output.value === 'object' && output.value !== null && output.value.label)"
+            class="jsee-number-label">
+            {{ (typeof output.value === 'object' && output.value !== null ? output.value.label : null) || output.label }}
+          </div>
+        </template>
+      </div>
+      <div :id="outputName" v-else-if="output.type === 'alert'" class="jsee-alert"
+        :data-type="(typeof output.value === 'object' && output.value !== null ? output.value.type : null) || output.alertType || 'info'">
+        {{ typeof output.value === 'object' && output.value !== null ? output.value.message : output.value }}
       </div>
       <div :id="outputName" v-else-if="output.type === 'chat'" class="jsee-chat">
         <div class="jsee-chat-messages" ref="chatMessages">
