@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.2
+### Features:
+- Add `design.layout: 'sidebar'` option — fixed-width (280px) sticky input panel that stays visible while scrolling outputs, collapses to single column on mobile
+
 ## 0.5.1
 ### Features:
 - Add `style` property to `group` input type: `blocks` (default flat list), `accordion` (collapsible), `tabs` (tabbed view)

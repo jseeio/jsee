@@ -614,6 +614,59 @@ test.describe('Output tabs (group style: tabs)', () => {
   })
 })
 
+test.describe('Sidebar layout', () => {
+  test('applies data-layout attribute and sticky positioning', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { result: 'SIDEBAR:' + data.x } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 42 }
+      ],
+      design: {
+        framework: 'minimal',
+        layout: 'sidebar'
+      }
+    }
+    await page.goto(urlQueryEscaped(schema))
+    const grid = page.locator('.jsee-grid')
+    await expect(grid).toHaveAttribute('data-layout', 'sidebar')
+    // Sidebar should have sticky positioning
+    const position = await grid.locator('> div:first-child').evaluate(
+      (el) => getComputedStyle(el).position
+    )
+    expect(position).toBe('sticky')
+    // Grid should use fixed 280px column
+    const columns = await grid.evaluate((el) => getComputedStyle(el).gridTemplateColumns)
+    expect(columns).toContain('280px')
+    // Run should still work
+    await page.click('button:has-text("Run")')
+    await expect(page.locator('body')).toContainText('SIDEBAR:42')
+  })
+
+  test('no data-layout attribute when layout is not set', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { result: 'OK' } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 1 }
+      ],
+      design: {
+        framework: 'minimal'
+      }
+    }
+    await page.goto(urlQueryEscaped(schema))
+    const grid = page.locator('.jsee-grid')
+    const layout = await grid.getAttribute('data-layout')
+    expect(layout).toBeNull()
+  })
+})
+
 test.describe('Output group blocks', () => {
   test('renders all outputs stacked', async ({ page }) => {
     const schema = {

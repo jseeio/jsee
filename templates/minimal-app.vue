@@ -47,6 +47,25 @@
     .jsee-grid { grid-template-columns: 1fr; }
   }
 
+  .jsee-grid[data-layout="sidebar"] {
+    grid-template-columns: 280px 1fr;
+  }
+  .jsee-grid[data-layout="sidebar"] > div:first-child {
+    position: sticky;
+    top: 0;
+    max-height: 100vh;
+    overflow-y: auto;
+  }
+  @media (max-width: 768px) {
+    .jsee-grid[data-layout="sidebar"] {
+      grid-template-columns: 1fr;
+    }
+    .jsee-grid[data-layout="sidebar"] > div:first-child {
+      position: static;
+      max-height: none;
+    }
+  }
+
   .jsee-card {
     border: 1px solid var(--jsee-border);
     border-radius: 6px;
@@ -153,7 +172,7 @@
         <h2 class="jsee-title" v-if="$parent.model.title">{{ $parent.model.title }}</h2>
         <p class="jsee-description" v-if="$parent.model.description">{{ $parent.model.description }}</p>
       </div>
-      <div class="jsee-grid">
+      <div class="jsee-grid" :data-layout="$parent.design && $parent.design.layout ? $parent.design.layout : undefined">
         <div>
           <!-- Inputs -->
           <div class="jsee-card">
