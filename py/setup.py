@@ -5,7 +5,7 @@ with open('README.md', 'r', encoding='utf-8') as fh:
 
 setup(
     name='jsee',
-    version='0.5.2',
+    version='0.6.0',
     packages=['jsee'],
     package_data={'jsee': ['static/*']},
     scripts=['bin/jsee'],
@@ -16,7 +16,7 @@ setup(
     author='Anton Zemlyansky',
     author_email='anton@zemlyansky.com',
     url='https://github.com/jseeio/jsee/tree/main/py',
-    python_requires='>=3.8',
+    python_requires='>=3.9',
     classifiers=[
         'Programming Language :: Python :: 3',
         'License :: OSI Approved :: MIT License',

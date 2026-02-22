@@ -1,5 +1,7 @@
 """Tests for jsee Python package — schema generation, API, and server."""
 
+import datetime
+import enum
 import json
 import os
 import sys
@@ -7,6 +9,7 @@ import threading
 import time
 import tempfile
 import subprocess
+from typing import Annotated, Literal, Optional
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError
 
@@ -21,6 +24,7 @@ from jsee.jsee import (
     _type_hint_to_jsee,
     serve,
 )
+from jsee.types import Slider, Text, Radio, Select, MultiSelect, Range, Color
 
 
 # ---------------------------------------------------------------------------
@@ -86,19 +90,73 @@ class TestGenerateSchema:
 
 class TestTypeHintToJsee:
     def test_int(self):
-        assert _type_hint_to_jsee(int) == 'int'
+        assert _type_hint_to_jsee(int) == ('int', {})
 
     def test_float(self):
-        assert _type_hint_to_jsee(float) == 'float'
+        assert _type_hint_to_jsee(float) == ('float', {})
 
     def test_bool(self):
-        assert _type_hint_to_jsee(bool) == 'checkbox'
+        assert _type_hint_to_jsee(bool) == ('checkbox', {})
 
     def test_str(self):
-        assert _type_hint_to_jsee(str) == 'string'
+        assert _type_hint_to_jsee(str) == ('string', {})
 
     def test_unknown(self):
-        assert _type_hint_to_jsee(list) == 'string'
+        assert _type_hint_to_jsee(list) == ('string', {})
+
+    def test_date(self):
+        assert _type_hint_to_jsee(datetime.date) == ('date', {})
+
+    def test_literal(self):
+        t, extra = _type_hint_to_jsee(Literal['fast', 'slow'])
+        assert t == 'select'
+        assert extra == {'options': ['fast', 'slow']}
+
+    def test_enum(self):
+        class Season(enum.Enum):
+            SPRING = 'spring'
+            SUMMER = 'summer'
+        t, extra = _type_hint_to_jsee(Season)
+        assert t == 'select'
+        assert extra == {'options': ['spring', 'summer']}
+
+    def test_optional_unwrap(self):
+        t, extra = _type_hint_to_jsee(Optional[int])
+        assert t == 'int'
+        assert extra == {}
+
+    def test_annotated_slider(self):
+        t, extra = _type_hint_to_jsee(Annotated[float, Slider(0, 1, 0.01)])
+        assert t == 'slider'
+        assert extra == {'min': 0, 'max': 1, 'step': 0.01}
+
+    def test_annotated_text(self):
+        t, extra = _type_hint_to_jsee(Annotated[str, Text()])
+        assert t == 'text'
+
+    def test_annotated_radio(self):
+        t, extra = _type_hint_to_jsee(Annotated[str, Radio(['a', 'b'])])
+        assert t == 'radio'
+        assert extra == {'options': ['a', 'b']}
+
+    def test_annotated_select(self):
+        t, extra = _type_hint_to_jsee(Annotated[str, Select(['x', 'y'])])
+        assert t == 'select'
+        assert extra == {'options': ['x', 'y']}
+
+    def test_annotated_multi_select(self):
+        t, extra = _type_hint_to_jsee(Annotated[str, MultiSelect(['a', 'b'])])
+        assert t == 'multi-select'
+        assert extra == {'options': ['a', 'b']}
+
+    def test_annotated_range(self):
+        t, extra = _type_hint_to_jsee(Annotated[float, Range(0, 100, 5)])
+        assert t == 'range'
+        assert extra == {'min': 0, 'max': 100, 'step': 5}
+
+    def test_annotated_color(self):
+        t, extra = _type_hint_to_jsee(Annotated[str, Color()])
+        assert t == 'color'
 
 
 # ---------------------------------------------------------------------------
@@ -212,12 +270,83 @@ class TestFindRuntime:
 
 
 # ---------------------------------------------------------------------------
+# Richer schema generation
+# ---------------------------------------------------------------------------
+
+class TestSchemaEnhancements:
+    def test_literal_generates_select(self):
+        def fn(mode: Literal['fast', 'slow'] = 'fast') -> str:
+            return mode
+        schema = generate_schema(fn)
+        inp = schema['inputs'][0]
+        assert inp['type'] == 'select'
+        assert inp['options'] == ['fast', 'slow']
+        assert inp['default'] == 'fast'
+
+    def test_annotated_slider(self):
+        def fn(temp: Annotated[float, Slider(0, 1, 0.1)] = 0.7) -> float:
+            return temp
+        schema = generate_schema(fn)
+        inp = schema['inputs'][0]
+        assert inp['type'] == 'slider'
+        assert inp['min'] == 0
+        assert inp['max'] == 1
+        assert inp['step'] == 0.1
+        assert inp['default'] == 0.7
+
+    def test_enum_generates_select(self):
+        class Color(enum.Enum):
+            RED = 'red'
+            GREEN = 'green'
+        def fn(c: Color = Color.RED) -> str:
+            return c.value
+        schema = generate_schema(fn)
+        inp = schema['inputs'][0]
+        assert inp['type'] == 'select'
+        assert inp['options'] == ['red', 'green']
+        assert inp['default'] == 'red'
+
+    def test_title_kwarg(self):
+        schema = generate_schema(add, title='My Calculator')
+        assert schema['model']['title'] == 'My Calculator'
+
+    def test_description_from_docstring(self):
+        def fn(x: int) -> int:
+            """Multiply by two"""
+            return x * 2
+        schema = generate_schema(fn)
+        assert schema['model']['description'] == 'Multiply by two'
+        assert schema['page']['description'] == 'Multiply by two'
+
+    def test_description_kwarg_overrides_docstring(self):
+        def fn(x: int) -> int:
+            """Docstring text"""
+            return x * 2
+        schema = generate_schema(fn, description='Custom desc')
+        assert schema['model']['description'] == 'Custom desc'
+
+    def test_examples_kwarg(self):
+        schema = generate_schema(add, examples=[{'x': 1, 'y': 2}])
+        assert schema['examples'] == [{'x': 1, 'y': 2}]
+
+    def test_reactive_kwarg(self):
+        schema = generate_schema(add, reactive=True)
+        assert schema['reactive'] is True
+
+    def test_no_reactive_by_default(self):
+        schema = generate_schema(add)
+        assert 'reactive' not in schema
+
+
+# ---------------------------------------------------------------------------
 # Server integration tests
 # ---------------------------------------------------------------------------
 
-def _start_server(target, port):
+def _start_server(target, port, **kwargs):
     """Start server in background thread, wait for it to be ready."""
-    t = threading.Thread(target=serve, args=(target,), kwargs={'port': port}, daemon=True)
+    kw = {'port': port}
+    kw.update(kwargs)
+    t = threading.Thread(target=serve, args=(target,), kwargs=kw, daemon=True)
     t.start()
     # Wait for server to start
     for _ in range(30):
@@ -508,3 +637,100 @@ class TestCLI:
         )
         assert proc.returncode != 0
         assert 'function name required' in proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# Tuple return handling
+# ---------------------------------------------------------------------------
+
+class TestServerWithTupleReturn:
+    @classmethod
+    def setup_class(cls):
+        def multi(x: int) -> tuple:
+            return (x, x * 2)
+        cls.port = 15060
+        cls.thread = _start_server(multi, cls.port)
+        cls.base = 'http://localhost:{}'.format(cls.port)
+
+    def test_tuple_returned_as_list(self):
+        req = Request(
+            self.base + '/multi',
+            data=json.dumps({'x': 5}).encode(),
+            headers={'Content-Type': 'application/json'}
+        )
+        resp = urlopen(req)
+        result = json.loads(resp.read())
+        assert result['result'] == [5, 10]
+
+
+# ---------------------------------------------------------------------------
+# Image output serialization
+# ---------------------------------------------------------------------------
+
+class TestServerWithBytesReturn:
+    @classmethod
+    def setup_class(cls):
+        def make_image(width: int = 1) -> bytes:
+            return b'\x89PNG\r\n\x1a\n' + b'\x00' * width
+        cls.port = 15061
+        cls.thread = _start_server(make_image, cls.port)
+        cls.base = 'http://localhost:{}'.format(cls.port)
+
+    def test_bytes_returned_as_base64(self):
+        req = Request(
+            self.base + '/make_image',
+            data=json.dumps({'width': 4}).encode(),
+            headers={'Content-Type': 'application/json'}
+        )
+        resp = urlopen(req)
+        result = json.loads(resp.read())
+        assert result['result'].startswith('data:image/png;base64,')
+
+
+# ---------------------------------------------------------------------------
+# Serve with kwargs
+# ---------------------------------------------------------------------------
+
+class TestServerWithKwargs:
+    @classmethod
+    def setup_class(cls):
+        def calc(a: float, b: float = 1) -> float:
+            """A calculator"""
+            return a + b
+        cls.port = 15062
+        cls.thread = _start_server(
+            calc, cls.port,
+        )
+        cls.base = 'http://localhost:{}'.format(cls.port)
+
+    def test_schema_has_description(self):
+        resp = urlopen(self.base + '/api')
+        data = json.loads(resp.read())
+        assert data['schema']['model']['description'] == 'A calculator'
+
+
+class TestServerWithLiteralInput:
+    @classmethod
+    def setup_class(cls):
+        def choose(mode: Literal['add', 'sub'], x: int = 1) -> int:
+            return x if mode == 'add' else -x
+        cls.port = 15063
+        cls.thread = _start_server(choose, cls.port)
+        cls.base = 'http://localhost:{}'.format(cls.port)
+
+    def test_literal_input_in_schema(self):
+        resp = urlopen(self.base + '/api')
+        data = json.loads(resp.read())
+        inp = data['schema']['inputs'][0]
+        assert inp['type'] == 'select'
+        assert inp['options'] == ['add', 'sub']
+
+    def test_literal_input_post(self):
+        req = Request(
+            self.base + '/choose',
+            data=json.dumps({'mode': 'sub', 'x': 5}).encode(),
+            headers={'Content-Type': 'application/json'}
+        )
+        resp = urlopen(req)
+        result = json.loads(resp.read())
+        assert result['result'] == -5

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0
+### Features:
+- Python: richer type introspection — `Literal` → select, `Enum` → select, `Annotated[T, jsee.Slider()]` → slider, `Optional` unwrapping, `datetime.date` → date picker, plus `Text`, `Radio`, `Select`, `MultiSelect`, `Range`, `Color` annotation descriptors
+- Python: `serve()` keyword args — `title`, `description`, `examples`, `reactive`; auto-parses docstring for description
+- Python: result serialization — tuple → list, bytes/PIL Image → base64 data URL
+- Python: multipart/form-data file upload support in POST handler
+- Node.js: result serialization parity — `serializeResult()` wraps primitives, converts Buffer/Uint8Array to base64 image
+- Node.js: multipart/form-data POST support via `parseMultipart()` (zero new dependencies)
+- Node.js: JSON 404 error for unknown model POST (was falling through to Express HTML 404)
+
 ## 0.5.2
 ### Features:
 - Add `design.layout: 'sidebar'` option — fixed-width (280px) sticky input panel that stays visible while scrolling outputs, collapses to single column on mobile

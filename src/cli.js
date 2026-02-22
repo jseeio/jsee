@@ -20,7 +20,7 @@ const converter = new showdown.Converter({
 })
 showdown.setFlavor('github')
 
-const { getModelFuncJS, sanitizeName, generateOpenAPISpec } = require('./utils.js')
+const { getModelFuncJS, sanitizeName, generateOpenAPISpec, serializeResult, parseMultipart } = require('./utils.js')
 
 // left padding of multiple lines
 function pad (str, len, start=0) {
@@ -1037,6 +1037,7 @@ Documentation: https://jsee.org
     const express = require('express')
     const app = express()
     app.use(express.json())
+    app.use(express.raw({ type: 'multipart/form-data', limit: '50mb' }))
     // CORS
     app.use((req, res, next) => {
       res.header('Access-Control-Allow-Origin', '*')
@@ -1067,16 +1068,22 @@ Documentation: https://jsee.org
             const modelFunc = modelFuncs[m.name]
             try {
               const dataFromArgv = getDataFromArgv(schema, argv)
-              const dataFromGUI = req.body
+              const contentType = req.headers['content-type'] || ''
+              let dataFromGUI = req.body
+              if (contentType.includes('multipart/form-data') && Buffer.isBuffer(req.body)) {
+                dataFromGUI = parseMultipart(contentType, req.body)
+              }
               const data = { ...dataFromGUI, ...dataFromArgv }
               log('Data for model execution:', data)
               const result = await modelFunc(data)
-              res.json(result)
+              res.json(serializeResult(result))
               log(`Model ${m.name} executed successfully: `, result)
             } catch (error) {
               console.error('Error executing model:', error)
               res.status(500).json({ error: error.message })
             }
+          } else {
+            res.status(404).json({ error: 'Unknown model: ' + m.name })
           }
         })
         log('Model execution endpoints created:', m.url)

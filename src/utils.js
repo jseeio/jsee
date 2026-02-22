@@ -1023,6 +1023,60 @@ function generateOpenAPISpec (schema) {
   }
 }
 
+function serializeResult (result) {
+  if (result === null || result === undefined) return { result: null }
+  // Buffer or Uint8Array → base64 image
+  if (Buffer.isBuffer(result) || result instanceof Uint8Array) {
+    const b64 = Buffer.from(result).toString('base64')
+    return { result: 'data:image/png;base64,' + b64 }
+  }
+  // Plain object or array — return as-is
+  if (typeof result === 'object') return result
+  // Primitives
+  return { result }
+}
+
+function parseMultipart (contentType, body) {
+  const match = contentType.match(/boundary=(?:"([^"]+)"|([^\s;]+))/)
+  if (!match) return {}
+  const boundary = '--' + (match[1] || match[2])
+  const buf = Buffer.isBuffer(body) ? body : Buffer.from(body)
+  const data = {}
+  let start = buf.indexOf(boundary) + boundary.length
+  while (start < buf.length) {
+    // Skip \r\n after boundary
+    if (buf[start] === 0x0d) start += 2
+    else if (buf[start] === 0x0a) start += 1
+    // Check for closing boundary (--)
+    if (buf[start] === 0x2d && buf[start + 1] === 0x2d) break
+    // Find end of headers (\r\n\r\n)
+    const headerEnd = buf.indexOf('\r\n\r\n', start)
+    if (headerEnd === -1) break
+    const headers = buf.slice(start, headerEnd).toString('utf-8')
+    const bodyStart = headerEnd + 4
+    // Find next boundary
+    const nextBoundary = buf.indexOf(boundary, bodyStart)
+    if (nextBoundary === -1) break
+    // Body ends 2 bytes before boundary (\r\n)
+    const bodyEnd = nextBoundary - 2
+    const nameMatch = headers.match(/name="([^"]+)"/)
+    if (nameMatch) {
+      const name = nameMatch[1]
+      const filenameMatch = headers.match(/filename="([^"]*)"/)
+      if (filenameMatch) {
+        // File field — keep as Buffer
+        data[name] = buf.slice(bodyStart, bodyEnd)
+      } else {
+        // Text field — try to parse as JSON for numbers/booleans
+        const val = buf.slice(bodyStart, bodyEnd).toString('utf-8')
+        try { data[name] = JSON.parse(val) } catch (e) { data[name] = val }
+      }
+    }
+    start = nextBoundary + boundary.length
+  }
+  return data
+}
+
 module.exports = {
   isObject,
   loadFromDOM,
@@ -1048,5 +1102,7 @@ module.exports = {
   getUrlParam,
   coerceParam,
   jseeInputsToJsonSchema,
-  generateOpenAPISpec
+  generateOpenAPISpec,
+  serializeResult,
+  parseMultipart
 }

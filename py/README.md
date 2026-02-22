@@ -58,16 +58,48 @@ Python function          JSEE schema             Server
 
 ### Type mapping
 
-| Python type | JSEE input type | GUI widget |
+| Python type | JSEE type | GUI widget |
 |---|---|---|
 | `int` | `int` | Number field |
 | `float` | `float` | Number field |
 | `bool` | `checkbox` | Checkbox |
 | `str` (or no hint) | `string` | Text field |
+| `datetime.date` | `date` | Date picker |
+| `Literal["a", "b"]` | `select` | Dropdown |
+| `Enum` subclass | `select` | Dropdown |
+| `Optional[X]` | unwraps to X | Same as X |
+
+### Annotated types
+
+Use `typing.Annotated` with JSEE descriptor classes for richer widgets:
+
+```python
+from typing import Annotated
+import jsee
+
+def predict(
+    text: Annotated[str, jsee.Text()],
+    temperature: Annotated[float, jsee.Slider(0, 2, 0.1)] = 0.7,
+    mode: Annotated[str, jsee.Radio(['greedy', 'sample'])] = 'sample'
+) -> str:
+    return text.upper()
+
+jsee.serve(predict)
+```
+
+| Annotation | JSEE type | GUI widget |
+|---|---|---|
+| `jsee.Slider(min, max, step)` | `slider` | Range slider |
+| `jsee.Text()` | `text` | Textarea |
+| `jsee.Radio(options)` | `radio` | Radio buttons |
+| `jsee.Select(options)` | `select` | Dropdown |
+| `jsee.MultiSelect(options)` | `multi-select` | Checkbox group |
+| `jsee.Range(min, max, step)` | `range` | Dual-handle slider |
+| `jsee.Color()` | `color` | Color picker |
 
 ## API
 
-### `jsee.serve(target, host='0.0.0.0', port=5050)`
+### `jsee.serve(target, host='0.0.0.0', port=5050, **kwargs)`
 
 Start a server with GUI and JSON API.
 
@@ -76,7 +108,30 @@ Start a server with GUI and JSON API.
 - **A dict** — pre-built JSEE schema object
 - **A string** — path to `schema.json` file
 
-### `jsee.generate_schema(target, host='0.0.0.0', port=5050)`
+Keyword arguments (when target is a function):
+- `title` — page title (default: function name)
+- `description` — page description (default: first line of docstring)
+- `examples` — list of dicts with clickable example inputs
+- `reactive` — `True` to auto-run on input change (no submit button)
+
+```python
+from typing import Literal
+import jsee
+
+def calculator(num1: float, op: Literal['add', 'sub'], num2: float) -> dict:
+    """A simple calculator"""
+    if op == 'add': return {'result': num1 + num2}
+    return {'result': num1 - num2}
+
+jsee.serve(
+    calculator,
+    title='Calculator',
+    examples=[{'num1': 3, 'op': 'add', 'num2': 4}],
+    reactive=True
+)
+```
+
+### `jsee.generate_schema(target, host='0.0.0.0', port=5050, **kwargs)`
 
 Generate a JSEE schema dict from a function without starting a server. Useful for inspecting or customizing the schema before serving.
 
@@ -119,6 +174,34 @@ curl http://localhost:5050/api
 # Get OpenAPI spec
 curl http://localhost:5050/api/openapi.json
 ```
+
+### Return values
+
+| Python return | JSON response |
+|---|---|
+| `dict` | returned as-is: `{"key": "value"}` |
+| `int`, `float`, `str` | wrapped: `{"result": value}` |
+| `tuple` | converted to list: `{"result": [a, b]}` |
+| `bytes` | base64 image: `{"result": "data:image/png;base64,..."}` |
+| PIL `Image` | base64 image (auto-detected) |
+
+## Gradio comparison
+
+JSEE serves the same purpose as Gradio for simple use cases — zero-setup function-to-GUI — but with zero dependencies and full offline support.
+
+| | JSEE | Gradio |
+|---|---|---|
+| Dependencies | 0 (stdlib only) | 30+ packages |
+| Install size | ~300 KB | ~150 MB |
+| Offline | Yes (bundled runtime) | Requires CDN/network |
+| GPU/ML serving | Yes (your function, your stack) | Yes (same) |
+| Input widgets | text, number, slider, select, radio, checkbox, date, file, color | 30+ component types |
+| Output types | text, image, table, JSON, HTML, markdown, SVG, code, file | 20+ component types |
+| Layout control | Schema-driven (sidebar, tabs, accordion) | Imperative Python API |
+| Streaming | Not yet | Yes (yield) |
+| Chat UI | No | Yes (ChatInterface) |
+
+JSEE is not a Gradio replacement for complex apps. It's a lightweight alternative when you want instant GUI + API from a function with minimal overhead.
 
 ## Offline
 

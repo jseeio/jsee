@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 
+import base64
+import datetime
+import enum
+import io
 import json
 import os
 import typing
@@ -7,6 +11,8 @@ import importlib
 from inspect import signature, _empty
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.parse
+
+from .types import Slider, Text, Radio, Select, MultiSelect, Range, Color
 
 
 def _find_runtime():
@@ -51,31 +57,106 @@ TEMPLATE = """<!DOCTYPE html>
 
 
 def _type_hint_to_jsee(hint):
+  """Map a Python type hint to (jsee_type, extra_props).
+
+  Supports: int, float, bool, str, datetime.date, Literal, Enum,
+  Optional, and Annotated with descriptor metadata.
+  """
+  origin = typing.get_origin(hint)
+  args = typing.get_args(hint)
+
+  # Annotated[T, descriptor] — extract metadata
+  if origin is typing.Annotated:
+    base = args[0]
+    base_type, extra = _type_hint_to_jsee(base)
+    for meta in args[1:]:
+      if isinstance(meta, Slider):
+        base_type = 'slider'
+        if meta.min is not None: extra['min'] = meta.min
+        if meta.max is not None: extra['max'] = meta.max
+        if meta.step is not None: extra['step'] = meta.step
+      elif isinstance(meta, Text):
+        base_type = 'text'
+      elif isinstance(meta, Radio):
+        base_type = 'radio'
+        extra['options'] = meta.options
+      elif isinstance(meta, Select):
+        base_type = 'select'
+        extra['options'] = meta.options
+      elif isinstance(meta, MultiSelect):
+        base_type = 'multi-select'
+        extra['options'] = meta.options
+      elif isinstance(meta, Range):
+        base_type = 'range'
+        if meta.min is not None: extra['min'] = meta.min
+        if meta.max is not None: extra['max'] = meta.max
+        if meta.step is not None: extra['step'] = meta.step
+      elif isinstance(meta, Color):
+        base_type = 'color'
+    return base_type, extra
+
+  # Optional[X] = Union[X, None] — unwrap
+  if origin is typing.Union:
+    non_none = [a for a in args if a is not type(None)]
+    if len(non_none) == 1:
+      return _type_hint_to_jsee(non_none[0])
+
+  # Literal["a", "b"] → select with options
+  if origin is typing.Literal:
+    return 'select', {'options': list(args)}
+
+  # Enum subclass → select with options from member values
+  if isinstance(hint, type) and issubclass(hint, enum.Enum):
+    return 'select', {'options': [m.value for m in hint]}
+
+  # Primitive types
   if hint == int:
-    return 'int'
-  elif hint == float:
-    return 'float'
-  elif hint == bool:
-    return 'checkbox'
-  return 'string'
+    return 'int', {}
+  if hint == float:
+    return 'float', {}
+  if hint == bool:
+    return 'checkbox', {}
+  if hint == datetime.date:
+    return 'date', {}
+  return 'string', {}
 
 
-def generate_schema(target, host='0.0.0.0', port=5050):
-  """Introspect a Python function and generate a JSEE schema."""
-  hints = typing.get_type_hints(target)
+def generate_schema(target, host='0.0.0.0', port=5050, **kwargs):
+  """Introspect a Python function and generate a JSEE schema.
+
+  Keyword args:
+    title: str — page title (default: function name)
+    description: str — page description (default: first line of docstring)
+    examples: list[dict] — clickable example inputs
+    reactive: bool — auto-run on input change (no submit button)
+  """
+  hints = typing.get_type_hints(target, include_extras=True)
   sig = signature(target)
   inputs = []
   for name, param in sig.parameters.items():
-    t = 'string'
+    jsee_type = 'string'
+    extra = {}
     if name in hints:
-      t = _type_hint_to_jsee(hints[name])
-    inp = {'name': name, 'type': t}
+      jsee_type, extra = _type_hint_to_jsee(hints[name])
+    inp = {'name': name, 'type': jsee_type}
+    inp.update(extra)
     if param.default is not _empty:
-      inp['default'] = param.default
+      # Convert Enum defaults to their value
+      default = param.default
+      if isinstance(default, enum.Enum):
+        default = default.value
+      inp['default'] = default
     inputs.append(inp)
-  return {
+
+  title = kwargs.get('title') or target.__name__
+  description = kwargs.get('description')
+  if not description and target.__doc__:
+    description = target.__doc__.strip().split('\n')[0]
+
+  schema = {
     'model': {
       'name': target.__name__,
+      'title': title,
       'type': 'post',
       'url': 'http://{}:{}/{}'.format(host, port, target.__name__),
       'worker': False,
@@ -83,6 +164,14 @@ def generate_schema(target, host='0.0.0.0', port=5050):
     },
     'inputs': inputs,
   }
+  if description:
+    schema['model']['description'] = description
+    schema['page'] = {'description': description}
+  if kwargs.get('examples'):
+    schema['examples'] = kwargs['examples']
+  if kwargs.get('reactive'):
+    schema['reactive'] = True
+  return schema
 
 
 def jsee_inputs_to_json_schema(inputs):
@@ -196,13 +285,69 @@ def _load_model_func(schema, cwd='.'):
   return funcs
 
 
-def serve(target, host='0.0.0.0', port=5050):
+def _parse_multipart(content_type, body):
+  """Parse multipart/form-data using stdlib email parser."""
+  from email.parser import BytesParser
+  from email.policy import default as default_policy
+  header = 'Content-Type: {}\r\n\r\n'.format(content_type).encode()
+  msg = BytesParser(policy=default_policy).parsebytes(header + body)
+  data = {}
+  for part in msg.iter_parts():
+    name = part.get_param('name', header='content-disposition')
+    if name is None:
+      continue
+    filename = part.get_filename()
+    if filename:
+      # File upload — pass raw bytes
+      data[name] = part.get_payload(decode=True)
+    else:
+      # Regular field — decode as string, try to parse as JSON for numbers
+      value = part.get_payload(decode=True).decode('utf-8')
+      try:
+        value = json.loads(value)
+      except (json.JSONDecodeError, ValueError):
+        pass
+      data[name] = value
+  return data
+
+
+def _serialize_result(result):
+  """Serialize a function result for JSON response.
+
+  Handles: dict, tuple, list, bytes, PIL Image, primitives.
+  """
+  # Dict — return as-is
+  if isinstance(result, dict):
+    return result
+  # Tuple — convert to list
+  if isinstance(result, tuple):
+    return {'result': list(result)}
+  # Bytes — assume image, base64-encode
+  if isinstance(result, (bytes, bytearray)):
+    b64 = base64.b64encode(result).decode('ascii')
+    return {'result': 'data:image/png;base64,' + b64}
+  # PIL Image (duck-type check)
+  if hasattr(result, 'save') and hasattr(result, 'mode'):
+    buf = io.BytesIO()
+    fmt = 'PNG' if result.mode == 'RGBA' else 'JPEG'
+    result.save(buf, format=fmt)
+    b64 = base64.b64encode(buf.getvalue()).decode('ascii')
+    mime = 'image/png' if fmt == 'PNG' else 'image/jpeg'
+    return {'result': 'data:{};base64,{}'.format(mime, b64)}
+  # Everything else
+  return {'result': result}
+
+
+def serve(target, host='0.0.0.0', port=5050, **kwargs):
   """Start a server with GUI + JSON API.
 
   target can be:
     - A Python function (schema auto-generated from type hints)
     - A dict (pre-built JSEE schema)
     - A string path to schema.json
+
+  Keyword args (passed to generate_schema when target is callable):
+    title, description, examples, reactive
   """
   funcs = {}
   schema_cwd = '.'
@@ -216,19 +361,20 @@ def serve(target, host='0.0.0.0', port=5050):
   elif isinstance(target, dict):
     schema = target
   elif callable(target):
-    schema = generate_schema(target, host, port)
+    schema = generate_schema(target, host, port, **kwargs)
     funcs[target.__name__] = target
   else:
     raise ValueError('target must be a function, dict, or path to schema.json')
 
-  # Ensure model is array
-  if isinstance(schema.get('model'), dict):
-    schema['model'] = [schema['model']]
-  if not schema.get('model'):
-    schema['model'] = []
+  # Normalize model to list for internal iteration, keep original for client
+  models = schema.get('model', {})
+  if isinstance(models, dict):
+    models = [models]
+  elif not models:
+    models = []
 
   # Update model URLs to point to local server endpoints
-  for m in schema['model']:
+  for m in models:
     name = m.get('name', 'model')
     m['type'] = 'post'
     m['url'] = '/{}'.format(name)
@@ -241,7 +387,7 @@ def serve(target, host='0.0.0.0', port=5050):
       runtime_code = f.read()
 
   # Build HTML
-  model_name = schema['model'][0]['name'] if schema['model'] else 'JSEE'
+  model_name = models[0].get('title') or models[0].get('name', 'JSEE') if models else 'JSEE'
   html = TEMPLATE.format(
     name=model_name,
     schema_json=json.dumps(schema)
@@ -291,8 +437,8 @@ def serve(target, host='0.0.0.0', port=5050):
         return
 
       if pathname == '/api':
-        models = [{'name': m['name'], 'endpoint': m['url'], 'method': 'POST'} for m in schema['model']]
-        return self._send_json({'schema': schema, 'models': models})
+        api_models = [{'name': m['name'], 'endpoint': m['url'], 'method': 'POST'} for m in models]
+        return self._send_json({'schema': schema, 'models': api_models})
 
       if pathname == '/api/openapi.json':
         return self._send_json(generate_openapi_spec(schema))
@@ -333,16 +479,19 @@ def serve(target, host='0.0.0.0', port=5050):
 
       content_length = int(self.headers.get('Content-Length', 0))
       body = self.rfile.read(content_length) if content_length else b'{}'
+      content_type = self.headers.get('Content-Type', '')
+
       try:
-        data = json.loads(body)
-      except json.JSONDecodeError:
-        return self._send_error('Invalid JSON', 400)
+        if 'multipart/form-data' in content_type:
+          data = _parse_multipart(content_type, body)
+        else:
+          data = json.loads(body)
+      except (json.JSONDecodeError, ValueError) as e:
+        return self._send_error('Invalid request: ' + str(e), 400)
 
       try:
         result = funcs[model_name](**data)
-        if not isinstance(result, dict):
-          result = {'result': result}
-        self._send_json(result)
+        self._send_json(_serialize_result(result))
       except Exception as e:
         self._send_error(str(e), 500)
 

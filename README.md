@@ -254,17 +254,36 @@ Every server (both Node.js with `--execute` and Python) exposes these endpoints:
 | `/` | GET | Interactive GUI |
 | `/api` | GET | Schema and endpoint discovery |
 | `/api/openapi.json` | GET | Auto-generated OpenAPI 3.1 spec |
-| `/{modelName}` | POST | Execute model with JSON input |
+| `/{modelName}` | POST | Execute model with JSON or multipart input |
+
+Both servers support `application/json` and `multipart/form-data` POST bodies, CORS (`Access-Control-Allow-Origin: *`), and return consistent JSON errors for 404/400/500.
 
 ```bash
-# Run the model via API
+# Run the model via API (JSON)
 curl -X POST http://localhost:3000/modelName \
   -H 'Content-Type: application/json' \
   -d '{"x": 3, "y": 4}'
 
+# Run with file upload (multipart)
+curl -X POST http://localhost:3000/modelName \
+  -F 'text=hello' \
+  -F 'file=@image.png'
+
 # Get OpenAPI spec
 curl http://localhost:3000/api/openapi.json
 ```
+
+### Return value serialization
+
+Both servers normalize model return values consistently:
+
+| Return type | JSON response |
+|---|---|
+| Object/dict | returned as-is |
+| Primitive (number, string, bool) | `{"result": value}` |
+| Tuple/list (Python) | `{"result": [a, b]}` |
+| Buffer/bytes | `{"result": "data:image/png;base64,..."}` |
+| PIL Image (Python) | `{"result": "data:image/png;base64,..."}` |
 
 # Python
 
@@ -277,15 +296,24 @@ jsee example.py sum
 
 Or programmatically:
 ```python
+from typing import Annotated, Literal
 import jsee
 
-def multiply(a: float, b: float = 2.0) -> float:
-    return a * b
+def calculator(
+    num1: float,
+    op: Literal['add', 'subtract', 'multiply', 'divide'],
+    num2: float,
+    precision: Annotated[int, jsee.Slider(0, 10)] = 2
+) -> dict:
+    """A simple calculator"""
+    ops = {'add': num1 + num2, 'subtract': num1 - num2,
+           'multiply': num1 * num2, 'divide': num1 / num2 if num2 else 0}
+    return {'result': round(ops[op], precision)}
 
-jsee.serve(multiply, port=5050)
+jsee.serve(calculator, port=5050)
 ```
 
-See [`py/README.md`](py/README.md) for full Python documentation.
+Python type hints are auto-mapped to GUI widgets: `Literal` → dropdown, `Annotated[float, jsee.Slider()]` → slider, `bool` → checkbox, `Enum` → dropdown. See [`py/README.md`](py/README.md) for full Python documentation.
 
 # Changelog
 

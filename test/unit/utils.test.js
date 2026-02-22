@@ -17,7 +17,9 @@ const {
   isCssImport,
   isRelativeImport,
   getUrlParam,
-  coerceParam
+  coerceParam,
+  serializeResult,
+  parseMultipart
 } = require('../../src/utils')
 
 describe('isObject', () => {
@@ -908,6 +910,89 @@ describe('error scenarios', () => {
     test('returns false for null/undefined', () => {
       expect(containsBinaryPayload(null)).toBe(false)
       expect(containsBinaryPayload(undefined)).toBe(false)
+    })
+  })
+
+  describe('serializeResult', () => {
+    test('wraps primitives in result key', () => {
+      expect(serializeResult(42)).toEqual({ result: 42 })
+      expect(serializeResult('hello')).toEqual({ result: 'hello' })
+      expect(serializeResult(true)).toEqual({ result: true })
+    })
+
+    test('returns plain objects as-is', () => {
+      expect(serializeResult({ sum: 7 })).toEqual({ sum: 7 })
+    })
+
+    test('returns arrays as-is', () => {
+      expect(serializeResult([1, 2, 3])).toEqual([1, 2, 3])
+    })
+
+    test('converts Buffer to base64 image', () => {
+      const buf = Buffer.from([0x89, 0x50, 0x4e, 0x47])
+      const result = serializeResult(buf)
+      expect(result.result).toMatch(/^data:image\/png;base64,/)
+    })
+
+    test('converts Uint8Array to base64 image', () => {
+      const arr = new Uint8Array([0x89, 0x50, 0x4e, 0x47])
+      const result = serializeResult(arr)
+      expect(result.result).toMatch(/^data:image\/png;base64,/)
+    })
+
+    test('handles null and undefined', () => {
+      expect(serializeResult(null)).toEqual({ result: null })
+      expect(serializeResult(undefined)).toEqual({ result: null })
+    })
+  })
+
+  describe('parseMultipart', () => {
+    function buildMultipart (boundary, fields) {
+      const parts = []
+      for (const [name, value, filename] of fields) {
+        let headers = `Content-Disposition: form-data; name="${name}"`
+        if (filename) headers += `; filename="${filename}"`
+        parts.push(`--${boundary}\r\n${headers}\r\n\r\n${value}`)
+      }
+      parts.push(`--${boundary}--\r\n`)
+      return Buffer.from(parts.join('\r\n') + '\r\n')
+    }
+
+    test('parses text fields', () => {
+      const boundary = 'abc123'
+      const body = buildMultipart(boundary, [
+        ['name', 'Alice'],
+        ['age', '30']
+      ])
+      const result = parseMultipart('multipart/form-data; boundary=' + boundary, body)
+      expect(result.name).toBe('Alice')
+      expect(result.age).toBe(30) // parsed as JSON number
+    })
+
+    test('parses file fields as Buffer', () => {
+      const boundary = 'xyz789'
+      const body = buildMultipart(boundary, [
+        ['file', 'binary data here', 'test.png']
+      ])
+      const result = parseMultipart('multipart/form-data; boundary=' + boundary, body)
+      expect(Buffer.isBuffer(result.file)).toBe(true)
+    })
+
+    test('handles mixed fields and files', () => {
+      const boundary = 'mixed'
+      const body = buildMultipart(boundary, [
+        ['label', 'test'],
+        ['count', '5'],
+        ['data', 'file content', 'data.csv']
+      ])
+      const result = parseMultipart('multipart/form-data; boundary=' + boundary, body)
+      expect(result.label).toBe('test')
+      expect(result.count).toBe(5)
+      expect(Buffer.isBuffer(result.data)).toBe(true)
+    })
+
+    test('returns empty object for invalid content type', () => {
+      expect(parseMultipart('text/plain', Buffer.from(''))).toEqual({})
     })
   })
 })
