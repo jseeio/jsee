@@ -448,3 +448,52 @@ test.describe('Accordion (collapsible group)', () => {
     await expect(page.locator('body')).toContainText('T:50:D:false')
   })
 })
+
+test.describe('Dark theme', () => {
+  test('applies data-theme attribute and CSS variables', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { result: 'THEMED:' + data.x } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 42 }
+      ],
+      design: {
+        framework: 'minimal',
+        theme: 'dark'
+      }
+    }
+    await page.goto(urlQueryEscaped(schema))
+    // The .jsee-app element should have data-theme="dark"
+    const app = page.locator('.jsee-app')
+    await expect(app).toHaveAttribute('data-theme', 'dark')
+    // Dark background should be applied via CSS variable
+    const bg = await app.evaluate((el) => getComputedStyle(el).getPropertyValue('--jsee-bg'))
+    expect(bg.trim()).toBe('#1a1a1a')
+    // Inputs and run should still work
+    await page.click('button:has-text("Run")')
+    await expect(page.locator('body')).toContainText('THEMED:42')
+  })
+
+  test('light theme has no data-theme attribute', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { result: 'OK' } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 1 }
+      ],
+      design: {
+        framework: 'minimal'
+      }
+    }
+    await page.goto(urlQueryEscaped(schema))
+    const app = page.locator('.jsee-app')
+    const theme = await app.getAttribute('data-theme')
+    expect(theme).toBeNull()
+  })
+})

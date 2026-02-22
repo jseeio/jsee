@@ -18,7 +18,9 @@ npm install          # install dependencies
 npm run build-dev    # fast dev build (no tests, no minification)
 npm run build        # production build + full test suite
 npm run test:unit    # unit tests only (fast, no browser)
-npm run test:basic   # E2E tests (auto-starts http-server on 8484)
+npm run test:basic   # E2E core tests (Playwright, auto-starts http-server on 8484)
+npm run test:inputs  # E2E input/output tests
+npm run test:e2e     # all E2E tests
 ```
 
 ## Repo map
@@ -32,12 +34,14 @@ src/
   cli.js         # CLI (`npx jsee`) — HTML generation, --fetch bundling, dev server
   overlay.js     # Loading/progress overlay component
   constants.js   # Shared defaults (container selector, timeouts, chunk sizes)
-templates/       # Vue SFC templates (bulma-app, bulma-input, bulma-output, file-picker)
+templates/       # Vue SFC templates (bulma-*, minimal-*, common-inputs/outputs)
 test/
   unit/          # Jest unit tests (no browser): utils.test.js, cli-fetch.test.js
-  test-basic.test.js   # Puppeteer E2E tests against built dist/
-  test-python.test.js  # Pyodide integration test
+  test-basic.pw.js     # Playwright E2E: core features, files, streaming, pipelines
+  test-inputs.pw.js    # Playwright E2E: all input types, output types, accordion
+  test-python.pw.js    # Playwright E2E: Pyodide integration
   fixtures/      # Test fixtures (lodash-like.js, upload-sample.csv)
+examples/        # Self-contained HTML examples demonstrating JSEE patterns
 dist/            # Build output: jsee.js (dev), jsee.runtime.js (production)
 apps/            # Example apps (hashr, detect, qrcode, etc.)
 webpack.config.js  # Two build targets: full (jsee.js) and runtime (jsee.runtime.js)

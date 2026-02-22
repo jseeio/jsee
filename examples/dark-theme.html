@@ -1,0 +1,35 @@
+<html>
+  <body style="background: #1a1a1a; margin: 0; padding: 20px;">
+  <div id="jsee-container"></div>
+  <script src="/dist/jsee.js"></script>
+  <script>
+    new JSEE({
+      schema: {
+        model: {
+          code: function (data) {
+            return {
+              result: '## Hello, ' + data.name + '!\n\nScore: **' + data.score + '**\nMode: *' + data.mode + '*'
+            }
+          },
+          worker: false,
+          autorun: true
+        },
+        inputs: [
+          { name: 'name', type: 'string', default: 'Alice' },
+          { name: 'score', type: 'slider', min: 0, max: 100, step: 1, default: 75 },
+          { name: 'mode', type: 'radio', options: ['fast', 'balanced', 'accurate'], default: 'balanced' },
+          { name: 'enabled', type: 'toggle', default: true }
+        ],
+        outputs: [
+          { name: 'result', type: 'markdown' }
+        ],
+        design: {
+          framework: 'minimal',
+          theme: 'dark'
+        }
+      },
+      container: '#jsee-container'
+    })
+  </script>
+  </body>
+</html>

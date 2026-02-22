@@ -1,8 +1,8 @@
 <style scoped>
 .jsee-output-card {
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--jsee-border, #e0e0e0);
   border-radius: 6px;
-  background: #fff;
+  background: var(--jsee-card-bg, #fff);
   margin-bottom: 16px;
 }
 .jsee-output-header {
@@ -10,13 +10,13 @@
   justify-content: space-between;
   align-items: center;
   padding: 8px 12px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--jsee-border, #f0f0f0);
 }
 .jsee-output-title {
   font-size: 14px;
   font-weight: 400;
   margin: 0;
-  color: #333;
+  color: var(--jsee-text, #333);
 }
 .jsee-output-actions {
   display: flex;
@@ -28,16 +28,17 @@
   background: none;
   cursor: pointer;
   font-size: 12px;
-  color: #666;
+  color: var(--jsee-text-secondary, #666);
   border-radius: 3px;
 }
 .jsee-output-actions button:hover {
-  background: #f0f0f0;
-  color: #333;
+  background: var(--jsee-bg-secondary, #f0f0f0);
+  color: var(--jsee-text, #333);
 }
 .jsee-output-body {
   padding: 12px;
   overflow: auto;
+  color: var(--jsee-text, #333);
 }
 .jsee-output-body pre {
   margin: 0;
@@ -52,7 +53,7 @@
   z-index: 9999;
   width: 100vw;
   height: 100vh;
-  background: #fff;
+  background: var(--jsee-card-bg, #fff);
   display: flex;
   flex-direction: column;
 }

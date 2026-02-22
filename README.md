@@ -150,7 +150,8 @@ Extra blocks can be provided for further customization:
 - `render` — Custom rendering script. Instead of relying on JSEE for output visualization, you can provide a custom script that visualizes the results. That can be useful if you rely on custom libs for plotting
 - `design` — Design parameters
   - `layout` — Layout for the model/input/output blocks. If it's empty and the JSEE container is not, JSEE uses inner HTML as a template. If the container is empty too, it uses the default `blocks` template
-  - `framework` — Design framework to use. If a JavaScript object with the same name is present in a global context, JSEE loads it too (using Vue's `use` method)
+  - `framework` — Design framework to use (`'minimal'` by default). If a JavaScript object with the same name is present in a global context, JSEE loads it too (using Vue's `use` method)
+  - `theme` — Color theme. Set `'dark'` for dark mode. All components use CSS custom properties (`--jsee-primary`, `--jsee-bg`, `--jsee-text`, `--jsee-border`, etc.) that can be overridden via CSS for custom themes
 - `inputs` — Inputs definition
   - `name`* — Name of the input
   - `type`* — Type. Possible types:
@@ -159,6 +160,13 @@ Extra blocks can be provided for further customization:
     - `text` — Textarea
     - `checkbox` or `bool` — Checkbox
     - `select` or `categorical` — Select (one of many `options`)
+    - `slider` — Range slider (`min`, `max`, `step`)
+    - `range` — Dual-handle range slider, returns `[min, max]` array
+    - `radio` — Radio button group (one of many `options`)
+    - `toggle` — Toggle switch (boolean)
+    - `date` — Date picker
+    - `multi-select` — Checkbox group, returns array of selected `options`
+    - `group` — Group of inputs. Use `elements` array for child inputs. Supports collapsible accordion via `collapsed: true` and `label`
     - `file` — File Input
     - `action` or `button` — Button (its `name` will be passed as a `caller` to the model)
   - `default` — Default value
@@ -175,6 +183,9 @@ Extra blocks can be provided for further customization:
     - `object` — JavaScript Object
     - `html` or `svg` — SVG element
     - `code` — Code block
+    - `markdown` — Rendered Markdown (supports tables, headings, lists, etc.)
+    - `image` — Image (`<img>` tag from data URL or URL)
+    - `table` — Virtualized table with scrolling
     - `function` — Render function. Rather than returning a value, a model returns a function that JSEE will call passing the container element
     - `blank` — Blank block (can be alternative to `function` and useful for custom renderers)
 - `examples` — List of examples

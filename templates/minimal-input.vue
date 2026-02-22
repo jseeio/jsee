@@ -5,8 +5,8 @@
 .jsee-label {
   display: inline-block;
   font-size: 12px;
-  color: #555;
-  background: #f2f2f2;
+  color: var(--jsee-text-secondary, #555);
+  background: var(--jsee-label-bg, #f2f2f2);
   padding: 1px 6px;
   border-radius: 3px 3px 0 0;
   margin-bottom: -1px;
@@ -16,14 +16,15 @@
   width: 100%;
   padding: 6px 8px;
   font-size: 13px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--jsee-input-border, #ddd);
   border-radius: 0 3px 3px 3px;
-  background: #fff;
+  background: var(--jsee-input-bg, #fff);
+  color: var(--jsee-text, #333);
   font-family: inherit;
   &:focus {
     outline: none;
-    border-color: #7ab8e6;
-    box-shadow: 0 0 0 2px rgba(72, 139, 199, 0.2);
+    border-color: var(--jsee-focus-border, #7ab8e6);
+    box-shadow: 0 0 0 2px var(--jsee-focus-ring, rgba(72, 139, 199, 0.2));
   }
 }
 .jsee-textarea {
@@ -47,10 +48,10 @@
   position: absolute;
   inset: 0;
   border-radius: 10px;
-  background: #ccc;
+  background: var(--jsee-input-border, #ccc);
   transition: background 0.2s;
   cursor: pointer;
-  &.active { background: #00d1b2; }
+  &.active { background: var(--jsee-toggle-active, #00d1b2); }
 }
 .jsee-toggle-thumb {
   position: absolute;
@@ -78,7 +79,7 @@
   user-select: none;
   padding: 4px 0;
   font-size: 12px;
-  &:hover { color: #00d1b2; }
+  &:hover { color: var(--jsee-primary, #00d1b2); }
 }
 .jsee-accordion-arrow {
   display: inline-block;
@@ -100,13 +101,14 @@
   width: 100%;
   padding: 6px 10px;
   margin-top: 8px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--jsee-input-border, #ddd);
   border-radius: 3px;
-  background: #fafafa;
+  background: var(--jsee-bg-secondary, #fafafa);
+  color: var(--jsee-text, #333);
   cursor: pointer;
   font-size: 13px;
   text-align: left;
-  &:hover { background: #f0f0f0; }
+  &:hover { background: var(--jsee-border, #f0f0f0); }
 }
 .jsee-group {
   display: flex;

@@ -1,9 +1,27 @@
 <style scoped>
 :deep(.jsee-app) {
+  /* Theme variables — light (default) */
+  --jsee-primary: #00d1b2;
+  --jsee-primary-dark: #016c5c;
+  --jsee-bg: #fff;
+  --jsee-bg-secondary: #f5f5f5;
+  --jsee-text: #333;
+  --jsee-text-secondary: #666;
+  --jsee-border: #e0e0e0;
+  --jsee-card-bg: #fff;
+  --jsee-input-bg: #fff;
+  --jsee-input-border: #ddd;
+  --jsee-label-bg: #f2f2f2;
+  --jsee-focus-ring: rgba(72, 139, 199, 0.2);
+  --jsee-focus-border: #7ab8e6;
+  --jsee-toggle-active: #00d1b2;
+  --jsee-gradient-start: #4395d0;
+  --jsee-gradient-end: #00d1b2;
+
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   font-size: 14px;
   line-height: 1.5;
-  color: #333;
+  color: var(--jsee-text);
   box-sizing: border-box;
   *, *::before, *::after { box-sizing: border-box; }
 
@@ -17,7 +35,7 @@
   }
   .jsee-description {
     margin: 0;
-    color: #666;
+    color: var(--jsee-text-secondary);
   }
 
   .jsee-grid {
@@ -30,9 +48,9 @@
   }
 
   .jsee-card {
-    border: 1px solid #e0e0e0;
+    border: 1px solid var(--jsee-border);
     border-radius: 6px;
-    background: #fff;
+    background: var(--jsee-card-bg);
     position: relative;
   }
 
@@ -49,7 +67,7 @@
     display: none;
     position: absolute;
     inset: -1px;
-    background: #f5f5f5;
+    background: var(--jsee-bg-secondary);
     opacity: .6;
     z-index: 1000;
     align-items: center;
@@ -58,12 +76,12 @@
 
   .jsee-card-footer {
     display: flex;
-    border-top: 1px solid #e0e0e0;
-    background: linear-gradient(90deg, #4395d0 0%, #00d1b2 100%);
+    border-top: 1px solid var(--jsee-border);
+    background: linear-gradient(90deg, var(--jsee-gradient-start) 0%, var(--jsee-gradient-end) 100%);
     border-radius: 0 0 6px 6px;
   }
   .jsee-card-footer.reset {
-    background: linear-gradient(90deg, #ff577f 0%, #4395d0 50%, #00d1b2 100%);
+    background: linear-gradient(90deg, #ff577f 0%, var(--jsee-gradient-start) 50%, var(--jsee-gradient-end) 100%);
   }
   .jsee-card-footer button {
     flex: 1;
@@ -91,31 +109,46 @@
   .jsee-examples p {
     margin: 0 0 8px;
     font-size: 13px;
-    color: #666;
+    color: var(--jsee-text-secondary);
   }
   .jsee-example-btn {
     display: block;
     width: 100%;
     padding: 6px 10px;
     margin-top: 4px;
-    border: 1px solid #e0e0e0;
+    border: 1px solid var(--jsee-border);
     border-radius: 4px;
-    background: #fafafa;
+    background: var(--jsee-bg-secondary);
     cursor: pointer;
     font-family: monospace;
     font-size: 11px;
     text-align: left;
     white-space: normal;
+    color: var(--jsee-text);
   }
   .jsee-example-btn:hover {
-    background: #f0f0f0;
+    background: var(--jsee-border);
   }
+}
+/* Dark theme overrides */
+:deep(.jsee-app[data-theme="dark"]) {
+  --jsee-bg: #1a1a1a;
+  --jsee-bg-secondary: #222;
+  --jsee-text: #e0e0e0;
+  --jsee-text-secondary: #aaa;
+  --jsee-border: #333;
+  --jsee-card-bg: #252525;
+  --jsee-input-bg: #2a2a2a;
+  --jsee-input-border: #444;
+  --jsee-label-bg: #303030;
+  --jsee-focus-ring: rgba(72, 139, 199, 0.35);
+  --jsee-toggle-active: #00d1b2;
 }
 </style>
 
 <template>
   <section>
-    <div class="jsee-app">
+    <div class="jsee-app" :data-theme="$parent.design && $parent.design.theme ? $parent.design.theme : undefined">
       <div class="jsee-header" v-if="$parent.model">
         <h2 class="jsee-title" v-if="$parent.model.title">{{ $parent.model.title }}</h2>
         <p class="jsee-description" v-if="$parent.model.description">{{ $parent.model.description }}</p>

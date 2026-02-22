@@ -5,24 +5,19 @@
 
 import { createApp, h } from 'vue' // <- resolved in webpack.config based on RUNTIME
 
-import bulmaApp from '../templates/bulma-app.vue'
-import bulmaInput from '../templates/bulma-input.vue'
-import bulmaOutput from '../templates/bulma-output.vue'
 import minimalApp from '../templates/minimal-app.vue'
 import minimalInput from '../templates/minimal-input.vue'
 import minimalOutput from '../templates/minimal-output.vue'
 
+const defaultTheme = {
+  'app': minimalApp,
+  'input': minimalInput,
+  'output': minimalOutput
+}
+
 const components = {
-  'bulma': {
-    'app': bulmaApp,
-    'input': bulmaInput,
-    'output': bulmaOutput
-  },
-  'minimal': {
-    'app': minimalApp,
-    'input': minimalInput,
-    'output': minimalOutput
-  }
+  'minimal': defaultTheme,
+  'bulma': defaultTheme // backward compat alias
 }
 
 const filtrex = require('filtrex')
@@ -169,7 +164,7 @@ function createVueApp (env, mountedCallback, logMain) {
   // Determine a template and GUI framework
   const framework = (env.schema.design && typeof env.schema.design.framework !== 'undefined')
     ? env.schema.design.framework
-    : 'bulma'
+    : 'minimal'
 
   let template
   let render

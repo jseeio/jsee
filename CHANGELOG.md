@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0
+### Breaking:
+- Remove Bulma dependency — the minimal (framework-free) theme is now the default. `design.framework: 'bulma'` still works as a backward-compatible alias for `'minimal'`. Bundle size reduced by ~50% (224 KB removed)
+### Features:
+- Add new input types: `slider`, `radio`, `toggle`, `date`, `multi-select`, `range` (dual-handle)
+- Add `group` input type with collapsible accordion support (`collapsed: true`)
+- Add `markdown` output type (renders Markdown via showdown, including tables)
+- Add `image` output type (renders `<img>` from data URL or URL)
+- Add `table` output type with virtualized scrolling
+- Add CSS variable theming — all components use `--jsee-*` custom properties, overridable via `design.theme: 'dark'` or custom CSS
+- Add progress bar to loading overlay (determinate and indeterminate modes)
+### Testing:
+- Switch E2E tests from Puppeteer/Jest to Playwright
+- Add E2E tests for all new input/output types, accordion groups, and dark theme
+
 ## 0.4.1
 ### Bug fixes:
 - Fix relative import URLs (e.g. `dist/core.js`) resolving against CDN instead of page URL — now resolves against `window.location.href` so blob workers can load them correctly
