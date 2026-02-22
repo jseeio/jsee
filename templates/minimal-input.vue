@@ -327,6 +327,36 @@
     </div>
   </div>
 
+  <div class="jsee-field" v-if="input.type == 'folder'">
+    <label v-bind:for="input.name" class="jsee-label">{{ input.name }}</label>
+    <div v-if="!input.disabled && (!input.value || input.value.length === 0)">
+      <div class="vfp-bgArea" style="min-height: 80px; padding: 15px 10px;"
+        @dragover.prevent @dragleave.prevent @drop.prevent="folderDropped">
+        <input type="file" webkitdirectory style="display:none" ref="folderPicker"
+          @change="folderSelected">
+        <div style="text-align: center">
+          <button class="jsee-btn" style="display:inline-block; width:auto"
+            @click="$refs.folderPicker.click()">Choose Folder</button>
+          <span style="font-size:12px; color:#888; margin-left:8px">or drop a folder here</span>
+        </div>
+      </div>
+    </div>
+    <div v-if="input.value && input.value.length > 0">
+      <div style="font-size:11px; color:var(--jsee-text-secondary, #888); margin-bottom:4px">
+        {{ input.value.length }} files
+      </div>
+      <div style="max-height: 200px; overflow-y: auto; border: 1px solid var(--jsee-border, #ddd); border-radius: 3px">
+        <div v-for="(file, fi) in input.value" :key="fi"
+          style="padding: 3px 8px; font-size: 12px; border-bottom: 1px solid var(--jsee-border, #f0f0f0); display:flex; align-items:center; gap:6px">
+          <input v-if="input.select" type="checkbox"
+            v-model="file.selected" @change="folderSelectionChanged">
+          <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ file.name }}</span>
+          <span style="color:var(--jsee-text-secondary, #aaa); font-size:10px">{{ formatSize(file.size) }}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="jsee-field" v-if="input.type == 'action' || input.type == 'button'">
     <button
       v-on:click="$parent.$parent.run(input.name.toLowerCase().replace(/ /g, '_'))"

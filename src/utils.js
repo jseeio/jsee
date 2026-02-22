@@ -111,7 +111,8 @@ const VALID_INPUT_TYPES = [
   'toggle',
   'date',
   'multi-select',
-  'range'
+  'range',
+  'folder'
 ]
 
 const VALID_MODEL_TYPES = [
@@ -997,8 +998,9 @@ function validateSchema (schema) {
   const hasModel = typeof schema.model !== 'undefined'
   const hasView = (typeof schema.view !== 'undefined') || (typeof schema.render !== 'undefined')
 
-  if (!hasModel && !hasView) {
-    report.errors.push('Schema should define `model` (or `view`/`render`)')
+  const hasInputs = Array.isArray(schema.inputs) && schema.inputs.length > 0
+  if (!hasModel && !hasView && !hasInputs) {
+    report.errors.push('Schema should define `model` (or `view`/`render`) or `inputs`')
   } else if (!hasModel && hasView) {
     report.warnings.push('Schema has no `model`, using `view`/`render` only')
   }
@@ -1239,6 +1241,50 @@ function runValidation (inputs, validateFunctions) {
   return hasErrors
 }
 
+const EXT_TO_OUTPUT = {
+  '.pdf': 'pdf',
+  '.png': 'image', '.jpg': 'image', '.jpeg': 'image',
+  '.gif': 'image', '.svg': 'image', '.webp': 'image',
+  '.mp3': 'audio', '.wav': 'audio', '.ogg': 'audio', '.flac': 'audio',
+  '.mp4': 'video', '.webm': 'video', '.mov': 'video',
+  '.csv': 'table', '.tsv': 'table',
+  '.md': 'markdown',
+  '.html': 'html', '.htm': 'html',
+  '.json': 'object',
+}
+
+function fileExtToOutputType (filename) {
+  if (typeof filename !== 'string') return 'code'
+  const dotIdx = filename.lastIndexOf('.')
+  if (dotIdx < 0) return 'code'
+  const ext = filename.slice(dotIdx).toLowerCase().replace(/[?#].*$/, '')
+  return EXT_TO_OUTPUT[ext] || 'code'
+}
+
+function inferOutputType (key, value) {
+  if (Array.isArray(value)) {
+    if (value.length > 0 && typeof value[0] === 'object' && value[0] !== null) return 'table'
+    if (value.length > 0 && typeof value[0] === 'string' && /\.(png|jpe?g|gif|svg|webp)([?#].*)?$/i.test(value[0])) return 'gallery'
+    return 'object'
+  }
+  if (typeof value === 'string') {
+    if (value.startsWith('data:image/')) return 'image'
+    if (value.startsWith('data:audio/')) return 'audio'
+    if (value.startsWith('data:video/')) return 'video'
+    if (value.startsWith('data:application/pdf')) return 'pdf'
+    if (/\.(png|jpe?g|gif|svg|webp)([?#].*)?$/i.test(value)) return 'image'
+    if (/\.(mp3|wav|ogg|flac)([?#].*)?$/i.test(value)) return 'audio'
+    if (/\.(mp4|webm|mov)([?#].*)?$/i.test(value)) return 'video'
+    if (/\.pdf([?#].*)?$/i.test(value)) return 'pdf'
+    if (/\.md([?#].*)?$/i.test(value)) return 'markdown'
+    if (value.includes('\n') && value.length > 200) return 'code'
+    return 'string'
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return 'string'
+  if (typeof value === 'object' && value !== null) return 'object'
+  return 'string'
+}
+
 module.exports = {
   isObject,
   loadFromDOM,
@@ -1274,5 +1320,7 @@ module.exports = {
   collectTransferables,
   columnsToRows,
   createValidateFn,
-  runValidation
+  runValidation,
+  fileExtToOutputType,
+  inferOutputType
 }

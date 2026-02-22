@@ -376,10 +376,10 @@ export default class JSEE {
       }
     })
 
-    // Check if model is empty
+    // Check if model is empty — allow identity pipeline (no model)
     if (this.model.length === 0) {
-      notyf.error('Model is in a wrong format')
-      throw new Error(`Model is in a wrong format: ${this.schema.model}`)
+      log('No model defined, using identity pipeline')
+      return
     }
 
     // Put worker and imports inside model blocks
@@ -481,8 +481,12 @@ export default class JSEE {
     // Relies on model.code
     // So run after possible fetching
     if (typeof this.schema.inputs === 'undefined') {
-      this.model[0].container = 'args'
-      this.schema.inputs = getInputs(this.model[0])
+      if (this.model.length > 0) {
+        this.model[0].container = 'args'
+        this.schema.inputs = getInputs(this.model[0])
+      } else {
+        this.schema.inputs = []
+      }
     }
 
     // Read URL params, e.g. ?input1=1&input2=2
@@ -615,6 +619,11 @@ export default class JSEE {
       })(this.pipeline)
 
       notyf.success('Pipeline initialized')
+      this.overlay.hide()
+    }
+
+    if (this.model.length === 0) {
+      log('Identity pipeline ready (no model)')
       this.overlay.hide()
     }
   }
@@ -856,6 +865,13 @@ export default class JSEE {
           })
         }
       })
+      // For folder inputs with select mode, filter to selected files
+      data.inputs.forEach(input => {
+        if (input.type === 'folder' && input.select && Array.isArray(inputValues[input.name])) {
+          inputValues[input.name] = inputValues[input.name].filter(f => f.selected !== false)
+        }
+      })
+
       // Add caller to input values so we can change model behavior based on it
       inputValues.caller = caller
 
@@ -1013,7 +1029,17 @@ export default class JSEE {
         })
       }
 
-      if (Object.keys(res).every(key => inputNames.includes(key))) {
+      if (this.model.length === 0) {
+        // Identity mode: all keys become outputs, auto-detect types
+        log('Identity mode: creating outputs from all result keys')
+        this.data.outputs = Object.keys(res)
+          .filter(key => key !== 'caller')
+          .map(key => ({
+            name: key,
+            type: utils.inferOutputType(key, res[key]),
+            value: res[key]
+          }))
+      } else if (Object.keys(res).every(key => inputNames.includes(key))) {
         // Update input fields from results
         // e.g. loading a csv file and updating list of target variables
         // This will be dynamically updated in the UI
@@ -1045,8 +1071,7 @@ export default class JSEE {
           .map(key => {
             return {
               'name': key,
-              // typeof returns 'object' for arrays; distinguish them for proper rendering
-              'type': Array.isArray(res[key]) ? 'array' : typeof res[key],
+              'type': utils.inferOutputType(key, res[key]),
               'value': res[key]
             }
           })

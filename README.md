@@ -206,6 +206,9 @@ Extra blocks can be provided for further customization:
       - `accordion` — collapsible section (also triggered by `collapsed` or `label` props)
       - `tabs` — tabbed view where each child element becomes a tab (child groups use their `name`/`label` as tab label)
     - `file` — File Input
+    - `folder` — Directory input. Shows a file listing with optional selection. In the browser, uses `<input webkitdirectory>` or drag-drop. On the server, reads from a directory path. Returns array of `{name, path, size, type, selected}` objects. Props:
+      - `select` (boolean) — Show checkboxes for file selection (default: all files passed)
+      - `reactive` (boolean) — Trigger model run on selection change
     - `action` or `button` — Button (its `name` will be passed as a `caller` to the model)
   - `default` — Default value
   - `alias` (string or array of strings) — Alternative names for URL parameter matching. E.g. `"alias": ["f", "file"]` allows `?f=value` or `?file=value` to set this input
@@ -387,6 +390,21 @@ jsee schema.json              # auto server-side (local .js models)
 jsee schema.json --client     # force browser execution
 jsee schema.json -e -p 3000   # explicit server-side on port 3000
 ```
+
+## File and folder serving
+
+JSEE can serve individual files or entire folders without a schema or model:
+
+```bash
+jsee report.pdf                   # serve PDF with viewer
+jsee photo.png                    # serve image
+jsee data.csv                     # serve CSV as table
+jsee data/                        # serve folder with file browser
+```
+
+For single files, JSEE auto-detects the output type from the file extension (image, pdf, audio, video, table, markdown, code). For folders, JSEE creates a file browser with selection checkboxes, stats summary, and a preview of the selected file.
+
+Output type auto-detection also works for model results — if a model returns a string ending in `.png`, it renders as an image automatically.
 
 ## Serve bar
 

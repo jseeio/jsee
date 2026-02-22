@@ -21,6 +21,10 @@
 - Serve bar: a top bar shown only when serving (not in `-o` output) with server address, Browser/Server execution toggle, and Save HTML button. Consistent across Node and Python servers. Stripped when saving bundled HTML via Save or `download()`
 - Python `create_app()`: WSGI factory function for production deployment with gunicorn, uWSGI, etc. Same target resolution as `serve()`. Routes: GET /, GET /api, GET /api/openapi.json, GET /static/jsee.js, static files, POST model endpoints
 - CLI data inputs: pass data from the command line as positional args (`jsee schema.json 42 hello`) or named args (`jsee schema.json --a=100`). Values are auto-detected (numbers, JSON, file paths, strings). CLI-set inputs are locked in the GUI. Works in both Node and Python CLIs
+- `folder` input type: directory browser with optional file selection checkboxes. In CLI, reads from a path; in browser, uses `<input webkitdirectory>` or drag-drop. Returns array of file objects. Schema props: `select`, `reactive`
+- File/folder serving: `jsee report.pdf` or `jsee data/` serves files without a schema or model. Auto-detects output type from extension. Folders get a file browser with stats and preview
+- Smart output auto-detection: model results are now type-inferred — image URLs render as `<img>`, PDF URLs as PDF viewer, arrays of objects as tables, etc. Works for both explicit outputs and auto-created outputs
+- No-model identity: schemas with inputs but no model use an identity pipeline (pass inputs to outputs). Useful for file viewing and data inspection
 
 ### Breaking changes:
 - Drop `jsee.js` build (Vue template compiler). Only two bundles now: `jsee.core.js` and `jsee.full.js`. The `design.template` schema option is no longer supported — use the default render function instead

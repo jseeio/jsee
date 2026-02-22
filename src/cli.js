@@ -20,7 +20,7 @@ const converter = new showdown.Converter({
 })
 showdown.setFlavor('github')
 
-const { getModelFuncJS, sanitizeName, generateOpenAPISpec, serializeResult, parseMultipart } = require('./utils.js')
+const { getModelFuncJS, sanitizeName, generateOpenAPISpec, serializeResult, parseMultipart, fileExtToOutputType } = require('./utils.js')
 
 // left padding of multiple lines
 function pad (str, len, start=0) {
@@ -50,6 +50,73 @@ function detectArgValue (value) {
     try { return JSON.parse(value) } catch (e) { /* not JSON */ }
   }
   return value
+}
+
+function readDirListing (resolved, relative) {
+  const entries = fs.readdirSync(resolved, { withFileTypes: true })
+  return entries
+    .filter(e => e.isFile() && !e.name.startsWith('.'))
+    .map(e => ({
+      name: e.name,
+      path: path.posix.join(relative, e.name),
+      size: fs.statSync(path.join(resolved, e.name)).size,
+      type: fileExtToOutputType(e.name),
+      selected: true
+    }))
+}
+
+function generateIdentitySchema (target, cwd) {
+  const resolved = path.isAbsolute(target) ? target : path.join(cwd, target)
+  const stat = fs.existsSync(resolved) ? fs.statSync(resolved) : null
+
+  if (stat && stat.isDirectory()) {
+    const files = readDirListing(resolved, target)
+    return {
+      schema: {
+        model: {
+          name: 'identity',
+          type: 'function',
+          worker: false,
+          autorun: true,
+          code: `function identity(inputs) {
+  var files = inputs.files || []
+  var selected = files.filter(function (f) { return f.selected !== false })
+  var stats = { files: selected.length, totalSize: selected.reduce(function (s, f) { return s + (f.size || 0) }, 0), types: {} }
+  selected.forEach(function (f) { var t = f.type || 'unknown'; stats.types[t] = (stats.types[t] || 0) + 1 })
+  return { stats: stats, preview: selected.length > 0 ? '/__jsee/file?path=' + encodeURIComponent(selected[0].path) : null }
+}`
+        },
+        inputs: [{
+          name: 'files',
+          type: 'folder',
+          default: files,
+          disabled: true,
+          reactive: true,
+          select: true
+        }],
+        autorun: true
+      },
+      identity: true,
+      serveDir: resolved
+    }
+  }
+
+  if (stat && stat.isFile()) {
+    const ext = path.extname(target).toLowerCase()
+    if (ext === '.json' || ext === '.js') return null
+    const outputType = fileExtToOutputType(target)
+    return {
+      schema: {
+        inputs: [],
+        outputs: [{ name: path.basename(target), type: outputType }],
+        autorun: true
+      },
+      identity: true,
+      serveFile: { path: target, resolved }
+    }
+  }
+
+  return null
 }
 
 function collectFetchBundleBlocks (schema) {
@@ -228,6 +295,17 @@ function getDataFromArgv (schema, argv, loadFiles=true) {
             } else {
               console.error(`File not found: ${argv[inputName]}`)
               process.exit(1)
+            }
+            break
+          case 'folder':
+            if (!loadFiles) {
+              data[inp.name] = argv[inputName]
+              break
+            }
+            const dirPath = argv[inputName]
+            const resolved = path.isAbsolute(dirPath) ? dirPath : path.join(process.cwd(), dirPath)
+            if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
+              data[inp.name] = readDirListing(resolved, dirPath)
             }
             break
           case 'int':
@@ -426,9 +504,9 @@ function template(schema, blocks) {
   } else if (schema.page && schema.page.title) {
     title = schema.page.title
   } else if (schema.model) {
-    if (Array.isArray(schema.model)) {
+    if (Array.isArray(schema.model) && schema.model.length > 0) {
       title = schema.model[0].name
-    } else {
+    } else if (!Array.isArray(schema.model)) {
       title = schema.model.name
     }
   }
@@ -854,14 +932,22 @@ Examples:
   jsee schema.json -o app.html      Generate static HTML file
   jsee schema.json -o app.html -f   Generate self-contained HTML with bundled runtime
   jsee -p 8080                      Start dev server on port 8080
+  jsee report.pdf                   Serve a PDF file (auto-detected viewer)
+  jsee data/                        Serve a folder (file browser with preview)
 
 Documentation: https://jsee.org
     `.trim())
     return
   }
 
+  // Check if first positional arg is a file or directory for identity serving
+  let identityResult = null
+  if (!imported && argv._.length > 0) {
+    identityResult = generateIdentitySchema(argv._[0], process.cwd())
+  }
+
   // Set argv.inputs to the first positional argument if it looks like a schema/script
-  if (!imported && argv._.length > 0 && argv.inputs === argvDefault.inputs) {
+  if (!identityResult && !imported && argv._.length > 0 && argv.inputs === argvDefault.inputs) {
     argv.inputs = argv._[0]
   }
 
@@ -902,7 +988,20 @@ Documentation: https://jsee.org
     outputs = outputs.split(',')
   }
 
-  if (inputs.length === 0) {
+  if (identityResult) {
+    schema = identityResult.schema
+    schemaPath = null
+    log('Identity mode:', identityResult.serveFile ? 'file' : 'folder')
+    if (identityResult.serveFile) {
+      const outputType = schema.outputs[0].type
+      const textTypes = ['table', 'markdown', 'html', 'object', 'code']
+      if (textTypes.includes(outputType)) {
+        schema.outputs[0].value = fs.readFileSync(identityResult.serveFile.resolved, 'utf8')
+      } else {
+        schema.outputs[0].value = identityResult.serveFile.path
+      }
+    }
+  } else if (inputs.length === 0) {
     console.error('No inputs provided')
     process.exit(1)
   } else if ((inputs.length === 1) && (inputs[0].includes('.json'))) {
@@ -1331,6 +1430,26 @@ Documentation: https://jsee.org
         log('Model execution endpoints created:', m.url)
       })
     }
+    // Serve folder file listing as JSON
+    app.get('/__jsee/folder', (req, res) => {
+      const dirPath = req.query.path
+      if (!dirPath) return res.status(400).json({ error: 'path required' })
+      const resolved = path.resolve(schemaPath ? path.dirname(schemaPath) : cwd, dirPath)
+      if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+        return res.status(404).json({ error: 'directory not found' })
+      }
+      res.json(readDirListing(resolved, dirPath))
+    })
+    // Serve individual files for viewer output
+    app.get('/__jsee/file', (req, res) => {
+      const filePath = req.query.path
+      if (!filePath) return res.status(400).json({ error: 'path required' })
+      const resolved = path.resolve(schemaPath ? path.dirname(schemaPath) : cwd, filePath)
+      if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+        return res.status(404).json({ error: 'file not found' })
+      }
+      res.sendFile(resolved)
+    })
     app.get('/', async (req, res) => {
       log('Serving index.html')
       res.send(await gen(pargv, true))

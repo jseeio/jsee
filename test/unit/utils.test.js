@@ -27,7 +27,9 @@ const {
   collectTransferables,
   columnsToRows,
   createValidateFn,
-  runValidation
+  runValidation,
+  fileExtToOutputType,
+  inferOutputType
 } = require('../../src/utils')
 
 describe('isObject', () => {
@@ -664,12 +666,17 @@ describe('validateSchema', () => {
     expect(report.warnings).toEqual([])
   })
 
-  test('returns error when schema has no model and no view/render', () => {
+  test('returns error when schema has no model, no view/render, and no inputs', () => {
+    const report = validateSchema({})
+    expect(report.errors.length).toBeGreaterThan(0)
+    expect(report.errors.join(' ')).toContain('model')
+  })
+
+  test('accepts schema with inputs but no model (identity mode)', () => {
     const report = validateSchema({
       inputs: [{ name: 'x', type: 'int' }]
     })
-    expect(report.errors.length).toBeGreaterThan(0)
-    expect(report.errors.join(' ')).toContain('model')
+    expect(report.errors.length).toBe(0)
   })
 
   test('returns warning when schema uses view/render without model', () => {
@@ -1306,5 +1313,112 @@ describe('columnsToRows', () => {
     expect(columnsToRows({ x: [10], y: [20] })).toEqual([
       { x: 10, y: 20 }
     ])
+  })
+})
+
+describe('fileExtToOutputType', () => {
+  test('maps image extensions', () => {
+    expect(fileExtToOutputType('photo.png')).toBe('image')
+    expect(fileExtToOutputType('pic.jpg')).toBe('image')
+    expect(fileExtToOutputType('icon.svg')).toBe('image')
+  })
+  test('maps pdf extension', () => {
+    expect(fileExtToOutputType('report.pdf')).toBe('pdf')
+  })
+  test('maps audio extensions', () => {
+    expect(fileExtToOutputType('song.mp3')).toBe('audio')
+    expect(fileExtToOutputType('clip.wav')).toBe('audio')
+  })
+  test('maps video extensions', () => {
+    expect(fileExtToOutputType('movie.mp4')).toBe('video')
+  })
+  test('maps table extensions', () => {
+    expect(fileExtToOutputType('data.csv')).toBe('table')
+    expect(fileExtToOutputType('data.tsv')).toBe('table')
+  })
+  test('maps markdown extension', () => {
+    expect(fileExtToOutputType('readme.md')).toBe('markdown')
+  })
+  test('maps html extension', () => {
+    expect(fileExtToOutputType('page.html')).toBe('html')
+  })
+  test('maps json extension', () => {
+    expect(fileExtToOutputType('data.json')).toBe('object')
+  })
+  test('returns code for unknown extensions', () => {
+    expect(fileExtToOutputType('file.xyz')).toBe('code')
+    expect(fileExtToOutputType('script.py')).toBe('code')
+  })
+  test('returns code for non-string input', () => {
+    expect(fileExtToOutputType(null)).toBe('code')
+    expect(fileExtToOutputType(42)).toBe('code')
+  })
+  test('returns code for no extension', () => {
+    expect(fileExtToOutputType('Makefile')).toBe('code')
+  })
+  test('handles query strings in filenames', () => {
+    expect(fileExtToOutputType('photo.png?v=1')).toBe('image')
+  })
+})
+
+describe('inferOutputType', () => {
+  test('detects image data URLs', () => {
+    expect(inferOutputType('img', 'data:image/png;base64,abc')).toBe('image')
+  })
+  test('detects audio data URLs', () => {
+    expect(inferOutputType('snd', 'data:audio/mp3;base64,abc')).toBe('audio')
+  })
+  test('detects video data URLs', () => {
+    expect(inferOutputType('vid', 'data:video/mp4;base64,abc')).toBe('video')
+  })
+  test('detects pdf data URLs', () => {
+    expect(inferOutputType('doc', 'data:application/pdf;base64,abc')).toBe('pdf')
+  })
+  test('detects image URLs by extension', () => {
+    expect(inferOutputType('img', '/path/photo.png')).toBe('image')
+    expect(inferOutputType('img', 'https://example.com/pic.jpg')).toBe('image')
+  })
+  test('detects audio URLs by extension', () => {
+    expect(inferOutputType('snd', '/files/song.mp3')).toBe('audio')
+  })
+  test('detects video URLs by extension', () => {
+    expect(inferOutputType('vid', '/files/movie.mp4')).toBe('video')
+  })
+  test('detects pdf URLs by extension', () => {
+    expect(inferOutputType('doc', '/files/report.pdf')).toBe('pdf')
+  })
+  test('detects markdown URLs by extension', () => {
+    expect(inferOutputType('doc', '/files/readme.md')).toBe('markdown')
+  })
+  test('detects long multiline strings as code', () => {
+    const code = 'function foo() {\n' + '  return 1\n'.repeat(30) + '}'
+    expect(inferOutputType('src', code)).toBe('code')
+  })
+  test('returns string for short strings', () => {
+    expect(inferOutputType('msg', 'hello world')).toBe('string')
+  })
+  test('detects array of objects as table', () => {
+    expect(inferOutputType('data', [{a: 1}, {a: 2}])).toBe('table')
+  })
+  test('detects array of image URLs as gallery', () => {
+    expect(inferOutputType('imgs', ['a.png', 'b.jpg'])).toBe('gallery')
+  })
+  test('detects plain array as object', () => {
+    expect(inferOutputType('arr', [1, 2, 3])).toBe('object')
+  })
+  test('detects objects as object', () => {
+    expect(inferOutputType('obj', {a: 1})).toBe('object')
+  })
+  test('detects numbers as string', () => {
+    expect(inferOutputType('num', 42)).toBe('string')
+  })
+  test('detects booleans as string', () => {
+    expect(inferOutputType('flag', true)).toBe('string')
+  })
+  test('handles null', () => {
+    expect(inferOutputType('n', null)).toBe('string')
+  })
+  test('handles URLs with query strings', () => {
+    expect(inferOutputType('img', '/photo.png?v=2')).toBe('image')
   })
 })

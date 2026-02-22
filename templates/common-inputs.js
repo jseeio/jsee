@@ -34,6 +34,41 @@ const component = {
     },
     call (method) {
       console.log('calling: ', method)
+    },
+    folderSelected (e) {
+      const files = Array.from(e.target.files)
+      this.input.value = files.map(f => ({
+        name: f.webkitRelativePath || f.name,
+        path: f.webkitRelativePath || f.name,
+        size: f.size,
+        type: f.type,
+        selected: true,
+        _file: f
+      }))
+      this.changeHandler()
+    },
+    folderDropped (e) {
+      const files = Array.from(e.dataTransfer.files)
+      this.input.value = files.map(f => ({
+        name: f.name,
+        path: f.name,
+        size: f.size,
+        type: f.type,
+        selected: true,
+        _file: f
+      }))
+      this.changeHandler()
+    },
+    folderSelectionChanged () {
+      if (this.input.reactive) {
+        this.$emit('inchange')
+      }
+    },
+    formatSize (bytes) {
+      if (!bytes) return ''
+      if (bytes < 1024) return bytes + ' B'
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+      return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
     }
   },
   mounted () {

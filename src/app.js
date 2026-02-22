@@ -30,7 +30,7 @@ function saveInputsToStorage (inputs) {
   try {
     const values = {}
     inputs.forEach((input, index) => {
-      if (input.type === 'file' || input.type === 'action' || input.type === 'button') return
+      if (input.type === 'file' || input.type === 'folder' || input.type === 'action' || input.type === 'button') return
       if (input.type === 'group') return // skip groups for now
       const key = input.name || `input_${index}`
       values[key] = input.value
@@ -46,7 +46,7 @@ function loadInputsFromStorage (inputs) {
     const values = JSON.parse(raw)
     let restored = false
     inputs.forEach((input, index) => {
-      if (input.type === 'file' || input.type === 'action' || input.type === 'button') return
+      if (input.type === 'file' || input.type === 'folder' || input.type === 'action' || input.type === 'button') return
       if (input.type === 'group') return
       const key = input.name || `input_${index}`
       if (typeof values[key] !== 'undefined') {
@@ -113,6 +113,9 @@ function resetInputs (inputs, example) {
         case 'file':
           input.file = null
           input.value = ''
+          break
+        case 'folder':
+          input.value = input.default || []
           break
         case 'slider':
           input.value = input.min || 0
