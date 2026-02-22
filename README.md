@@ -175,6 +175,7 @@ Extra blocks can be provided for further customization:
   - `default` — Default value
   - `alias` (string or array of strings) — Alternative names for URL parameter matching. E.g. `"alias": ["f", "file"]` allows `?f=value` or `?file=value` to set this input
   - `display` (string) — Filtrex expression to conditionally show/hide this input. Evaluated against current input values. E.g. `"display": "mode == 'advanced'"` shows the input only when `mode` is `"advanced"`. Supports `len()` for string length
+  - `reactive` (boolean) — Trigger a model run when this input changes (see **Execution triggers** below)
   - `disabled` (boolean) — Disables the input in the UI. When combined with `reactive: true`, triggers an initial model run on page load (useful for server-populated values)
   - `raw` (boolean, file input only) — If `true`, pass the raw source to the model instead of reading text in the UI (`File` object for disk files or `{ kind: 'url', url: '...' }` for URL input)
   - `stream` (boolean, file input only) — If `true`, pass an async iterable `ChunkedReader` to the model instead of raw source handles. Supports `for await (const chunk of reader)`, `await reader.text()`, `await reader.bytes()`, and `for await (const line of reader.lines())`. Works in both main-thread and worker execution. Reader metadata (`reader.name`, `reader.size`, `reader.type`) is preserved and remains available in downstream pipeline models
@@ -193,9 +194,18 @@ Extra blocks can be provided for further customization:
     - `function` — Render function. Rather than returning a value, a model returns a function that JSEE will call passing the container element
     - `blank` — Blank block (can be alternative to `function` and useful for custom renderers)
 - `examples` — List of examples
-- `autorun` (boolean, default: `false`) — Run the model automatically on first load
-- `reactive` (boolean, default: `false`) — Re-run the model on any input change (debounced). For per-input reactivity, set `reactive: true` on individual inputs instead
-- `interval` (number, default: `0`) — Defines the interval between script evaluations (in milliseconds). If set to `0`, the script is evaluated only once
+- **Execution triggers** — by default the model only runs when the user clicks Run. Three schema-level options change this:
+  - `autorun` (boolean, default: `false`) — run the model once on first load, then wait for manual Run clicks
+  - `reactive` (boolean, default: `false`) — re-run the model on **any** input change (debounced 300ms). Useful for lightweight models where instant feedback is desired
+  - `interval` (number, default: `0`) — repeat execution every N milliseconds. `0` means no repetition
+  - Per-input `reactive` — set `reactive: true` on an **individual input** to trigger a model run only when that specific input changes (fires immediately, not debounced). Other inputs still require a manual Run click. Useful when one input is interactive (e.g. a slider) but others are expensive to recompute
+
+  | Option | Scope | When it runs | Debounced |
+  |--------|-------|-------------|-----------|
+  | `autorun: true` | schema | once on load | no |
+  | `reactive: true` | schema | every input change | yes (300ms) |
+  | `reactive: true` | input | that input changes | no |
+  | `interval: N` | schema | every N ms | no |
 - Runtime cancellation: call `jsee.cancelCurrentRun()` on the JSEE instance to request stop of the active run. Long-running models should check `ctx.isCancelled()` and return early
 - Schema validation — JSEE validates schema structure during initialization and logs warnings for non-critical issues (e.g. unknown input types, malformed aliases)
 - `jsee.download(title)` — Downloads a self-contained HTML file that works offline. All external scripts are inlined and the schema/model/imports are cached. `title` defaults to `'output'`
