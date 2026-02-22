@@ -614,6 +614,30 @@ test.describe('Output tabs (group style: tabs)', () => {
   })
 })
 
+test.describe('File output', () => {
+  test('renders download button', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { report: 'col1,col2\\n1,2\\n3,4' } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 1 }
+      ],
+      outputs: [
+        { name: 'report', type: 'file', filename: 'report.csv' }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    await page.click('button:has-text("Run")')
+    // Download button should appear
+    const btn = page.locator('.jsee-file-download-btn')
+    await expect(btn).toBeVisible()
+    await expect(btn).toContainText('report.csv')
+  })
+})
+
 test.describe('Sidebar layout', () => {
   test('applies data-layout attribute and sticky positioning', async ({ page }) => {
     const schema = {

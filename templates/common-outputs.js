@@ -194,6 +194,23 @@ const component = {
         this.$emit('notification', 'Copied')
       }
     },
+    downloadFile () {
+      let filename = this.output.filename || this.output.name || 'output'
+      let value = this.output.value
+      if (typeof value === 'string' && value.startsWith('data:')) {
+        fetch(value)
+          .then(r => r.blob())
+          .then(blob => saveAs(blob, filename))
+          .catch(() => {
+            let blob = new Blob([value], { type: 'application/octet-stream' })
+            saveAs(blob, filename)
+          })
+      } else {
+        let content = typeof value === 'string' ? value : JSON.stringify(value)
+        let blob = new Blob([content], { type: 'application/octet-stream' })
+        saveAs(blob, filename)
+      }
+    },
     renderMarkdown (text) {
       if (typeof text !== 'string') return ''
       return mdConverter.makeHtml(text)

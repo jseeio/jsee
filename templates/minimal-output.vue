@@ -84,6 +84,19 @@
   border-bottom-color: var(--jsee-primary, #00d1b2);
 }
 .jsee-tab-btn:hover { color: var(--jsee-text, #333); }
+.jsee-file-output { text-align: center; }
+.jsee-file-download-btn {
+  padding: 8px 20px;
+  border: 1px solid var(--jsee-border, #e0e0e0);
+  border-radius: 4px;
+  background: var(--jsee-bg-secondary, #f5f5f5);
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--jsee-text, #333);
+}
+.jsee-file-download-btn:hover {
+  background: var(--jsee-border, #e0e0e0);
+}
 </style>
 
 <template>
@@ -144,6 +157,9 @@
       </div>
       <div :id="outputName" v-else-if="output.type === 'image'">
         <img :src="output.value" style="max-width: 100%; height: auto;" />
+      </div>
+      <div :id="outputName" v-else-if="output.type === 'file'" class="jsee-file-output">
+        <button class="jsee-file-download-btn" v-on:click="downloadFile()">⬇ Download {{ output.filename || output.name || 'file' }}</button>
       </div>
       <div :id="outputName" v-else-if="output.type == 'blank'">
         <!-- will be filled by custom render function -->
