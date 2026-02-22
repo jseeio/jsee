@@ -761,6 +761,34 @@ test.describe('Sidebar layout', () => {
   })
 })
 
+test.describe('Blank output', () => {
+  test('renders empty container accessible by id', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) { return { canvas: 'placeholder' } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 1 }
+      ],
+      outputs: [
+        { name: 'canvas', type: 'blank' }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    await page.click('button:has-text("Run")')
+    // The blank output card should be visible with an empty container
+    const card = page.locator('.jsee-output-card')
+    await expect(card).toBeVisible()
+    const container = page.locator('#canvas')
+    await expect(container).toBeAttached()
+    // Container should have no visible child elements
+    const children = await container.locator(':scope > *').count()
+    expect(children).toBe(0)
+  })
+})
+
 test.describe('Output group blocks', () => {
   test('renders all outputs stacked', async ({ page }) => {
     const schema = {
