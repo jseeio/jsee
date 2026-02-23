@@ -745,7 +745,7 @@ export default class JSEE {
     await utils.importScripts(['https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js'])
     const pyodide = await loadPyodide()
     if (model.imports && Array.isArray(model.imports) && model.imports.length) {
-      await pyodide.loadPackage(model.imports.url)
+      await pyodide.loadPackage(model.imports.map(i => i.url))
     } else {
       await pyodide.loadPackagesFromImports(model.code)
     }

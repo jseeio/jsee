@@ -76,16 +76,16 @@ function setInputValue (input, value) {
 function resetInputs (inputs, example) {
   inputs.forEach((input, index) => {
     const inputName = input.name ? sanitizeName(input.name) : `input_${index}`
-    if (example && input.name && example[input.name]) {
+    if (example && input.name && typeof example[input.name] !== 'undefined') {
       // Object (unsanitized)
       setInputValue(input, example[input.name])
-    } else if (example && inputName && example[inputName]) {
+    } else if (example && inputName && typeof example[inputName] !== 'undefined') {
       // Object (sanitized)
       setInputValue(input, example[inputName])
     } else if (example && Array.isArray(example) && typeof example[index] !== 'undefined') {
       // Array
       setInputValue(input, example[index])
-    } else if (input.default) {
+    } else if (typeof input.default !== 'undefined') {
       // Default value
       setInputValue(input, input.default)
     } else {
