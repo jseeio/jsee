@@ -63,6 +63,23 @@ webpack.config.js  # Two build targets: jsee.core.js, jsee.full.js
 - Ask for confirmation before each commit
 - Commit changes one at a time, with clear messages. Avoid large commits that combine multiple changes.
 
+## Feature Summary
+
+**Input types (16):** string, int, float, slider, range (dual-thumb), color, date, checkbox, toggle, select, multi-select, radio, text (textarea), file, folder, group (blocks/accordion/tabs style)
+
+**Output types (23):** table (virtualized, sortable), chart (Observable Plot), 3d (Three.js), map (Leaflet), pdf (pdf.js), gallery, gauge, number, alert, highlight, chat, viewer (iframe/img/audio/video), markdown, image, audio, video, object (JSON tree), html/svg, code, file, group, function, blank
+
+**Layout:** 12-column CSS grid via `design.grid` (input/output split ratio) and per-input/output `columns` property. Sidebar layout. Responsive (collapses to single column on mobile).
+
+**Theming:** `design.primary`, `design.bg`, `design.fg`, `design.font`, `design.radius`
+
+**CLI:** `jsee init`, `jsee serve`, `jsee file.json`, `--fetch` for offline bundling, `--port`, dev server with file/folder serving endpoints
+
+**Execution:** Web Worker isolation, file streaming (async iterable ChunkedReader), SSE streaming, typed array WASM passing, smart output auto-detection, Pyodide integration
+
+**Decisions:**
+- **JSEE positioning** -- JSEE is the stable execution contract, runtime, and distribution artifact format. *Rejected: thin helper library framing.*
+
 ## Conventions
 - Formatting: no formatter is configured; preserve existing style (2-space indentation, semicolon-free, single quotes)
 - Types: plain JavaScript with runtime type checks (`typeof`, `isNaN`) and counters

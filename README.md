@@ -149,6 +149,92 @@ Extra blocks can be provided for further customization:
 
 - [Codepen](https://codepen.io/jseeio/pen/NWayjJe)
 
+## Examples
+
+### Full schema
+
+A complete schema with multiple inputs, outputs, theming, and a worker model:
+
+```json
+{
+  "model": { "url": "model.js", "worker": true },
+  "design": { "primary": "#2a7ae2", "grid": [4, 8] },
+  "inputs": [
+    { "name": "count", "type": "slider", "min": 10, "max": 1000, "default": 100 },
+    { "name": "method", "type": "select", "options": ["linear", "quadratic"], "default": "linear" }
+  ],
+  "outputs": [
+    { "name": "summary", "type": "number", "prefix": "n = " },
+    { "name": "data", "type": "chart", "mark": "dot", "x": "x", "y": "y" },
+    { "name": "raw", "type": "table" }
+  ],
+  "autorun": true
+}
+```
+
+### Chart output
+
+Model returns array of objects or column-oriented data:
+
+```javascript
+function model ({ count }) {
+  const data = Array.from({ length: count }, (_, i) => ({
+    x: i, y: Math.sin(i / 10) + Math.random() * 0.2
+  }))
+  return { chart: data }
+}
+```
+
+Schema: `{ "name": "chart", "type": "chart", "mark": "line", "x": "x", "y": "y" }`
+
+### Map output
+
+Model returns markers array:
+
+```javascript
+function model () {
+  return {
+    map: [
+      { lat: 51.505, lng: -0.09, popup: 'London' },
+      { lat: 48.857, lng: 2.352, popup: 'Paris' },
+      { lat: 52.52, lng: 13.405, popup: 'Berlin' }
+    ]
+  }
+}
+```
+
+### Pipeline
+
+Sequential models pass merged results forward:
+
+```json
+{
+  "model": [
+    { "url": "preprocess.js", "worker": true },
+    { "url": "analyze.js", "worker": false }
+  ]
+}
+```
+
+First model returns `{ cleaned: [...] }`, second receives `{ cleaned: [...], ...originalInputs }`. Return `{ stop: true }` from any model to halt early.
+
+### Multi-column layout
+
+Use `columns` on inputs/outputs for dashboard-style layouts:
+
+```json
+{
+  "inputs": [
+    { "name": "a", "type": "slider", "min": 0, "max": 100, "columns": 6 },
+    { "name": "b", "type": "slider", "min": 0, "max": 100, "columns": 6 }
+  ],
+  "outputs": [
+    { "name": "total", "type": "number", "columns": 4 },
+    { "name": "chart", "type": "chart", "columns": 8 }
+  ]
+}
+```
+
 ## Schema
 
 - `model` — Contains main parameters of the model/script
@@ -186,12 +272,14 @@ Extra blocks can be provided for further customization:
   - `fg` — Text color. Derives secondary text color automatically
   - `font` — Font family string, e.g. `'Georgia, serif'`
   - `radius` — Border radius in pixels (number) or CSS value (string)
-  - All components use CSS custom properties (`--jsee-primary`, `--jsee-bg`, `--jsee-text`, `--jsee-border`, etc.) that can also be overridden via CSS
+  - `grid` (array) — 12-column grid split for input/output sections. E.g. `[4, 8]` (default), `[6, 6]` (equal), `[3, 9]`. Values are `fr` units
+  - All components use CSS custom properties that can be overridden via CSS: `--jsee-primary`, `--jsee-bg`, `--jsee-text`, `--jsee-text-secondary`, `--jsee-border`, `--jsee-input-bg`, `--jsee-input-border`, `--jsee-focus-border`, `--jsee-focus-ring`, `--jsee-card-bg`, `--jsee-bg-secondary`, `--jsee-label-bg`, `--jsee-error`, `--jsee-radius`
 - `inputs` — Inputs definition
   - `name`* — Name of the input
   - `type`* — Type. Possible types:
     - `int`, `float` or `number` — Number
-    - `string` — String
+    - `string` — String (text input)
+    - `color` — Color picker (HTML5 `<input type="color">`)
     - `text` — Textarea (auto-resizes to fit content, up to 400px)
     - `checkbox` or `bool` — Checkbox
     - `select` or `categorical` — Select (one of many `options`)
@@ -221,8 +309,9 @@ Extra blocks can be provided for further customization:
   - `validate` (string) — Filtrex expression for input validation. The variable `value` holds the current input value. Expression must return truthy for valid input. E.g. `"validate": "value >= 0 and value <= 150"`. Runs on every input change (debounced). Invalid inputs show an error message and block model execution
   - `required` (boolean) — Shorthand validation: rejects empty strings, null, undefined, and empty arrays
   - `error` (string) — Custom error message for `validate` or `required` failures (default: `"Invalid value"` / `"Required"`)
+  - `columns` (number, 1-12) — Grid column span for this input. When any input has `columns`, the inputs section switches to a 12-column CSS grid. E.g. `"columns": 6` makes the input take half width
   - URL params for file inputs (e.g. `?file=https://...`) auto-load on init, so bookmarkable links run without an extra Load click
-- `outputs` — Outputs definition. Outputs also support `alias` (string) for matching model result keys by alternative names
+- `outputs` — Outputs definition. Outputs also support `alias` (string) for matching model result keys by alternative names. Per-output `columns` (number, 1-12) sets grid column span, same as inputs
   - `name`* — Name of the output
   - `type`* — Type. Possible types:
     - `file` — File output (not displayer, but downloaded)
@@ -245,8 +334,9 @@ Extra blocks can be provided for further customization:
     - `gauge` — Semicircle gauge. Model returns a number or `{value, label}`. Schema props: `min` (default 0), `max` (default 100), `label`, `color`. Zero-cost, included in core bundle
     - `number` — Large KPI number display. Model returns a number or `{value, delta, label}`. Delta shown with colored up/down arrow. Schema props: `label`, `prefix` (e.g. `"$"`), `suffix` (e.g. `"%"`), `precision`
     - `alert` — Colored status banner with left accent border. Model returns a string or `{message, type}`. Four variants: `info` (blue, default), `success` (green), `warning` (amber), `error` (red). Schema prop: `alertType` (default type when value is a string)
+    - `viewer` — Intelligent media viewer. Model returns a URL string. Auto-detects content type from extension: images (png, jpg, gif, svg, webp), audio (mp3, wav, ogg, flac), video (mp4, webm, mov), or iframe (fallback). Useful with `folder` input for file preview
     - `function` — Render function. Rather than returning a value, a model returns a function that JSEE will call passing the container element
-    - `blank` — Blank block (can be alternative to `function` and useful for custom renderers)
+    - `blank` — Empty container for custom rendering via `function` output or external code
 - `examples` — List of examples
 - **Execution triggers** — by default the model only runs when the user clicks Run. Three schema-level options change this:
   - `autorun` (boolean, default: `false`) — run the model once on first load, then wait for manual Run clicks
@@ -292,6 +382,45 @@ Extra blocks can be provided for further customization:
   - `ga` (string) — Google Analytics measurement ID (e.g. `"G-XXXXXXXXXX"`)
   - `social` (object) — Social media links: `twitter`, `github`, `facebook`, `linkedin`, `instagram`, `youtube` (values are usernames/handles)
   - `org` (object) — Organization footer: `name`, `url`, `description`
+
+## Smart output auto-detection
+
+When outputs are not explicitly defined in the schema, or when a model returns keys that don't match any named output, JSEE infers the output type from the value:
+
+| Value | Inferred type |
+|---|---|
+| Array of objects | `table` |
+| Array of image URL strings (`.png`, `.jpg`, `.gif`, `.svg`, `.webp`) | `gallery` |
+| Other arrays | `object` |
+| `data:image/*` string | `image` |
+| `data:audio/*` string | `audio` |
+| `data:video/*` string | `video` |
+| `data:application/pdf` string | `pdf` |
+| String ending in `.png`, `.jpg`, `.gif`, `.svg`, `.webp` | `image` |
+| String ending in `.mp3`, `.wav`, `.ogg`, `.flac` | `audio` |
+| String ending in `.mp4`, `.webm`, `.mov` | `video` |
+| String ending in `.pdf` | `pdf` |
+| String ending in `.md` | `markdown` |
+| String with newlines and > 200 characters | `code` |
+| Other strings | `string` |
+| Numbers, booleans | `string` |
+| Objects | `object` |
+
+## JSEE instance API
+
+After creating an instance with `new JSEE({schema, container})`, these methods are available:
+
+| Method | Description |
+|---|---|
+| `jsee.run(caller)` | Execute the model pipeline. `caller` can be `'run'`, `'autorun'`, `'reactive'`, or a custom button name |
+| `jsee.output(result)` | Process and render results to output cards |
+| `jsee.cancelCurrentRun()` | Stop the active run. Sets cancellation flag and signals workers |
+| `jsee.isCancelled()` | Returns `true` if cancellation was requested |
+| `jsee.progress(value)` | Set progress bar: `0`-`100` for determinate, `null` for indeterminate |
+| `jsee.download(title)` | Export current app as a self-contained offline HTML file |
+| `jsee.destroy()` | Cleanup: cancel runs, terminate workers, unmount Vue app, revoke blob URLs |
+| `jsee.notify(text)` | Show a success toast notification |
+| `jsee.log(...args)` | Log to browser console and optional `#log` DOM element |
 
 JSEE is a reactive branch of [StatSim](https://statsim.com)'s [Port](https://github.com/statsim/port). It's still work in progress. Expect API changes.
 
