@@ -868,7 +868,8 @@ export default class JSEE {
       // For folder inputs with select mode, filter to selected files
       data.inputs.forEach(input => {
         if (input.type === 'folder' && input.select && Array.isArray(inputValues[input.name])) {
-          inputValues[input.name] = inputValues[input.name].filter(f => f.selected !== false)
+          const selected = inputValues[input.name].filter(f => f.selected)
+          inputValues[input.name] = selected
         }
       })
 

@@ -71,6 +71,8 @@ function generateIdentitySchema (target, cwd) {
 
   if (stat && stat.isDirectory()) {
     const files = readDirListing(resolved, target)
+    // Pre-select the first file
+    files.forEach((f, i) => { f.selected = i === 0 })
     return {
       schema: {
         model: {
@@ -80,10 +82,10 @@ function generateIdentitySchema (target, cwd) {
           autorun: true,
           code: `function identity(inputs) {
   var files = inputs.files || []
-  var selected = files.filter(function (f) { return f.selected !== false })
-  var stats = { files: selected.length, totalSize: selected.reduce(function (s, f) { return s + (f.size || 0) }, 0), types: {} }
-  selected.forEach(function (f) { var t = f.type || 'unknown'; stats.types[t] = (stats.types[t] || 0) + 1 })
-  return { stats: stats, preview: selected.length > 0 ? '/__jsee/file?path=' + encodeURIComponent(selected[0].path) : null }
+  var selected = files.filter(function (f) { return f.selected })
+  var stats = { files: inputs.files ? inputs.files.length : 0, totalSize: (inputs.files || []).reduce(function (s, f) { return s + (f.size || 0) }, 0), types: {} }
+  ;(inputs.files || []).forEach(function (f) { var t = f.type || 'unknown'; stats.types[t] = (stats.types[t] || 0) + 1 })
+  return { stats: stats, viewer: selected.length > 0 ? '/__jsee/file?path=' + encodeURIComponent(selected[0].path) : null }
 }`
         },
         inputs: [{
@@ -92,8 +94,12 @@ function generateIdentitySchema (target, cwd) {
           default: files,
           disabled: true,
           reactive: true,
-          select: true
+          select: 'one'
         }],
+        outputs: [
+          { name: 'stats', type: 'object' },
+          { name: 'viewer', type: 'viewer' }
+        ],
         autorun: true
       },
       identity: true,
