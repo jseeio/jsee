@@ -8,8 +8,9 @@
           code: function (data) {
             var min = data.price_range[0]
             var max = data.price_range[1]
+            var count = data.items
             var items = []
-            for (var i = 0; i < 20; i++) {
+            for (var i = 0; i < count; i++) {
               var price = Math.round(Math.random() * 200)
               if (price >= min && price <= max) {
                 items.push('Item ' + (i + 1) + ': $' + price)
@@ -17,7 +18,8 @@
             }
             return {
               result: '## Filtered Products\n\n'
-                + 'Price range: **$' + min + ' – $' + max + '**\n\n'
+                + 'Price range: **$' + min + ' - $' + max
+                + '** (' + count + ' items)\n\n'
                 + (items.length > 0
                   ? items.map(function (i) { return '- ' + i }).join('\n')
                   : '*No items in range*')
@@ -27,6 +29,7 @@
           autorun: true
         },
         inputs: [
+          { name: 'items', type: 'slider', min: 5, max: 50, step: 1, default: 20 },
           { name: 'price_range', type: 'range', min: 0, max: 200, step: 5, default: [25, 150] }
         ],
         outputs: [

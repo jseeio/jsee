@@ -9,19 +9,24 @@
           worker: false,
           autorun: true
         },
+        design: {
+          grid: [5, 7]
+        },
         inputs: [
-          { name: 'name', type: 'string', default: 'Alice' },
-          { name: 'age', type: 'int', default: 30 },
-          { name: 'score', type: 'slider', min: 0, max: 100, step: 1, default: 75 },
-          { name: 'temperature', type: 'slider', min: 0, max: 1, step: 0.01, default: 0.7 },
-          { name: 'price_range', type: 'range', min: 0, max: 200, step: 5, default: [20, 150] },
-          { name: 'start_date', type: 'date', default: '2025-01-01' },
-          { name: 'enabled', type: 'checkbox', default: true },
-          { name: 'dark_mode', type: 'toggle', default: false },
-          { name: 'mode', type: 'select', options: ['fast', 'balanced', 'accurate'], default: 'balanced' },
-          { name: 'algorithm', type: 'radio', options: ['linear', 'quadratic', 'exponential'], default: 'linear' },
-          { name: 'features', type: 'multi-select', options: ['color', 'size', 'shape', 'weight'] },
-          { name: 'notes', type: 'text', default: 'Enter notes here...' }
+          { name: 'name', type: 'string', default: 'Alice', columns: 4 },
+          { name: 'age', type: 'int', default: 30, columns: 4 },
+          { name: 'color', type: 'color', default: '#00d1b2', columns: 4 },
+          { name: 'score', type: 'slider', min: 0, max: 100, step: 1, default: 75, columns: 6 },
+          { name: 'temperature', type: 'slider', min: 0, max: 1, step: 0.01, default: 0.7, columns: 6 },
+          { name: 'price_range', type: 'range', min: 0, max: 200, step: 5, default: [20, 150], columns: 12 },
+          { name: 'start_date', type: 'date', default: '2025-01-01', columns: 4 },
+          { name: 'enabled', type: 'checkbox', default: true, columns: 4 },
+          { name: 'dark_mode', type: 'toggle', default: false, columns: 4 },
+          { name: 'mode', type: 'select', options: ['fast', 'balanced', 'accurate'], default: 'balanced', columns: 4 },
+          { name: 'algorithm', type: 'radio', options: ['linear', 'quadratic', 'exponential'], default: 'linear', columns: 4 },
+          { name: 'features', type: 'multi-select', options: ['color', 'size', 'shape', 'weight'], columns: 4 },
+          { name: 'notes', type: 'text', default: 'Enter notes here...', columns: 12 },
+          { name: 'file', type: 'file', columns: 12 }
         ]
       },
       container: '#jsee-container'
