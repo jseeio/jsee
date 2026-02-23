@@ -87,6 +87,22 @@ const component = {
     },
     hasPdfjs() {
       return typeof window !== 'undefined' && !!window.pdfjsLib
+    },
+    viewerMedia () {
+      const url = this.output && this.output.value
+      if (typeof url !== 'string' || !url) return null
+      let filePath = url
+      try {
+        const parsed = new URL(url, 'http://x')
+        if (parsed.searchParams.has('path')) filePath = parsed.searchParams.get('path')
+      } catch (e) {}
+      const dot = filePath.lastIndexOf('.')
+      if (dot < 0) return 'iframe'
+      const ext = filePath.slice(dot).toLowerCase()
+      if (/^\.(png|jpe?g|gif|svg|webp|bmp|ico)$/.test(ext)) return 'image'
+      if (/^\.(mp3|wav|ogg|flac|aac)$/.test(ext)) return 'audio'
+      if (/^\.(mp4|webm|mov|avi)$/.test(ext)) return 'video'
+      return 'iframe'
     }
   },
   methods: {

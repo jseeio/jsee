@@ -219,6 +219,28 @@
   cursor: pointer;
   font-size: 12px;
 }
+.jsee-viewer-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--jsee-text-secondary, #888);
+  font-size: 13px;
+}
+.jsee-viewer iframe {
+  width: 100%;
+  border: none;
+  min-height: 400px;
+}
+.jsee-viewer img {
+  max-width: 100%;
+  height: auto;
+}
+.jsee-viewer audio {
+  width: 100%;
+}
+.jsee-viewer video {
+  max-width: 100%;
+  height: auto;
+}
 </style>
 
 <template>
@@ -370,6 +392,13 @@
             <div class="jsee-chat-bubble" v-html="renderMarkdown(msg.content)"></div>
           </div>
         </div>
+      </div>
+      <div :id="outputName" v-else-if="output.type === 'viewer'" class="jsee-viewer">
+        <div v-if="!output.value" class="jsee-viewer-empty">Select a file to preview</div>
+        <img v-else-if="viewerMedia === 'image'" :src="output.value" />
+        <audio v-else-if="viewerMedia === 'audio'" controls :src="output.value"></audio>
+        <video v-else-if="viewerMedia === 'video'" controls :src="output.value"></video>
+        <iframe v-else :src="output.value"></iframe>
       </div>
       <div :id="outputName" v-else-if="output.type === 'file'" class="jsee-file-output">
         <button class="jsee-file-download-btn" v-on:click="downloadFile()">⬇ Download {{ output.filename || output.name || 'file' }}</button>
