@@ -1,6 +1,6 @@
 {
   "name": "@jseeio/jsee",
-  "version": "0.5.1",
+  "version": "0.8.0",
   "description": "JavaScript Execution Environment",
   "main": "dist/jsee.core.js",
   "unpkg": "dist/jsee.core.js",
