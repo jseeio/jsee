@@ -59,6 +59,27 @@ const component = {
       }))
       this.changeHandler()
     },
+    rangeInput (e, which) {
+      const val = Number(e.target.value)
+      const v = this.input.value || [0, 100]
+      if (v[0] === v[1]) {
+        // Same point: direction determines which thumb moves
+        if (val > v[0]) this.input.value = [v[0], val]
+        else if (val < v[0]) this.input.value = [val, v[1]]
+      } else if (which === 'min') {
+        this.input.value = [Math.min(val, v[1]), v[1]]
+      } else {
+        this.input.value = [v[0], Math.max(val, v[0])]
+      }
+      this.changeHandler()
+    },
+    folderSelectOne (file) {
+      this.input.value.forEach(f => { f.selected = false })
+      file.selected = true
+      if (this.input.reactive) {
+        this.$emit('inchange')
+      }
+    },
     folderSelectionChanged () {
       if (this.input.reactive) {
         this.$emit('inchange')
