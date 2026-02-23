@@ -68,6 +68,16 @@
     }
   }
 
+  .jsee-12-grid {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 8px;
+  }
+  @media (max-width: 768px) {
+    .jsee-12-grid { grid-template-columns: 1fr; }
+    .jsee-12-grid > * { grid-column: span 1 !important; }
+  }
+
   .jsee-card {
     border: 1px solid var(--jsee-border);
     border-radius: var(--jsee-radius);
@@ -180,15 +190,17 @@
         <h2 class="jsee-title" v-if="$parent.model.title">{{ $parent.model.title }}</h2>
         <p class="jsee-description" v-if="$parent.model.description">{{ $parent.model.description }}</p>
       </div>
-      <div class="jsee-grid" :data-layout="$parent.design && $parent.design.layout ? $parent.design.layout : undefined">
+      <div class="jsee-grid" :data-layout="$parent.design && $parent.design.layout ? $parent.design.layout : undefined" :style="gridStyle">
         <div>
           <!-- Inputs -->
           <div class="jsee-card">
-            <div class="jsee-card-body" id="inputs" v-if="$parent.inputs && $parent.inputs.length > 0">
+            <div class="jsee-card-body" id="inputs" v-if="$parent.inputs && $parent.inputs.length > 0"
+              :class="{ 'jsee-12-grid': hasInputColumns }">
               <div
                 v-for="(input, index) in $parent.inputs"
                 :key="index"
                 class="jsee-input-col"
+                :style="input.columns ? { gridColumn: 'span ' + input.columns } : undefined"
               >
                 <vue-input
                   v-bind:input="input"
@@ -229,10 +241,11 @@
         </div>
         <div id="outputs">
           <!-- Outputs -->
-          <div v-if="$parent.outputs">
+          <div v-if="$parent.outputs" :class="{ 'jsee-12-grid': hasOutputColumns }">
             <div
               v-for="(output, index) in $parent.outputs"
               :key="index"
+              :style="output.columns ? { gridColumn: 'span ' + output.columns } : undefined"
             >
               <vue-output
                 v-bind:output="output"
@@ -312,6 +325,19 @@
           s['--jsee-radius'] = typeof d.radius === 'number' ? d.radius + 'px' : d.radius
         }
         return Object.keys(s).length ? s : undefined
+      },
+      gridStyle () {
+        const d = this.$parent.design
+        if (!d || !d.grid || !Array.isArray(d.grid) || d.grid.length < 2) return undefined
+        return { gridTemplateColumns: d.grid.map(n => n + 'fr').join(' ') }
+      },
+      hasInputColumns () {
+        const inputs = this.$parent.inputs
+        return inputs && inputs.some(i => i.columns)
+      },
+      hasOutputColumns () {
+        const outputs = this.$parent.outputs
+        return outputs && outputs.some(o => o.columns)
       }
     }
   }
