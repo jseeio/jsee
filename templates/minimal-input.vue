@@ -71,8 +71,152 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  input[type="range"] { flex: 1; }
   .jsee-range-value { font-size: 12px; min-width: 30px; text-align: center; }
+}
+.jsee-range-track {
+  flex: 1;
+  position: relative;
+  height: 20px;
+  &::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 0;
+    right: 0;
+    transform: translateY(-50%);
+    height: 4px;
+    background: var(--jsee-border, #ddd);
+    border-radius: 2px;
+  }
+  .jsee-range-fill {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 4px;
+    background: var(--jsee-primary, #00d1b2);
+    border-radius: 2px;
+    pointer-events: none;
+  }
+  input[type="range"] {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    pointer-events: none;
+    z-index: 1;
+    &::-webkit-slider-runnable-track {
+      height: 4px;
+      background: transparent;
+    }
+    &::-moz-range-track {
+      height: 4px;
+      background: transparent;
+    }
+    &::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--jsee-primary, #00d1b2);
+      border: 2px solid #fff;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+      cursor: pointer;
+      pointer-events: all;
+      margin-top: -6px;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    &::-moz-range-thumb {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--jsee-primary, #00d1b2);
+      border: 2px solid #fff;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+      cursor: pointer;
+      pointer-events: all;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    &:active::-webkit-slider-thumb {
+      transform: scale(1.25);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+    }
+    &:active::-moz-range-thumb {
+      transform: scale(1.25);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+    }
+  }
+}
+.jsee-slider-track {
+  margin-top: 6px;
+  position: relative;
+  height: 20px;
+  &::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 0;
+    right: 0;
+    transform: translateY(-50%);
+    height: 4px;
+    background: var(--jsee-border, #ddd);
+    border-radius: 2px;
+  }
+  input[type="range"] {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    &::-webkit-slider-runnable-track {
+      height: 4px;
+      background: transparent;
+    }
+    &::-moz-range-track {
+      height: 4px;
+      background: transparent;
+    }
+    &::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--jsee-primary, #00d1b2);
+      border: 2px solid #fff;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+      cursor: pointer;
+      margin-top: -6px;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    &::-moz-range-thumb {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--jsee-primary, #00d1b2);
+      border: 2px solid #fff;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+      cursor: pointer;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    &:active::-webkit-slider-thumb {
+      transform: scale(1.25);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+    }
+    &:active::-moz-range-thumb {
+      transform: scale(1.25);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+    }
+  }
 }
 .jsee-accordion-header {
   display: flex;
@@ -171,6 +315,7 @@
     <input
       v-model="input.value"
       v-bind:id="input.name"
+      v-bind:type="input.type == 'color' ? 'color' : 'text'"
       v-bind:placeholder="input.placeholder ? input.placeholder : input.name"
       v-on:change="changeHandler"
       v-on:keydown.enter="input.enter ? $emit('inchange') : null"
@@ -198,43 +343,51 @@
     <label v-bind:for="input.name" class="jsee-label">
       {{ input.name }}: <strong>{{ input.value }}</strong>
     </label>
-    <input
-      v-model.number="input.value"
-      v-bind:id="input.name"
-      v-bind:min="input.min || 0"
-      v-bind:max="input.max || 100"
-      v-bind:step="input.step || 1"
-      v-bind:disabled="input.disabled"
-      v-on:input="changeHandler"
-      type="range"
-      style="width: 100%"
-    >
+    <div class="jsee-slider-track">
+      <input
+        v-model.number="input.value"
+        v-bind:id="input.name"
+        v-bind:min="input.min || 0"
+        v-bind:max="input.max || 100"
+        v-bind:step="input.step || 1"
+        v-bind:disabled="input.disabled"
+        v-on:input="changeHandler"
+        type="range"
+      >
+    </div>
   </div>
 
   <div class="jsee-field" v-if="input.type == 'range'">
     <label class="jsee-label">
-      {{ input.name }}: <strong>{{ (input.value || [])[0] }} – {{ (input.value || [])[1] }}</strong>
+      {{ input.name }}: <strong>{{ (input.value || [])[0] }} - {{ (input.value || [])[1] }}</strong>
     </label>
     <div class="jsee-range">
       <span class="jsee-range-value">{{ (input.value || [])[0] }}</span>
-      <input
-        v-bind:value="(input.value || [])[0]"
-        v-on:input="input.value = [Number($event.target.value), (input.value || [])[1]]; changeHandler()"
-        v-bind:min="input.min || 0"
-        v-bind:max="(input.value || [])[1]"
-        v-bind:step="input.step || 1"
-        v-bind:disabled="input.disabled"
-        type="range"
-      >
-      <input
-        v-bind:value="(input.value || [])[1]"
-        v-on:input="input.value = [(input.value || [])[0], Number($event.target.value)]; changeHandler()"
-        v-bind:min="(input.value || [])[0]"
-        v-bind:max="input.max || 100"
-        v-bind:step="input.step || 1"
-        v-bind:disabled="input.disabled"
-        type="range"
-      >
+      <div class="jsee-range-track">
+        <div class="jsee-range-fill" :style="{
+          left: (((input.value || [])[0] - (input.min || 0)) / ((input.max || 100) - (input.min || 0)) * 100) + '%',
+          right: (100 - ((input.value || [])[1] - (input.min || 0)) / ((input.max || 100) - (input.min || 0)) * 100) + '%'
+        }"></div>
+        <input
+          v-bind:value="(input.value || [])[0]"
+          v-on:input="rangeInput($event, 'min')"
+          v-bind:min="input.min || 0"
+          v-bind:max="input.max || 100"
+          v-bind:step="input.step || 1"
+          v-bind:disabled="input.disabled"
+          type="range"
+          style="z-index: 2"
+        >
+        <input
+          v-bind:value="(input.value || [])[1]"
+          v-on:input="rangeInput($event, 'max')"
+          v-bind:min="input.min || 0"
+          v-bind:max="input.max || 100"
+          v-bind:step="input.step || 1"
+          v-bind:disabled="input.disabled"
+          type="range"
+        >
+      </div>
       <span class="jsee-range-value">{{ (input.value || [])[1] }}</span>
     </div>
   </div>
@@ -347,8 +500,14 @@
       </div>
       <div style="max-height: 200px; overflow-y: auto; border: 1px solid var(--jsee-border, #ddd); border-radius: 3px">
         <div v-for="(file, fi) in input.value" :key="fi"
-          style="padding: 3px 8px; font-size: 12px; border-bottom: 1px solid var(--jsee-border, #f0f0f0); display:flex; align-items:center; gap:6px">
-          <input v-if="input.select" type="checkbox"
+          :style="{
+            padding: '3px 8px', fontSize: '12px', borderBottom: '1px solid var(--jsee-border, #f0f0f0)',
+            display: 'flex', alignItems: 'center', gap: '6px',
+            cursor: input.select === 'one' ? 'pointer' : undefined,
+            background: input.select === 'one' && file.selected ? 'var(--jsee-focus-ring, rgba(72,139,199,0.2))' : undefined
+          }"
+          @click="input.select === 'one' && folderSelectOne(file)">
+          <input v-if="input.select === true || input.select === 'many'" type="checkbox"
             v-model="file.selected" @change="folderSelectionChanged">
           <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ file.name }}</span>
           <span style="color:var(--jsee-text-secondary, #aaa); font-size:10px">{{ formatSize(file.size) }}</span>
