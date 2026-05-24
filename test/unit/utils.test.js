@@ -809,7 +809,9 @@ describe('coerceParam', () => {
 
   test('coerces to boolean', () => {
     expect(coerceParam('true', 'boolean', 'x')).toBe(true)
+    expect(coerceParam('true', 'bool', 'x')).toBe(true)
     expect(coerceParam('false', 'boolean', 'x')).toBe(false)
+    expect(coerceParam('false', 'bool', 'x')).toBe(false)
     expect(coerceParam('yes', 'boolean', 'x')).toBe(false)
   })
 

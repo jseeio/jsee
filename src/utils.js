@@ -1030,7 +1030,7 @@ function validateSchema (schema) {
 // Convert a URL parameter string to the appropriate type
 function coerceParam (value, type, name) {
   if (type === 'number' || type === 'int' || type === 'float' || type === 'slider') return Number(value)
-  if (type === 'boolean' || type === 'checkbox' || type === 'toggle') return value === 'true'
+  if (type === 'boolean' || type === 'bool' || type === 'checkbox' || type === 'toggle') return value === 'true'
   if (type === 'range') {
     try { return JSON.parse(value) }
     catch (e) { console.error(`Failed to parse range for input ${name}:`, e) }
