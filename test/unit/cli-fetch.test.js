@@ -3,7 +3,7 @@ const os = require('os')
 const path = require('path')
 const vm = require('vm')
 const gen = require('../../src/cli')
-const { collectFetchBundleBlocks, resolveLocalImportFile, resolveFetchImport, resolveRuntimeMode, needsFullBundle, shouldBundleModelCode } = gen
+const { collectFetchBundleBlocks, resolveLocalImportFile, resolveFetchImport, resolveRuntimeMode, needsFullBundle, shouldBundleModelCode, resolveJseePackageInput, installJseePackage, shouldAutoInstallPackageSpecifier, isPackageSpecifier } = gen
 
 function extractHiddenCode (html, src) {
   const marker = `data-src="${src}"`
@@ -184,6 +184,139 @@ describe('resolveFetchImport', () => {
 
     expect(result.localFilePath).toBeNull()
     expect(result.remoteUrl).toBe('https://cdn.jsdelivr.net/npm/dist/nope.js')
+  })
+})
+
+describe('package input resolution', () => {
+  let originalCwd
+  let tmpDir
+  let packageDir
+
+  beforeEach(() => {
+    originalCwd = process.cwd()
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-package-'))
+    packageDir = path.join(tmpDir, 'node_modules', '@statsim', 'demo')
+    fs.mkdirSync(packageDir, { recursive: true })
+    fs.writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify({
+      name: '@statsim/demo',
+      version: '1.0.0',
+      main: 'model.js',
+      exports: { '.': './model.js' },
+      jsee: 'schema.json'
+    }, null, 2))
+    fs.writeFileSync(path.join(packageDir, 'schema.json'), JSON.stringify({
+      model: { name: 'demo', url: 'model.js', worker: false },
+      inputs: [{ name: 'x', type: 'int', default: 2 }],
+      outputs: [{ name: 'y', type: 'number' }]
+    }, null, 2))
+    fs.writeFileSync(path.join(packageDir, 'model.js'), 'function demo (input) { return { y: input.x + 1 } }\n')
+    fs.writeFileSync(path.join(packageDir, 'README.md'), '# Demo App\n')
+    process.chdir(tmpDir)
+  })
+
+  afterEach(() => {
+    process.chdir(originalCwd)
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  test('recognizes npm package specifiers without treating paths as packages', () => {
+    expect(isPackageSpecifier('@statsim/demo')).toBe(true)
+    expect(isPackageSpecifier('demo')).toBe(true)
+    expect(isPackageSpecifier('./demo')).toBe(false)
+    expect(isPackageSpecifier('/tmp/demo')).toBe(false)
+    expect(isPackageSpecifier('https://example.com/demo')).toBe(false)
+  })
+
+  test('auto-install is only attempted for package-like inputs', () => {
+    expect(shouldAutoInstallPackageSpecifier('@statsim/remote-demo', tmpDir)).toBe(true)
+    expect(shouldAutoInstallPackageSpecifier('schema.json', tmpDir)).toBe(false)
+    expect(shouldAutoInstallPackageSpecifier('./demo', tmpDir)).toBe(false)
+  })
+
+  test('resolves installed package jsee metadata', () => {
+    const result = resolveJseePackageInput('@statsim/demo', tmpDir)
+
+    expect(result.packageName).toBe('@statsim/demo')
+    expect(result.packageRoot).toBe(packageDir)
+    expect(result.schemaPath).toBe(path.join(packageDir, 'schema.json'))
+    expect(result.descriptionPath).toBe(path.join(packageDir, 'README.md'))
+  })
+
+  test('installs missing package inputs into the app cache', () => {
+    const cacheRoot = path.join(tmpDir, 'jsee-cache')
+    const remotePackageDir = path.join(cacheRoot, 'node_modules', '@statsim', 'remote-demo')
+    const execFileSync = jest.fn((command, args) => {
+      expect(command).toMatch(/^npm/)
+      expect(args).toEqual(expect.arrayContaining(['install', '--prefix', cacheRoot, '@statsim/remote-demo']))
+      fs.mkdirSync(remotePackageDir, { recursive: true })
+      fs.writeFileSync(path.join(remotePackageDir, 'package.json'), JSON.stringify({
+        name: '@statsim/remote-demo',
+        version: '1.0.0',
+        jsee: 'schema.json'
+      }, null, 2))
+      fs.writeFileSync(path.join(remotePackageDir, 'schema.json'), JSON.stringify({
+        model: { name: 'remoteDemo', url: 'model.js', worker: false },
+        inputs: [],
+        outputs: []
+      }, null, 2))
+    })
+
+    const result = resolveJseePackageInput('@statsim/remote-demo', tmpDir, {
+      install: true,
+      cacheRoot,
+      execFileSync,
+      stdio: 'pipe'
+    })
+
+    expect(execFileSync).toHaveBeenCalledTimes(1)
+    expect(result.packageName).toBe('@statsim/remote-demo')
+    expect(result.packageRoot).toBe(remotePackageDir)
+    expect(result.installedByJsee).toBe(true)
+  })
+
+  test('uses cached package inputs before invoking npm install', () => {
+    const cacheRoot = path.join(tmpDir, 'jsee-cache')
+    const cachedPackageDir = path.join(cacheRoot, 'node_modules', '@statsim', 'cached-demo')
+    fs.mkdirSync(cachedPackageDir, { recursive: true })
+    fs.writeFileSync(path.join(cachedPackageDir, 'package.json'), JSON.stringify({
+      name: '@statsim/cached-demo',
+      version: '1.0.0',
+      jsee: 'schema.json'
+    }, null, 2))
+    fs.writeFileSync(path.join(cachedPackageDir, 'schema.json'), JSON.stringify({
+      inputs: [],
+      outputs: []
+    }, null, 2))
+    const execFileSync = jest.fn(() => { throw new Error('unexpected install') })
+
+    const result = resolveJseePackageInput('@statsim/cached-demo', tmpDir, {
+      install: true,
+      cacheRoot,
+      execFileSync
+    })
+
+    expect(execFileSync).not.toHaveBeenCalled()
+    expect(result.packageRoot).toBe(cachedPackageDir)
+    expect(result.installedByJsee).toBe(true)
+  })
+
+  test('does not try to install schema-like inputs as packages', () => {
+    const execFileSync = jest.fn(() => { throw new Error('unexpected install') })
+
+    expect(installJseePackage('schema.json', tmpDir, { execFileSync })).toBeNull()
+    expect(resolveJseePackageInput('schema.json', tmpDir, { install: true, execFileSync })).toBeNull()
+    expect(execFileSync).not.toHaveBeenCalled()
+  })
+
+  test('builds package input from installed jsee package', async () => {
+    const outputPath = path.join(tmpDir, 'out', 'index.html')
+
+    await gen(['--inputs', '@statsim/demo', '--outputs', outputPath, '--bundle'])
+
+    const html = fs.readFileSync(outputPath, 'utf8')
+    expect(html).toContain('Demo App')
+    const code = extractHiddenCode(html, 'model.js')
+    expect(runHiddenModel(code, 'demo', { x: 4 })).toEqual({ y: 5 })
   })
 })
 

@@ -509,7 +509,7 @@ JSEE is part of the [StatSim](https://statsim.com) ecosystem. The schema/runtime
 ## CLI — Node.js
 
 ```
-jsee [schema.json] [data...] [options]
+jsee [schema.json|package] [data...] [options]
 jsee init [template] [--html]
 ```
 
@@ -525,14 +525,15 @@ jsee init chat              # chat template
 jsee init --html            # single index.html with CDN script
 ```
 
-#### `jsee <schema> [data...]`
+#### `jsee <schema|package> [data...]`
 
-Start a dev server or generate a static HTML file from a schema.
+Start a dev server or generate a static HTML file from a local schema or a JSEE app package. Package inputs resolve the package `jsee` field, for example `{ "jsee": "schema.json" }`, and use the package directory as the app root. If the package is not already installed, JSEE installs it into its app cache before running it.
 
 ```bash
-jsee schema.json                    # dev server on port 3000
-jsee schema.json -o app.html        # generate static HTML
-jsee schema.json -o app.html --bundle  # self-contained HTML with bundled runtime
+jsee schema.json                       # dev server on port 3000
+jsee @statsim/gen --serve              # install/cache and serve a JSEE app package
+jsee schema.json -o app.html           # generate static HTML
+jsee @statsim/gen -o app.html --bundle # bundled HTML from package app
 ```
 
 ### Options
@@ -546,6 +547,7 @@ jsee schema.json -o app.html --bundle  # self-contained HTML with bundled runtim
 | `-v, --version <version>` | JSEE runtime version (`latest`, `dev`, or semver) |
 | `-b, --bundle` | Bundle runtime + all deps into a single offline HTML |
 | `-f, --fetch` | Backward-compatible alias for `--bundle` |
+| `-s, --serve` | Serve explicitly (default when no output is provided) |
 | `-e, --execute` | Run models server-side (auto-enabled when serving local .js models) |
 | `--client` | Force client-side execution (disable auto server-side) |
 | `-c, --cdn <url\|bool>` | Rewrite model URLs for CDN deployment |

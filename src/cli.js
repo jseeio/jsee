@@ -2,6 +2,8 @@ const fs = require('fs')
 const path = require('path')
 const os = require('os')
 const crypto = require('crypto')
+const childProcess = require('child_process')
+const Module = require('module')
 
 const minimist = require('minimist')
 
@@ -67,6 +69,133 @@ function readDirListing (resolved, relative) {
       type: fileExtToOutputType(e.name),
       selected: true
     }))
+}
+
+function getNpmCommand () {
+  return process.platform === 'win32' ? 'npm.cmd' : 'npm'
+}
+
+function getJseeAppCacheRoot (options={}) {
+  return options.cacheRoot || process.env.JSEE_APP_CACHE || path.join(os.homedir(), '.cache', 'jsee', 'apps')
+}
+
+function isPackageSpecifier (value) {
+  if (typeof value !== 'string') return false
+  if (!value || value.startsWith('.') || value.startsWith('/') || value.startsWith('file:')) return false
+  if (isHttpUrl(value)) return false
+  if (value.includes('\\')) return false
+  if (value.startsWith('@')) {
+    return /^@[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(value)
+  }
+  return /^[A-Za-z0-9._-]+$/.test(value)
+}
+
+function shouldAutoInstallPackageSpecifier (value, cwd) {
+  if (!isPackageSpecifier(value)) return false
+  if (value.includes('.json') || value.includes('.js')) return false
+  const localPath = path.resolve(cwd, value)
+  return !fs.existsSync(localPath)
+}
+
+function resolvePackageJsonPath (specifier, cwd) {
+  const resolver = Module.createRequire(path.join(cwd, '__jsee_resolve__.js'))
+  const searchPaths = resolver.resolve.paths(specifier) || []
+
+  for (const base of searchPaths) {
+    const candidate = path.join(base, specifier, 'package.json')
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate
+  }
+
+  try {
+    return require.resolve(`${specifier}/package.json`, { paths: [cwd] })
+  } catch (error) {
+    return null
+  }
+}
+
+function installJseePackage (specifier, cwd, options={}) {
+  if (!shouldAutoInstallPackageSpecifier(specifier, cwd)) return null
+
+  const cacheRoot = getJseeAppCacheRoot(options)
+  const execFileSync = options.execFileSync || childProcess.execFileSync
+  const npmCommand = options.npmCommand || getNpmCommand()
+  fs.mkdirSync(cacheRoot, { recursive: true })
+
+  try {
+    execFileSync(npmCommand, [
+      'install',
+      '--prefix', cacheRoot,
+      '--omit=dev',
+      '--no-audit',
+      '--no-fund',
+      '--ignore-scripts',
+      '--no-package-lock',
+      specifier
+    ], { stdio: options.stdio || 'inherit' })
+  } catch (error) {
+    throw new Error(`Failed to install JSEE app package ${specifier}. Install it manually or retry with network access.\n${error.message}`)
+  }
+
+  return resolvePackageJsonPath(specifier, cacheRoot)
+}
+
+function readJseePackageInput (specifier, packageJsonPath, installedByJsee=false) {
+  const packageRoot = path.dirname(packageJsonPath)
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'))
+  const appConfig = packageJson.jsee
+  let schemaRel
+  let descriptionRel
+
+  if (typeof appConfig === 'string') {
+    schemaRel = appConfig
+  } else if (appConfig && typeof appConfig === 'object') {
+    schemaRel = appConfig.schema || appConfig.input || appConfig.inputs
+    descriptionRel = appConfig.description
+  }
+
+  if (!schemaRel) {
+    throw new Error(`${specifier} does not declare a JSEE app. Add "jsee": "schema.json" to its package.json.`)
+  }
+
+  const schemaPath = path.resolve(packageRoot, schemaRel)
+  if (!fs.existsSync(schemaPath) || !fs.statSync(schemaPath).isFile()) {
+    throw new Error(`${specifier} declares JSEE schema ${schemaRel}, but the file was not found.`)
+  }
+
+  let descriptionPath = null
+  if (descriptionRel) {
+    descriptionPath = path.resolve(packageRoot, descriptionRel)
+  } else {
+    const readmePath = path.join(packageRoot, 'README.md')
+    if (fs.existsSync(readmePath) && fs.statSync(readmePath).isFile()) descriptionPath = readmePath
+  }
+
+  return {
+    packageName: packageJson.name || specifier,
+    packageRoot,
+    schemaPath,
+    descriptionPath,
+    installedByJsee
+  }
+}
+
+function resolveJseePackageInput (specifier, cwd, options={}) {
+  if (!isPackageSpecifier(specifier)) return null
+
+  let packageJsonPath = resolvePackageJsonPath(specifier, cwd)
+  let installedByJsee = false
+  if (!packageJsonPath && options.install) {
+    const cacheRoot = getJseeAppCacheRoot(options)
+    packageJsonPath = resolvePackageJsonPath(specifier, cacheRoot)
+    installedByJsee = Boolean(packageJsonPath)
+  }
+  if (!packageJsonPath && options.install) {
+    packageJsonPath = installJseePackage(specifier, cwd, options)
+    installedByJsee = Boolean(packageJsonPath)
+  }
+  if (!packageJsonPath) return null
+
+  return readJseePackageInput(specifier, packageJsonPath, installedByJsee)
 }
 
 function generateIdentitySchema (target, cwd) {
@@ -869,6 +998,7 @@ async function gen (pargv, returnHtml=false) {
     execute: 'e',
     cdn: 'c',
     runtime: 'r',
+    serve: 's',
   }
   const argvDefault = {
     execute: 'auto', // execute the model code on the server (auto = server-side when serving local .js models)
@@ -878,12 +1008,13 @@ async function gen (pargv, returnHtml=false) {
     version: 'latest', // default version of JSEE runtime to use
     verbose: false, // verbose mode
     cdn: false,
-    runtime: 'auto'
+    runtime: 'auto',
+    serve: false
   }
   let argv = minimist(pargv, {
     alias: argvAlias,
     default: argvDefault,
-    boolean: ['help', 'h', 'html', 'client'],
+    boolean: ['help', 'h', 'html', 'client', 'serve'],
   })
 
   // ── jsee init <template> ──────────────────────────────────────────
@@ -1021,7 +1152,7 @@ npx @jseeio/jsee schema.json
 
   if (argv.help || argv.h) {
     console.log(`
-Usage: jsee [schema.json] [data...] [options]
+Usage: jsee [schema.json|package] [data...] [options]
        jsee init [template] [--html]
 
 Commands:
@@ -1036,6 +1167,7 @@ Options:
   -v, --version <version>   JSEE runtime version (default: latest)
   -b, --bundle             Bundle runtime + dependencies into output
   -f, --fetch               Alias for --bundle
+  -s, --serve               Serve explicitly (default when no output is provided)
   -e, --execute             Execute model server-side (auto-enabled when serving local .js models)
       --client              Force client-side execution (disable auto server-side)
   -c, --cdn <url|bool>      Rewrite model URLs for CDN deployment
@@ -1053,6 +1185,7 @@ Examples:
   jsee init chat                    Scaffold chat project
   jsee init --html                  Generate single index.html
   jsee schema.json                  Start dev server with schema
+  jsee @scope/app --serve           Start dev server from a JSEE app package
   jsee schema.json 42 hello         Pass positional data to first two inputs
   jsee schema.json --a=100 --b=200  Pass named data inputs
   jsee schema.json data.csv         Pass a file path as input
@@ -1067,14 +1200,18 @@ Documentation: https://jsee.org
     return
   }
 
-  // Check if first positional arg is a file or directory for identity serving
+  // Check if first positional arg is a file/directory or JSEE app package.
   let identityResult = null
+  let packageInput = null
   if (!imported && argv._.length > 0) {
     identityResult = generateIdentitySchema(argv._[0], process.cwd())
+    if (!identityResult) {
+      packageInput = resolveJseePackageInput(argv._[0], process.cwd(), { install: true })
+    }
   }
 
-  // Set argv.inputs to the first positional argument if it looks like a schema/script
-  if (!identityResult && !imported && argv._.length > 0 && argv.inputs === argvDefault.inputs) {
+  // Set argv.inputs to the first positional argument if it looks like a schema/script/package.
+  if (!identityResult && !packageInput && !imported && argv._.length > 0 && argv.inputs === argvDefault.inputs) {
     argv.inputs = argv._[0]
   }
 
@@ -1093,8 +1230,20 @@ Documentation: https://jsee.org
 
   let cwd = process.cwd()
   let inputs = argv.inputs
-  let outputs = argv.outputs
-  let description = argv.description
+  let outputs = argv.serve ? false : argv.outputs
+  let description = argv.description || ''
+
+  if (packageInput || (!identityResult && typeof inputs === 'string')) {
+    const resolvedPackageInput = packageInput || resolveJseePackageInput(inputs, cwd, { install: true })
+    if (resolvedPackageInput) {
+      packageInput = resolvedPackageInput
+      cwd = packageInput.packageRoot
+      inputs = [packageInput.schemaPath]
+      if (!description && packageInput.descriptionPath) {
+        description = path.relative(cwd, packageInput.descriptionPath)
+      }
+    }
+  }
   let schema
   let schemaPath
   let descriptionTxt = ''
@@ -1105,7 +1254,7 @@ Documentation: https://jsee.org
   // Determine the inputs and outputs
   // if inputs is a string with js file names, split it into an array
   if (typeof inputs === 'string') {
-    if (inputs.includes('.js')) {
+    if (inputs.includes('.js') || inputs.includes('.json') || inputs.includes(',')) {
       inputs = inputs.split(',')
     }
   }
@@ -1619,6 +1768,11 @@ module.exports.resolveLocalImportFile = resolveLocalImportFile
 module.exports.resolveFetchImport = resolveFetchImport
 module.exports.resolveRuntimeMode = resolveRuntimeMode
 module.exports.resolveOutputPath = resolveOutputPath
+module.exports.resolveJseePackageInput = resolveJseePackageInput
+module.exports.installJseePackage = installJseePackage
+module.exports.getJseeAppCacheRoot = getJseeAppCacheRoot
+module.exports.shouldAutoInstallPackageSpecifier = shouldAutoInstallPackageSpecifier
+module.exports.isPackageSpecifier = isPackageSpecifier
 module.exports.writeOutputFile = writeOutputFile
 module.exports.needsFullBundle = needsFullBundle
 module.exports.shouldBundleModelCode = shouldBundleModelCode
