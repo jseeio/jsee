@@ -152,7 +152,12 @@ export default class JSEE {
     this.__version__ = VERSION
     this.cancelled = false
     this._cancelWorkerRun = null
+    this._rejectRun = null
+    this._rejectWorkerRun = null
     this._workers = []
+    this._pendingRun = null
+    this._runToken = null
+    this._needsModelReinit = false
 
     // Check if schema is provided
     if (typeof this.schema === 'undefined') {
@@ -185,23 +190,31 @@ export default class JSEE {
 
   cancelCurrentRun () {
     log('Stopping current run')
+    const cancelError = new Error('Cancelled')
     this.cancelled = true
+    this._pendingRun = null
+    this._runToken = {}
+    if (typeof this._rejectRun === 'function') {
+      this._rejectRun(cancelError)
+      this._rejectRun = null
+    }
     if (typeof this._cancelWorkerRun === 'function') {
       this._cancelWorkerRun()
     }
     // Reject the in-flight worker promise so run() stops awaiting
     if (typeof this._rejectWorkerRun === 'function') {
-      this._rejectWorkerRun(new Error('Cancelled'))
+      this._rejectWorkerRun(cancelError)
       this._rejectWorkerRun = null
     }
     // Terminate all workers to force-stop blocking WASM computations
+    const hadWorkers = this._workers.length > 0
     this._workers.forEach(w => {
       try { w.terminate() } catch (e) { /* ignore */ }
     })
     this._workers = []
     this._cancelWorkerRun = null
-    // Force model re-init on next run
-    this._needsModelReinit = true
+    // Force model re-init on next run only when worker-backed state was torn down.
+    if (hadWorkers) this._needsModelReinit = true
   }
 
   isCancelled () {
@@ -540,14 +553,6 @@ export default class JSEE {
           this.modelContainer = container.querySelector('#model')
           // Init overlay
           this.overlay = new Overlay(this.inputsContainer ? this.inputsContainer : this.outputsContainer)
-          // Stop button is shown only while a run is active
-          this.stopElement = document.createElement('button')
-          this.stopElement.innerHTML = 'Stop'
-          this.stopElement.style = 'display: none; margin-left: 12px; background: white; color: #333; border: 1px solid #DDD; padding: 6px 10px; border-radius: 5px; cursor: pointer;'
-          this.stopElement.addEventListener('click', () => {
-            this.cancelCurrentRun()
-          })
-          this.overlay.element.appendChild(this.stopElement)
           resolve()
         }, log)
         this.data = this.app.$data
@@ -871,6 +876,7 @@ export default class JSEE {
     this.running = true
     this.cancelled = false
     let runSucceeded = false
+    let rejectCurrentRun = null
     // Run token to detect stale results when worker.onmessage gets rebound
     const runToken = this._runToken = {}
 
@@ -916,13 +922,20 @@ export default class JSEE {
 
       log('Input values:', inputValues)
       this.overlay.show()
-      if (this.stopElement) {
-        this.stopElement.style.display = 'inline-block'
-      }
       if (this.data) this.data.running = true
 
       // Run pipeline
-      const results = await this.pipeline(inputValues)
+      const cancelPromise = new Promise((_, reject) => {
+        rejectCurrentRun = reject
+        this._rejectRun = reject
+      })
+      const pipelinePromise = Promise.resolve().then(() => this.pipeline(inputValues))
+      pipelinePromise.catch(err => {
+        if (this.cancelled || this._runToken !== runToken) {
+          log('Cancelled pipeline settled:', err)
+        }
+      })
+      const results = await Promise.race([pipelinePromise, cancelPromise])
 
       // Drop stale results if a newer run started (e.g. worker.onmessage rebound race)
       if (this._runToken !== runToken) return
@@ -958,11 +971,11 @@ export default class JSEE {
         notyf.error(typeof err === 'string' ? err : (err.message || 'Pipeline error'))
       }
     } finally {
+      if (this._rejectRun === rejectCurrentRun) {
+        this._rejectRun = null
+      }
       // Always clean up UI state so overlay and running flag don't get stuck
       this.overlay.hide()
-      if (this.stopElement) {
-        this.stopElement.style.display = 'none'
-      }
       this.running = false
       if (this.data) this.data.running = false
 

@@ -42,7 +42,7 @@
 
   .jsee-grid {
     display: grid;
-    grid-template-columns: 1fr 2fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
     gap: 20px;
   }
   @media (max-width: 768px) {
@@ -50,7 +50,10 @@
   }
 
   .jsee-grid[data-layout="sidebar"] {
-    grid-template-columns: 280px 1fr;
+    grid-template-columns: 280px minmax(0, 1fr);
+  }
+  .jsee-grid > div {
+    min-width: 0;
   }
   .jsee-grid[data-layout="sidebar"] > div:first-child {
     position: sticky;
@@ -70,8 +73,11 @@
 
   .jsee-12-grid {
     display: grid;
-    grid-template-columns: repeat(12, 1fr);
+    grid-template-columns: repeat(12, minmax(0, 1fr));
     gap: 8px;
+  }
+  .jsee-12-grid > * {
+    min-width: 0;
   }
   @media (max-width: 768px) {
     .jsee-12-grid { grid-template-columns: 1fr; }
@@ -87,6 +93,9 @@
 
   .jsee-card-body {
     padding: 16px;
+  }
+  #inputs, #outputs {
+    position: relative;
   }
 
   #inputs .jsee-input-col {
@@ -343,7 +352,7 @@
       gridStyle () {
         const d = this.$parent.design
         if (!d || !d.grid || !Array.isArray(d.grid) || d.grid.length < 2) return undefined
-        return { gridTemplateColumns: d.grid.map(n => n + 'fr').join(' ') }
+        return { gridTemplateColumns: d.grid.map(n => `minmax(0, ${n}fr)`).join(' ') }
       },
       hasInputColumns () {
         const inputs = this.$parent.inputs

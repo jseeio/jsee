@@ -1,6 +1,11 @@
 <style lang="scss" scoped>
 .jsee-field {
   margin-bottom: 6px;
+  min-width: 0;
+  box-sizing: border-box;
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
 }
 .jsee-label {
   display: inline-block;
@@ -14,6 +19,8 @@
 .jsee-input, .jsee-textarea, .jsee-select {
   display: block;
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   padding: 6px 8px;
   font-size: 13px;
   border: 1px solid var(--jsee-input-border, #ddd);

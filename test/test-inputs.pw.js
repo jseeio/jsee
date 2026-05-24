@@ -13,6 +13,25 @@ const echoSchema = (inputs) => ({
   inputs
 })
 
+test.describe('Input layout', () => {
+  test('keeps full-width controls inside their fields in grid layouts', async ({ page }) => {
+    const schema = echoSchema([
+      { name: 'timesteps_rollout', type: 'int', default: 1024 },
+      { name: 'mode', type: 'categorical', options: ['short', 'medium', 'long'], default: 'medium' }
+    ])
+    schema.design = { grid: [3, 9] }
+
+    await page.goto(urlQueryEscaped(schema))
+    const overflow = await page.locator('#timesteps_rollout').evaluate((input) => {
+      const inputRect = input.getBoundingClientRect()
+      const fieldRect = input.closest('.jsee-field').getBoundingClientRect()
+      return inputRect.right - fieldRect.right
+    })
+
+    expect(overflow).toBeLessThanOrEqual(0.5)
+  })
+})
+
 test.describe('Slider input', () => {
   test('renders with default value and responds to changes', async ({ page }) => {
     const schema = echoSchema([

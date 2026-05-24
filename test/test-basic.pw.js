@@ -42,6 +42,35 @@ test.describe('Initial test (worker)', () => {
   })
 })
 
+test.describe('Run cancellation', () => {
+  test('Stop cancels a main-thread async run and renders one stop button', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        autorun: false,
+        code: `async function (data) {
+          await new Promise(resolve => setTimeout(resolve, 2000))
+          return { status: 'DONE' }
+        }`
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 1 }
+      ]
+    }
+
+    await page.goto(urlQueryEscaped(schema))
+    await page.click('button:has-text("Run")')
+
+    const stopButtons = page.locator('button:has-text("Stop")')
+    await expect(stopButtons).toHaveCount(1)
+    await stopButtons.click()
+
+    await expect(page.locator('button:has-text("Run")')).toBeVisible()
+    await expect(stopButtons).toHaveCount(0)
+    await expect(page.locator('body')).not.toContainText('DONE')
+  })
+})
+
 test.describe('Minimal examples', () => {
   const schema = {
     'model': {
