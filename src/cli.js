@@ -2,7 +2,6 @@ const fs = require('fs')
 const path = require('path')
 const os = require('os')
 const crypto = require('crypto')
-const childProcess = require('child_process')
 const Module = require('module')
 
 const minimist = require('minimist')
@@ -71,14 +70,6 @@ function readDirListing (resolved, relative) {
     }))
 }
 
-function getNpmCommand () {
-  return process.platform === 'win32' ? 'npm.cmd' : 'npm'
-}
-
-function getJseeAppCacheRoot (options={}) {
-  return options.cacheRoot || process.env.JSEE_APP_CACHE || path.join(os.homedir(), '.cache', 'jsee', 'apps')
-}
-
 function isPackageSpecifier (value) {
   if (typeof value !== 'string') return false
   if (!value || value.startsWith('.') || value.startsWith('/') || value.startsWith('file:')) return false
@@ -90,11 +81,14 @@ function isPackageSpecifier (value) {
   return /^[A-Za-z0-9._-]+$/.test(value)
 }
 
-function shouldAutoInstallPackageSpecifier (value, cwd) {
+function looksLikeMissingPackageInput (value, cwd) {
   if (!isPackageSpecifier(value)) return false
   if (value.includes('.json') || value.includes('.js')) return false
-  const localPath = path.resolve(cwd, value)
-  return !fs.existsSync(localPath)
+  return !fs.existsSync(path.resolve(cwd, value))
+}
+
+function getPackageInputInstallHint (specifier) {
+  return `npx -p @jseeio/jsee -p ${specifier} jsee ${specifier} --serve`
 }
 
 function resolvePackageJsonPath (specifier, cwd) {
@@ -113,33 +107,12 @@ function resolvePackageJsonPath (specifier, cwd) {
   }
 }
 
-function installJseePackage (specifier, cwd, options={}) {
-  if (!shouldAutoInstallPackageSpecifier(specifier, cwd)) return null
+function resolveJseePackageInput (specifier, cwd) {
+  if (!isPackageSpecifier(specifier)) return null
 
-  const cacheRoot = getJseeAppCacheRoot(options)
-  const execFileSync = options.execFileSync || childProcess.execFileSync
-  const npmCommand = options.npmCommand || getNpmCommand()
-  fs.mkdirSync(cacheRoot, { recursive: true })
+  const packageJsonPath = resolvePackageJsonPath(specifier, cwd)
+  if (!packageJsonPath) return null
 
-  try {
-    execFileSync(npmCommand, [
-      'install',
-      '--prefix', cacheRoot,
-      '--omit=dev',
-      '--no-audit',
-      '--no-fund',
-      '--ignore-scripts',
-      '--no-package-lock',
-      specifier
-    ], { stdio: options.stdio || 'inherit' })
-  } catch (error) {
-    throw new Error(`Failed to install JSEE app package ${specifier}. Install it manually or retry with network access.\n${error.message}`)
-  }
-
-  return resolvePackageJsonPath(specifier, cacheRoot)
-}
-
-function readJseePackageInput (specifier, packageJsonPath, installedByJsee=false) {
   const packageRoot = path.dirname(packageJsonPath)
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'))
   const appConfig = packageJson.jsee
@@ -174,28 +147,8 @@ function readJseePackageInput (specifier, packageJsonPath, installedByJsee=false
     packageName: packageJson.name || specifier,
     packageRoot,
     schemaPath,
-    descriptionPath,
-    installedByJsee
+    descriptionPath
   }
-}
-
-function resolveJseePackageInput (specifier, cwd, options={}) {
-  if (!isPackageSpecifier(specifier)) return null
-
-  let packageJsonPath = resolvePackageJsonPath(specifier, cwd)
-  let installedByJsee = false
-  if (!packageJsonPath && options.install) {
-    const cacheRoot = getJseeAppCacheRoot(options)
-    packageJsonPath = resolvePackageJsonPath(specifier, cacheRoot)
-    installedByJsee = Boolean(packageJsonPath)
-  }
-  if (!packageJsonPath && options.install) {
-    packageJsonPath = installJseePackage(specifier, cwd, options)
-    installedByJsee = Boolean(packageJsonPath)
-  }
-  if (!packageJsonPath) return null
-
-  return readJseePackageInput(specifier, packageJsonPath, installedByJsee)
 }
 
 function generateIdentitySchema (target, cwd) {
@@ -1206,7 +1159,7 @@ Documentation: https://jsee.org
   if (!imported && argv._.length > 0) {
     identityResult = generateIdentitySchema(argv._[0], process.cwd())
     if (!identityResult) {
-      packageInput = resolveJseePackageInput(argv._[0], process.cwd(), { install: true })
+      packageInput = resolveJseePackageInput(argv._[0], process.cwd())
     }
   }
 
@@ -1234,7 +1187,7 @@ Documentation: https://jsee.org
   let description = argv.description || ''
 
   if (packageInput || (!identityResult && typeof inputs === 'string')) {
-    const resolvedPackageInput = packageInput || resolveJseePackageInput(inputs, cwd, { install: true })
+    const resolvedPackageInput = packageInput || resolveJseePackageInput(inputs, cwd)
     if (resolvedPackageInput) {
       packageInput = resolvedPackageInput
       cwd = packageInput.packageRoot
@@ -1242,6 +1195,8 @@ Documentation: https://jsee.org
       if (!description && packageInput.descriptionPath) {
         description = path.relative(cwd, packageInput.descriptionPath)
       }
+    } else if (looksLikeMissingPackageInput(inputs, cwd)) {
+      throw new Error(`Cannot resolve JSEE app package ${inputs}. Install it in this project or let npm provide both packages:\n  ${getPackageInputInstallHint(inputs)}`)
     }
   }
   let schema
@@ -1769,9 +1724,8 @@ module.exports.resolveFetchImport = resolveFetchImport
 module.exports.resolveRuntimeMode = resolveRuntimeMode
 module.exports.resolveOutputPath = resolveOutputPath
 module.exports.resolveJseePackageInput = resolveJseePackageInput
-module.exports.installJseePackage = installJseePackage
-module.exports.getJseeAppCacheRoot = getJseeAppCacheRoot
-module.exports.shouldAutoInstallPackageSpecifier = shouldAutoInstallPackageSpecifier
+module.exports.looksLikeMissingPackageInput = looksLikeMissingPackageInput
+module.exports.getPackageInputInstallHint = getPackageInputInstallHint
 module.exports.isPackageSpecifier = isPackageSpecifier
 module.exports.writeOutputFile = writeOutputFile
 module.exports.needsFullBundle = needsFullBundle

@@ -3,7 +3,7 @@ const os = require('os')
 const path = require('path')
 const vm = require('vm')
 const gen = require('../../src/cli')
-const { collectFetchBundleBlocks, resolveLocalImportFile, resolveFetchImport, resolveRuntimeMode, needsFullBundle, shouldBundleModelCode, resolveJseePackageInput, installJseePackage, shouldAutoInstallPackageSpecifier, isPackageSpecifier } = gen
+const { collectFetchBundleBlocks, resolveLocalImportFile, resolveFetchImport, resolveRuntimeMode, needsFullBundle, shouldBundleModelCode, resolveJseePackageInput, looksLikeMissingPackageInput, getPackageInputInstallHint, isPackageSpecifier } = gen
 
 function extractHiddenCode (html, src) {
   const marker = `data-src="${src}"`
@@ -227,10 +227,19 @@ describe('package input resolution', () => {
     expect(isPackageSpecifier('https://example.com/demo')).toBe(false)
   })
 
-  test('auto-install is only attempted for package-like inputs', () => {
-    expect(shouldAutoInstallPackageSpecifier('@statsim/remote-demo', tmpDir)).toBe(true)
-    expect(shouldAutoInstallPackageSpecifier('schema.json', tmpDir)).toBe(false)
-    expect(shouldAutoInstallPackageSpecifier('./demo', tmpDir)).toBe(false)
+  test('does not fetch missing packages itself', () => {
+    expect(looksLikeMissingPackageInput('@statsim/remote-demo', tmpDir)).toBe(true)
+    expect(looksLikeMissingPackageInput('schema.json', tmpDir)).toBe(false)
+    expect(looksLikeMissingPackageInput('./demo', tmpDir)).toBe(false)
+    expect(resolveJseePackageInput('@statsim/remote-demo', tmpDir)).toBeNull()
+  })
+
+  test('prints npm exec command for package inputs that are not installed', () => {
+    expect(getPackageInputInstallHint('@statsim/gen')).toBe('npx -p @jseeio/jsee -p @statsim/gen jsee @statsim/gen --serve')
+  })
+
+  test('errors with npm exec hint when a package input is missing', async () => {
+    await expect(gen(['--inputs', '@statsim/remote-demo'])).rejects.toThrow('npx -p @jseeio/jsee -p @statsim/remote-demo jsee @statsim/remote-demo --serve')
   })
 
   test('resolves installed package jsee metadata', () => {
@@ -240,72 +249,6 @@ describe('package input resolution', () => {
     expect(result.packageRoot).toBe(packageDir)
     expect(result.schemaPath).toBe(path.join(packageDir, 'schema.json'))
     expect(result.descriptionPath).toBe(path.join(packageDir, 'README.md'))
-  })
-
-  test('installs missing package inputs into the app cache', () => {
-    const cacheRoot = path.join(tmpDir, 'jsee-cache')
-    const remotePackageDir = path.join(cacheRoot, 'node_modules', '@statsim', 'remote-demo')
-    const execFileSync = jest.fn((command, args) => {
-      expect(command).toMatch(/^npm/)
-      expect(args).toEqual(expect.arrayContaining(['install', '--prefix', cacheRoot, '@statsim/remote-demo']))
-      fs.mkdirSync(remotePackageDir, { recursive: true })
-      fs.writeFileSync(path.join(remotePackageDir, 'package.json'), JSON.stringify({
-        name: '@statsim/remote-demo',
-        version: '1.0.0',
-        jsee: 'schema.json'
-      }, null, 2))
-      fs.writeFileSync(path.join(remotePackageDir, 'schema.json'), JSON.stringify({
-        model: { name: 'remoteDemo', url: 'model.js', worker: false },
-        inputs: [],
-        outputs: []
-      }, null, 2))
-    })
-
-    const result = resolveJseePackageInput('@statsim/remote-demo', tmpDir, {
-      install: true,
-      cacheRoot,
-      execFileSync,
-      stdio: 'pipe'
-    })
-
-    expect(execFileSync).toHaveBeenCalledTimes(1)
-    expect(result.packageName).toBe('@statsim/remote-demo')
-    expect(result.packageRoot).toBe(remotePackageDir)
-    expect(result.installedByJsee).toBe(true)
-  })
-
-  test('uses cached package inputs before invoking npm install', () => {
-    const cacheRoot = path.join(tmpDir, 'jsee-cache')
-    const cachedPackageDir = path.join(cacheRoot, 'node_modules', '@statsim', 'cached-demo')
-    fs.mkdirSync(cachedPackageDir, { recursive: true })
-    fs.writeFileSync(path.join(cachedPackageDir, 'package.json'), JSON.stringify({
-      name: '@statsim/cached-demo',
-      version: '1.0.0',
-      jsee: 'schema.json'
-    }, null, 2))
-    fs.writeFileSync(path.join(cachedPackageDir, 'schema.json'), JSON.stringify({
-      inputs: [],
-      outputs: []
-    }, null, 2))
-    const execFileSync = jest.fn(() => { throw new Error('unexpected install') })
-
-    const result = resolveJseePackageInput('@statsim/cached-demo', tmpDir, {
-      install: true,
-      cacheRoot,
-      execFileSync
-    })
-
-    expect(execFileSync).not.toHaveBeenCalled()
-    expect(result.packageRoot).toBe(cachedPackageDir)
-    expect(result.installedByJsee).toBe(true)
-  })
-
-  test('does not try to install schema-like inputs as packages', () => {
-    const execFileSync = jest.fn(() => { throw new Error('unexpected install') })
-
-    expect(installJseePackage('schema.json', tmpDir, { execFileSync })).toBeNull()
-    expect(resolveJseePackageInput('schema.json', tmpDir, { install: true, execFileSync })).toBeNull()
-    expect(execFileSync).not.toHaveBeenCalled()
   })
 
   test('builds package input from installed jsee package', async () => {

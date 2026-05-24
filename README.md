@@ -527,13 +527,14 @@ jsee init --html            # single index.html with CDN script
 
 #### `jsee <schema|package> [data...]`
 
-Start a dev server or generate a static HTML file from a local schema or a JSEE app package. Package inputs resolve the package `jsee` field, for example `{ "jsee": "schema.json" }`, and use the package directory as the app root. If the package is not already installed, JSEE installs it into its app cache before running it.
+Start a dev server or generate a static HTML file from a local schema or a JSEE app package. Package inputs resolve the package `jsee` field, for example `{ "jsee": "schema.json" }`, and use the package directory as the app root. If the app package is not installed locally, let npm provide both packages with `npx -p @jseeio/jsee -p <package> jsee <package> --serve`.
 
 ```bash
 jsee schema.json                       # dev server on port 3000
-jsee @statsim/gen --serve              # install/cache and serve a JSEE app package
+jsee @statsim/gen --serve              # serve a resolvable JSEE app package
 jsee schema.json -o app.html           # generate static HTML
 jsee @statsim/gen -o app.html --bundle # bundled HTML from package app
+npx -p @jseeio/jsee -p @statsim/gen jsee @statsim/gen --serve
 ```
 
 ### Options
