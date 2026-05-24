@@ -1,8 +1,25 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const vm = require('vm')
 const gen = require('../../src/cli')
-const { collectFetchBundleBlocks, resolveLocalImportFile, resolveFetchImport, resolveRuntimeMode, needsFullBundle } = gen
+const { collectFetchBundleBlocks, resolveLocalImportFile, resolveFetchImport, resolveRuntimeMode, needsFullBundle, shouldBundleModelCode } = gen
+
+function extractHiddenCode (html, src) {
+  const marker = `data-src="${src}"`
+  const markerIndex = html.indexOf(marker)
+  if (markerIndex === -1) throw new Error(`Missing hidden block for ${src}`)
+  const openEnd = html.indexOf('>', markerIndex)
+  const closeStart = html.indexOf('</script>', openEnd)
+  return html.slice(openEnd + 1, closeStart)
+}
+
+function runHiddenModel (code, name, input) {
+  const context = { console }
+  context.globalThis = context
+  vm.runInNewContext(code, context)
+  return context[name](input)
+}
 
 describe('collectFetchBundleBlocks', () => {
   test('collects model, view and render blocks', () => {
@@ -229,6 +246,87 @@ describe('needsFullBundle', () => {
 
   test('returns false for gallery and highlight (zero-cost)', () => {
     expect(needsFullBundle({ outputs: [{ type: 'gallery' }, { type: 'highlight' }] })).toBe(false)
+  })
+})
+
+describe('model dependency bundling', () => {
+  let originalCwd
+  let tmpDir
+
+  beforeEach(() => {
+    originalCwd = process.cwd()
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-bundle-'))
+    process.chdir(tmpDir)
+  })
+
+  afterEach(() => {
+    process.chdir(originalCwd)
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  test('detects module-shaped model files', () => {
+    expect(shouldBundleModelCode('function gen () { return 1 }')).toBe(false)
+    expect(shouldBundleModelCode('const helper = require("./helper")')).toBe(true)
+    expect(shouldBundleModelCode('module.exports = function gen () {}')).toBe(true)
+    expect(shouldBundleModelCode('export function gen () {}')).toBe(true)
+    expect(shouldBundleModelCode('import helper from "./helper"')).toBe(true)
+  })
+
+  test('bundles require dependencies while preserving the JSEE model name', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'helper.js'), 'module.exports = function scale (x) { return x * 2 }\n')
+    fs.writeFileSync(path.join(tmpDir, 'model.js'), `const scale = require('./helper')
+function gen (input) {
+  return { y: scale(input.x) }
+}
+`)
+    fs.writeFileSync(path.join(tmpDir, 'schema.json'), JSON.stringify({
+      model: { name: 'gen', url: 'model.js', worker: false },
+      inputs: [{ name: 'x', type: 'int', default: 3 }],
+      outputs: [{ name: 'y', type: 'number' }]
+    }, null, 2))
+
+    const html = await gen(['schema.json', '-o', 'app.html', '--bundle'], true)
+    const code = extractHiddenCode(html, 'model.js')
+
+    expect(code).toContain('__jsee_bundle_gen')
+    expect(code).not.toContain("const scale = require('./helper')")
+    expect(runHiddenModel(code, 'gen', { x: 4 })).toEqual({ y: 8 })
+  })
+
+  test('supports legacy fetch alias', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'model.js'), `function gen (input) {
+  return { y: input.x + 1 }
+}
+`)
+    fs.writeFileSync(path.join(tmpDir, 'schema.json'), JSON.stringify({
+      model: { name: 'gen', url: 'model.js', worker: false },
+      inputs: [{ name: 'x', type: 'int', default: 3 }],
+      outputs: [{ name: 'y', type: 'number' }]
+    }, null, 2))
+
+    const html = await gen(['schema.json', '-o', 'app.html', '--fetch'], true)
+
+    expect(html).toContain('data-src="model.js"')
+  })
+
+  test('leaves plain browser-global model files unbundled', async () => {
+    const source = `function gen (input) {
+  return { y: input.x + 1 }
+}
+`
+    fs.writeFileSync(path.join(tmpDir, 'model.js'), source)
+    fs.writeFileSync(path.join(tmpDir, 'schema.json'), JSON.stringify({
+      model: { name: 'gen', url: 'model.js', worker: false },
+      inputs: [{ name: 'x', type: 'int', default: 3 }],
+      outputs: [{ name: 'y', type: 'number' }]
+    }, null, 2))
+
+    const html = await gen(['schema.json', '-o', 'app.html', '-f'], true)
+    const code = extractHiddenCode(html, 'model.js')
+
+    expect(code).toBe(source)
+    expect(code).not.toContain('__jsee_bundle_gen')
+    expect(runHiddenModel(code, 'gen', { x: 4 })).toEqual({ y: 5 })
   })
 })
 

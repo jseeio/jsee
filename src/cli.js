@@ -259,6 +259,114 @@ function resolveOutputPath (cwd, outputPath) {
   return path.join(cwd, outputPath)
 }
 
+let optionalEsbuild
+function getOptionalEsbuild () {
+  if (optionalEsbuild) return optionalEsbuild
+  try {
+    optionalEsbuild = require('esbuild')
+    return optionalEsbuild
+  } catch (error) {
+    throw new Error('Bundling model dependencies requires optional dependency esbuild. Run `npm install esbuild` or use schema imports/prebundled browser code.')
+  }
+}
+
+function isJsIdentifier (value) {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(value)
+}
+
+function toJsIdentifier (value, fallback='model') {
+  const raw = value ? String(value) : fallback
+  const clean = raw.replace(/[^A-Za-z0-9_$]/g, '_')
+  if (!clean) return fallback
+  return /^[A-Za-z_$]/.test(clean) ? clean : '_' + clean
+}
+
+function getModelExportName (model) {
+  if (model.name) return model.name
+  if (model.url) return path.basename(model.url).replace(/\.[^.]+$/, '')
+  return 'model'
+}
+
+function hasCommonJsExport (code) {
+  return /\bmodule\s*\.\s*exports\b|\bexports\s*\.\s*[A-Za-z_$]/.test(code)
+}
+
+function hasEsModuleExport (code) {
+  return /^\s*export\s+(?:default|function|class|const|let|var|\{)/m.test(code)
+}
+
+function hasStaticImport (code) {
+  return /^\s*import\s+(?!\()/m.test(code)
+}
+
+function hasRequireCall (code) {
+  return /\brequire\s*\(/.test(code)
+}
+
+function shouldBundleModelCode (code) {
+  return hasRequireCall(code) || hasStaticImport(code) || hasCommonJsExport(code) || hasEsModuleExport(code)
+}
+
+function buildBundledModelExposeCode (bundleGlobalName, modelName) {
+  return `
+;(function () {
+  var mod = ${bundleGlobalName}
+  var target = mod
+  if (mod && (typeof mod === 'object')) {
+    if (typeof mod[${JSON.stringify(modelName)}] !== 'undefined') {
+      target = mod[${JSON.stringify(modelName)}]
+    } else if (typeof mod.default !== 'undefined') {
+      target = mod.default
+    }
+  }
+  globalThis[${JSON.stringify(modelName)}] = target
+})()
+`
+}
+
+async function bundleModelCode (model, modelPath, code) {
+  if (!shouldBundleModelCode(code)) return code
+
+  const esbuild = getOptionalEsbuild()
+  const modelName = getModelExportName(model)
+  const bundleGlobalName = `__jsee_bundle_${toJsIdentifier(modelName)}`
+  const needsExportShim = modelName &&
+    !hasCommonJsExport(code) &&
+    !hasEsModuleExport(code) &&
+    (hasRequireCall(code) || hasStaticImport(code))
+
+  if (needsExportShim && !isJsIdentifier(modelName)) {
+    throw new Error(`Bundling ${model.url || modelPath} requires a valid JavaScript model name or an explicit module export.`)
+  }
+
+  const options = {
+    bundle: true,
+    write: false,
+    platform: 'browser',
+    format: 'iife',
+    globalName: bundleGlobalName,
+    logLevel: 'silent'
+  }
+
+  if (needsExportShim) {
+    options.stdin = {
+      contents: `${code}\nexport default ${modelName}\n`,
+      resolveDir: path.dirname(modelPath),
+      sourcefile: path.basename(modelPath),
+      loader: 'js'
+    }
+  } else {
+    options.entryPoints = [modelPath]
+  }
+
+  try {
+    const result = await esbuild.build(options)
+    return result.outputFiles[0].text + buildBundledModelExposeCode(bundleGlobalName, modelName)
+  } catch (error) {
+    throw new Error(`Failed to bundle ${model.url || modelPath}: ${error.message}`)
+  }
+}
+
 const FULL_BUNDLE_TYPES = ['chart', '3d', 'map']
 
 function needsFullBundle (schema) {
@@ -751,14 +859,14 @@ async function gen (pargv, returnHtml=false) {
     description: 'd',
     port: 'p',
     version: 'v',
-    fetch: 'f',
+    fetch: ['f', 'bundle', 'b'],
     execute: 'e',
     cdn: 'c',
     runtime: 'r',
   }
   const argvDefault = {
     execute: 'auto', // execute the model code on the server (auto = server-side when serving local .js models)
-    fetch: false, // fetch the JSEE runtime from the CDN or local server
+    fetch: false, // bundle runtime, local code and imports into generated output
     inputs: 'schema.json', // default input is schema.json in the current working directory
     port: 3000, // default port for the server
     version: 'latest', // default version of JSEE runtime to use
@@ -920,7 +1028,8 @@ Options:
   -d, --description <file>  Markdown description file to include
   -p, --port <number>       Dev server port (default: 3000)
   -v, --version <version>   JSEE runtime version (default: latest)
-  -f, --fetch               Fetch and bundle runtime + dependencies into output
+  -b, --bundle             Bundle runtime + dependencies into output
+  -f, --fetch               Alias for --bundle
   -e, --execute             Execute model server-side (auto-enabled when serving local .js models)
       --client              Force client-side execution (disable auto server-side)
   -c, --cdn <url|bool>      Rewrite model URLs for CDN deployment
@@ -942,7 +1051,7 @@ Examples:
   jsee schema.json --a=100 --b=200  Pass named data inputs
   jsee schema.json data.csv         Pass a file path as input
   jsee schema.json -o app.html      Generate static HTML file
-  jsee schema.json -o app.html -f   Generate self-contained HTML with bundled runtime
+  jsee schema.json -o app.html --bundle  Generate self-contained HTML with bundled runtime
   jsee -p 8080                      Start dev server on port 8080
   jsee report.pdf                   Serve a PDF file (auto-detected viewer)
   jsee data/                        Serve a folder (file browser with preview)
@@ -1083,7 +1192,7 @@ Documentation: https://jsee.org
   }
   log('Argv:', argv)
 
-  // Initially in argv.fetch branch
+  // Bundle/offline generation
   // Check if schema has model, convert to array if needed
   if (!schema.model) {
     // console.error('No model found in schema')
@@ -1194,8 +1303,9 @@ Documentation: https://jsee.org
   // Generate jsee code
   let jseeHtml = ''
   let hiddenElementHtml = ''
-  const runtimeMode = resolveRuntimeMode(argv.runtime, argv.fetch, hasOutputs)
-  if (argv.fetch) {
+  const shouldBundle = Boolean(argv.fetch)
+  const runtimeMode = resolveRuntimeMode(argv.runtime, shouldBundle, hasOutputs)
+  if (shouldBundle) {
     // Fetch jsee code from the CDN or local server
     const jseeCode = await loadRuntimeCode(argv.version, schema)
     jseeHtml = `<script>${jseeCode}</script>`
@@ -1209,7 +1319,10 @@ Documentation: https://jsee.org
       }
       if (m.url) {
         // Fetch model from the local file system (remote URLs not yet supported here)
-        const modelCode = fs.readFileSync(path.join(cwd, m.url), 'utf8')
+        const modelPath = path.join(cwd, m.url)
+        if (!m.name) m.name = getModelExportName(m)
+        const modelSource = fs.readFileSync(modelPath, 'utf8')
+        const modelCode = await bundleModelCode(m, modelPath, modelSource)
         hiddenElementHtml += `<script type="text/plain" style="display: none;" data-src="${m.url}">${modelCode}</script>`
       }
       const imports = toArray(m.imports)
@@ -1501,3 +1614,5 @@ module.exports.resolveFetchImport = resolveFetchImport
 module.exports.resolveRuntimeMode = resolveRuntimeMode
 module.exports.resolveOutputPath = resolveOutputPath
 module.exports.needsFullBundle = needsFullBundle
+module.exports.shouldBundleModelCode = shouldBundleModelCode
+module.exports.bundleModelCode = bundleModelCode

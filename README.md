@@ -117,7 +117,7 @@ Generate a standalone HTML file:
 
 ```bash
 npx @jseeio/jsee schema.json -o app.html
-npx @jseeio/jsee schema.json -o app.html --fetch   # inline runtime + imports for offline use
+npx @jseeio/jsee schema.json -o app.html --bundle  # inline runtime + imports for offline use
 ```
 
 ## When JSEE Fits
@@ -152,8 +152,8 @@ JSEE turns a JSON schema into a working web app. Instead of writing HTML, event 
 
 1. **Schema** is loaded from a URL, DOM element, function, or JS object
 2. **Validation** checks schema structure and logs warnings for issues
-3. **Imports** are resolved — JS scripts are loaded in sequence, CSS files are injected as `<link>` tags. In the browser, relative paths resolve against the page URL. In `--fetch` mode, the CLI checks the local filesystem first
-4. **Models** initialize — code is loaded from `url`, `code`, or a hidden DOM cache (`data-src` elements used by `--fetch` bundles and `download()`)
+3. **Imports** are resolved — JS scripts are loaded in sequence, CSS files are injected as `<link>` tags. In the browser, relative paths resolve against the page URL. In `--bundle` mode, the CLI checks the local filesystem first
+4. **Models** initialize — code is loaded from `url`, `code`, or a hidden DOM cache (`data-src` elements used by `--bundle` output and `download()`)
 5. **GUI** is created — a Vue 3 app with reactive inputs, output cards, run/stop buttons and progress bar
 6. **URL params** are applied — query string values (`?name=value`) set matching inputs, including `alias` matches. File URL params auto-load on init
 
@@ -167,7 +167,7 @@ JSEE turns a JSON schema into a working web app. Instead of writing HTML, event 
 
 ### Offline & bundling
 
-- **`jsee --fetch`** bundles everything into a single HTML file: the JSEE runtime, model/view/render code, and all imports are stored in hidden `<script data-src="...">` elements. The result works with no network
+- **`jsee --bundle`** bundles everything into a single HTML file: the JSEE runtime, model/view/render code, and all imports are stored in hidden `<script data-src="...">` elements. The result works with no network
 - **`jsee.download(title)`** does the same at runtime — exports the current app as a self-contained HTML file
 
 ## Schema blocks
@@ -182,7 +182,7 @@ Extra blocks can be provided for further customization:
 
 - `render` / `view` — visualization part (optional). Defines custom rendering code
 - `design` — overall appearance (optional). Defines how the app looks overwriting defaults
-- `imports` — a list of scripts and stylesheets to load before the model is initialized. CSS files (`.css` extension) are injected as `<link rel="stylesheet">` in `<head>`, JS files are loaded as scripts. In the browser, relative paths (e.g. `dist/core.js`, `./lib.js`) resolve against the page URL. With `--fetch`, the CLI resolves imports by checking the local filesystem first — if a file exists on disk it is bundled; otherwise it is fetched from CDN
+- `imports` — a list of scripts and stylesheets to load before the model is initialized. CSS files (`.css` extension) are injected as `<link rel="stylesheet">` in `<head>`, JS files are loaded as scripts. In the browser, relative paths (e.g. `dist/core.js`, `./lib.js`) resolve against the page URL. With `--bundle`, the CLI resolves imports by checking the local filesystem first — if a file exists on disk it is bundled; otherwise it is fetched from CDN
 
   ```json
   "imports": [
@@ -369,7 +369,24 @@ Use `columns` on inputs/outputs for dashboard-style layouts:
 - `outputs` — Outputs definition. Outputs also support `alias` (string) for matching model result keys by alternative names. Per-output `columns` (number, 1-12) sets grid column span, same as inputs
   - `name`* — Name of the output
   - `type`* — Type. Possible types:
-    - `file` — File output (not displayer, but downloaded)
+    - `file` — Download-only file output. With a static schema filename, return the file body under the output name:
+      ```json
+      { "name": "report", "type": "file", "filename": "report.csv" }
+      ```
+      ```javascript
+      return { report: "col1,col2\n1,2\n" }
+      ```
+      For dynamic filenames, formats, or MIME types, return a descriptor object matching the output name:
+      ```javascript
+      return {
+        file: {
+          filename: "dataset.csv",
+          content: csvText,
+          mime: "text/csv"
+        }
+      }
+      ```
+      Descriptor fields: `filename` or `name`; `content`, `value`, `data`, or `url`; optional `mime` or `contentType`.
     - `object` — JavaScript Object
     - `html` or `svg` — SVG element
     - `code` — Code block
@@ -515,7 +532,7 @@ Start a dev server or generate a static HTML file from a schema.
 ```bash
 jsee schema.json                    # dev server on port 3000
 jsee schema.json -o app.html        # generate static HTML
-jsee schema.json -o app.html -f     # self-contained HTML with bundled runtime
+jsee schema.json -o app.html --bundle  # self-contained HTML with bundled runtime
 ```
 
 ### Options
@@ -527,7 +544,8 @@ jsee schema.json -o app.html -f     # self-contained HTML with bundled runtime
 | `-d, --description <file>` | Markdown file to include as app description |
 | `-p, --port <number>` | Dev server port (default: `3000`) |
 | `-v, --version <version>` | JSEE runtime version (`latest`, `dev`, or semver) |
-| `-f, --fetch` | Bundle runtime + all deps into a single offline HTML |
+| `-b, --bundle` | Bundle runtime + all deps into a single offline HTML |
+| `-f, --fetch` | Backward-compatible alias for `--bundle` |
 | `-e, --execute` | Run models server-side (auto-enabled when serving local .js models) |
 | `--client` | Force client-side execution (disable auto server-side) |
 | `-c, --cdn <url\|bool>` | Rewrite model URLs for CDN deployment |
@@ -535,14 +553,16 @@ jsee schema.json -o app.html -f     # self-contained HTML with bundled runtime
 | `--verbose` | Enable verbose logging |
 | `--help, -h` | Show usage info |
 
-#### `--fetch`
+#### `--bundle`
 
 Bundles everything into a single offline HTML: the JSEE runtime, model/view/render code, and all imports are stored in hidden `<script data-src="...">` elements. Local files are detected by checking the filesystem (so bare paths like `dist/core.js` work alongside `./relative.js`); anything not found locally is fetched from CDN.
+
+Model dependencies and schema `imports` are separate mechanisms: local model files that use `require()` or static `import`/`export` are bundled with optional `esbuild` during `--bundle`, so npm dependencies can become part of the generated HTML; schema `imports` remain explicit browser assets loaded before the model, such as CDN globals, local helper scripts, CSS files, Plot/Three/Leaflet, or other side-effect libraries.
 
 #### `--runtime`
 
 Select the runtime source for generated HTML:
-- `auto` (default): `inline` when `--fetch`, otherwise `cdn` for file output and `local` for dev server
+- `auto` (default): `inline` when `--bundle`, otherwise `cdn` for file output and `local` for dev server
 - `local`: `http://localhost:<port>/dist/...`
 - `cdn`: jsdelivr CDN URL
 - `inline`: embed runtime code directly in HTML
