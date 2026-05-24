@@ -1,51 +1,74 @@
-# JSEE. Computational Documents for the Web
+# JSEE
 
-Turn code into a shareable, offline-capable web app. Describe inputs/outputs once (JSON), run JS/Python in a Worker or via API, and ship as a single HTML file.
+Portable, schema-driven web apps for local computation.
 
-Minimal example:
+JSEE turns a model function plus a small JSON schema into a reactive browser app, CLI-served tool, offline HTML bundle and API surface. It is meant for computations that should be easy to share, inspect, rerun and keep on the user's machine.
+
+Use JSEE when you want:
+
+- a self-contained UI around a JavaScript, Python, API, or WASM computation
+- typed inputs, output rendering, file/folder handling, progress, and cancellation without writing app plumbing
+- browser-first execution with optional Worker isolation and offline bundling
+- the same computation exposed to humans through a UI and to tools through HTTP/API routes
+
+Smallest browser example:
+
 ```html
-<html>
-  <div id="jsee-container">
-  <script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@latest/dist/jsee.core.js"></script>
-  <script>
-    function mul (a, b) {
-      return a * b
-    }
-    new JSEE(mul, '#jsee-container')
-  </script>
-</html>
+<div id="jsee-container"></div>
+<script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@latest/dist/jsee.core.js"></script>
+<script>
+  function multiply (a, b) {
+    return a * b
+  }
+  new JSEE(multiply, '#jsee-container')
+</script>
 ```
 
 ↳ [Result](https://jsee.org/test/minimal1.html)
 
 ## Installation
 
-**Browser (CDN):**
+**Browser CDN:**
+
 ```html
 <script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@latest/dist/jsee.core.js"></script>
 ```
 
-**npm (for CLI or Node.js projects):**
+Pin a version for production, for example `@jseeio/jsee@0.8.0`.
+
+**npm CLI/dev server:**
+
 ```bash
 npm install @jseeio/jsee
 ```
 
-**CLI (generate standalone apps):**
+Run from npm without installing globally:
+
 ```bash
 npx @jseeio/jsee schema.json -o app.html
 ```
 
-Run `jsee --help` for all CLI options.
+Run `npx @jseeio/jsee --help` for all CLI options.
 
-**Full bundle** (includes Observable Plot, Three.js, and Leaflet):
+## Runtime Bundles
+
+| Bundle | Use when | Includes |
+|---|---|---|
+| `dist/jsee.core.js` | Most apps, direct `<script>` tags, generated HTML | runtime, inputs, core outputs, native PDF viewer |
+| `dist/jsee.full.js` | Apps that need `chart`, `3d`, or `map` without extra imports | core + Observable Plot + Three.js + Leaflet |
+| `@jseeio/jsee` package entry | CLI/server-side tooling | Node CLI module |
+
+Full bundle CDN:
+
 ```html
 <script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@latest/dist/jsee.full.js"></script>
 ```
-The full bundle adds `chart`, `3d`, and `map` output types out of the box. The core bundle stays lightweight (~97KB gzip) — you can still use these output types by loading the libraries manually via schema `imports`. The `pdf` output uses the browser's native PDF viewer and is available in the core bundle. The CLI and Python server auto-select the right bundle based on schema output types.
+
+The core bundle can still render `chart`, `3d`, and `map` if the app loads the required library through schema `imports`. The `pdf` output uses the browser's native PDF viewer and is available in the core bundle. The CLI and Python server choose the required runtime bundle from the schema output types.
 
 ## Quick start
 
-Scaffold a new project with `jsee init`:
+Scaffold a project:
 
 ```bash
 npx @jseeio/jsee init            # minimal: schema.json + model.js + README.md
@@ -59,15 +82,47 @@ jsee init                         # schema.json + model.py + README.md
 jsee init chat                    # chat template
 ```
 
-Then start the dev server:
+Or create the two files yourself:
+
+```json
+{
+  "model": { "url": "model.js", "worker": true },
+  "inputs": [
+    { "name": "n", "type": "slider", "min": 10, "max": 1000, "default": 100 }
+  ],
+  "outputs": [
+    { "name": "summary", "type": "number", "label": "Rows" },
+    { "name": "rows", "type": "table" }
+  ]
+}
+```
+
+```javascript
+function model ({ n }, ctx) {
+  ctx.progress(10)
+  const rows = Array.from({ length: n }, (_, i) => ({ i, y: Math.sin(i / 10) }))
+  ctx.progress(100)
+  return { summary: n, rows }
+}
+```
+
+Start the dev server:
+
 ```bash
 npx @jseeio/jsee schema.json     # Node (auto server-side execution)
 jsee schema.json                  # Python
 ```
 
-## Inputs and outputs
+Generate a standalone HTML file:
 
-JSEE works best with functional tasks and one-way flow from inputs to outputs (i.e., inputs → processing → outputs). You can also extend it to more complex scenarios, like inputs → preprocessing → updated inputs → processing → outputs or inputs → processing → outputs → custom renderer. Even though many computational tasks have a functional form, some problems require more complex interactions between a user interface and code. For such cases, JSEE is probably too constrained. That makes it not as universal as R's [shiny](https://shiny.rstudio.com/) or Python's [streamlit](https://streamlit.io/).
+```bash
+npx @jseeio/jsee schema.json -o app.html
+npx @jseeio/jsee schema.json -o app.html --fetch   # inline runtime + imports for offline use
+```
+
+## When JSEE Fits
+
+JSEE works best for computations with a clear flow from inputs to processing to outputs. Pipelines, input updates, streaming files, custom renderers, and chat-style interfaces are supported, but JSEE is intentionally not a general application framework. If the UI needs deep bidirectional state, many custom screens, routing, or complex collaborative editing, use a normal frontend app and call JSEE-style computation modules from it.
 
 ## How it works
 
@@ -106,8 +161,8 @@ JSEE turns a JSON schema into a working web app. Instead of writing HTML, event 
 
 - **Run**: user clicks Run (or autorun/reactive triggers it). Inputs are collected and sent to the model
 - **Pipeline**: when `model` is an array, models execute sequentially — each receives the merged output of the previous one. Return `{ stop: true }` to halt early
-- **Worker context**: worker models receive a runtime context (`ctx`) with `ctx.log()`, `ctx.progress(value)` (0–100 or `null` for indeterminate), and `ctx.isCancelled()` for cooperative cancellation
-- **Cancellation**: `jsee.cancelCurrentRun()` or the Stop button sets a flag that workers and stream readers check
+- **Runtime context**: object-container models receive a second argument (`ctx`) with `ctx.log()`, `ctx.progress(value)` (0–100 or `null` for indeterminate), and `ctx.isCancelled()` for cooperative cancellation
+- **Cancellation**: `jsee.cancelCurrentRun()` or the Stop button rejects the active run, signals workers, and marks stale results so they are ignored. Worker-backed models can be terminated. Main-thread models should check `ctx.isCancelled()` inside long async loops because JavaScript cannot preempt synchronous CPU-bound code on the main thread
 - **Output**: results flow to the output cards — JSON trees, HTML, SVG, code blocks, or custom render functions
 
 ### Offline & bundling
@@ -253,8 +308,8 @@ Use `columns` on inputs/outputs for dashboard-style layouts:
   - `container` (string) — How input values are passed to the function/method:
     - `object` (default) — Pass inputs wrapped in an object, i.e. `{'x': 1, 'y': 2}`
     - `args` — Pass inputs as separate arguments
+    - In `object` mode, JavaScript models receive the runtime context as a second argument: `function model(inputs, ctx) { ... }`
   - `worker` (boolean) — If `true`, JSEE initializes a Web Worker to run the script
-    - For `container: 'object'`, model functions receive a second runtime context argument (`ctx`)
     - `ctx.log(...args)` — Write runtime logs
     - `ctx.progress(value)` — Report progress (`0..100` or `null` for indeterminate)
     - `ctx.isCancelled()` — Check cooperative cancellation state (useful in long loops/streams)
@@ -373,7 +428,17 @@ Use `columns` on inputs/outputs for dashboard-style layouts:
   ```json
   "inputs": [{ "name": "data", "type": "string", "arrayBuffer": true, "dtype": "float32" }]
   ```
-- Runtime cancellation: call `jsee.cancelCurrentRun()` on the JSEE instance to request stop of the active run. Long-running models should check `ctx.isCancelled()` and return early
+- Runtime cancellation: call `jsee.cancelCurrentRun()` on the JSEE instance to request stop of the active run. Long-running models should check `ctx.isCancelled()` and return early:
+  ```javascript
+  async function model (inputs, ctx) {
+    for (let i = 0; i < inputs.steps; i++) {
+      if (ctx.isCancelled()) throw new Error('Cancelled')
+      await doStep(i)
+      ctx.progress(Math.round(100 * (i + 1) / inputs.steps))
+    }
+    return { done: true }
+  }
+  ```
 - Schema validation — JSEE validates schema structure during initialization and logs warnings for non-critical issues (e.g. unknown input types, malformed aliases)
 - `jsee.download(title)` — Downloads a self-contained HTML file that works offline. All external scripts are inlined and the schema/model/imports are cached. `title` defaults to `'output'`
 - `page` (CLI only) — Page metadata for generated HTML:
@@ -414,7 +479,7 @@ After creating an instance with `new JSEE({schema, container})`, these methods a
 |---|---|
 | `jsee.run(caller)` | Execute the model pipeline. `caller` can be `'run'`, `'autorun'`, `'reactive'`, or a custom button name |
 | `jsee.output(result)` | Process and render results to output cards |
-| `jsee.cancelCurrentRun()` | Stop the active run. Sets cancellation flag and signals workers |
+| `jsee.cancelCurrentRun()` | Stop the active run. Rejects the current run promise, sets cancellation state, and signals/terminates workers |
 | `jsee.isCancelled()` | Returns `true` if cancellation was requested |
 | `jsee.progress(value)` | Set progress bar: `0`-`100` for determinate, `null` for indeterminate |
 | `jsee.download(title)` | Export current app as a self-contained offline HTML file |
@@ -422,18 +487,18 @@ After creating an instance with `new JSEE({schema, container})`, these methods a
 | `jsee.notify(text)` | Show a success toast notification |
 | `jsee.log(...args)` | Log to browser console and optional `#log` DOM element |
 
-JSEE is a reactive branch of [StatSim](https://statsim.com)'s [Port](https://github.com/statsim/port). It's still work in progress. Expect API changes.
+JSEE is part of the [StatSim](https://statsim.com) ecosystem. The schema/runtime contract is the public surface; lower-level packaging and renderer internals may continue to evolve.
 
-# CLI — Node.js
+## CLI — Node.js
 
 ```
 jsee [schema.json] [data...] [options]
 jsee init [template] [--html]
 ```
 
-## Commands
+### Commands
 
-### `jsee init [template]`
+#### `jsee init [template]`
 
 Scaffold a new project. Templates: `minimal` (default), `chat`.
 
@@ -443,7 +508,7 @@ jsee init chat              # chat template
 jsee init --html            # single index.html with CDN script
 ```
 
-### `jsee <schema> [data...]`
+#### `jsee <schema> [data...]`
 
 Start a dev server or generate a static HTML file from a schema.
 
@@ -453,7 +518,7 @@ jsee schema.json -o app.html        # generate static HTML
 jsee schema.json -o app.html -f     # self-contained HTML with bundled runtime
 ```
 
-## Options
+### Options
 
 | Flag | Description |
 |---|---|
@@ -470,11 +535,11 @@ jsee schema.json -o app.html -f     # self-contained HTML with bundled runtime
 | `--verbose` | Enable verbose logging |
 | `--help, -h` | Show usage info |
 
-### `--fetch`
+#### `--fetch`
 
 Bundles everything into a single offline HTML: the JSEE runtime, model/view/render code, and all imports are stored in hidden `<script data-src="...">` elements. Local files are detected by checking the filesystem (so bare paths like `dist/core.js` work alongside `./relative.js`); anything not found locally is fetched from CDN.
 
-### `--runtime`
+#### `--runtime`
 
 Select the runtime source for generated HTML:
 - `auto` (default): `inline` when `--fetch`, otherwise `cdn` for file output and `local` for dev server
@@ -483,7 +548,7 @@ Select the runtime source for generated HTML:
 - `inline`: embed runtime code directly in HTML
 - Any other value is used as a custom `<script src="...">` path/URL
 
-## Data inputs
+### Data inputs
 
 Positional arguments after the schema file and named `--key=value` arguments are mapped to schema inputs. Values are auto-detected:
 
@@ -510,7 +575,7 @@ jsee schema.json data.csv
 jsee schema.json data.csv --format=json
 ```
 
-## Server-side execution
+### Server-side execution
 
 When serving (no `-o` flag), JSEE automatically enables server-side execution if all models point to local `.js` files. Use `--client` to force browser execution.
 
@@ -520,7 +585,7 @@ jsee schema.json --client     # force browser execution
 jsee schema.json -e -p 3000   # explicit server-side on port 3000
 ```
 
-## File and folder serving
+### File and folder serving
 
 JSEE can serve individual files or entire folders without a schema or model:
 
@@ -535,20 +600,20 @@ For single files, JSEE auto-detects the output type from the file extension (ima
 
 Output type auto-detection also works for model results — if a model returns a string ending in `.png`, it renders as an image automatically.
 
-## Serve bar
+### Serve bar
 
 When serving, a top bar appears with the server address, a Save HTML button, and (when server-side execution is active) a Browser/Server toggle to switch execution mode. Input values are preserved across the switch via localStorage. The serve bar is not included in generated output files or saved bundles.
 
-# CLI — Python
+## CLI — Python
 
 ```
 jsee <target> [function] [data...] [options]
 jsee init [template]
 ```
 
-## Commands
+### Commands
 
-### `jsee init [template]`
+#### `jsee init [template]`
 
 Scaffold a new project. Templates: `minimal` (default), `chat`. Generates `schema.json` + `model.py` + `README.md`.
 
@@ -557,7 +622,7 @@ jsee init                   # minimal template
 jsee init chat              # chat template
 ```
 
-### `jsee <file.py> <function> [data...]`
+#### `jsee <file.py> <function> [data...]`
 
 Serve a Python function as a web app with auto-generated GUI and REST API.
 
@@ -566,7 +631,7 @@ jsee example.py greet                  # serve function
 jsee example.py greet --port=8080      # custom port
 ```
 
-### `jsee <schema.json>`
+#### `jsee <schema.json>`
 
 Serve from a pre-built schema file.
 
@@ -574,14 +639,14 @@ Serve from a pre-built schema file.
 jsee schema.json
 ```
 
-## Options
+### Options
 
 | Flag | Description |
 |---|---|
 | `--host <addr>` | Host to bind to (default: `0.0.0.0`) |
 | `--port <number>` | Port to listen on (default: `5050`) |
 
-## Data inputs
+### Data inputs
 
 Same as Node.js — positional args after the function name and `--key=value` args are mapped to function parameters. Values are auto-detected (numbers, JSON, file paths, strings). Inputs set from the CLI are locked in the GUI.
 
@@ -591,7 +656,7 @@ jsee example.py greet --name=Alice     # named data
 jsee schema.json 42 hello              # positional data with schema
 ```
 
-## API endpoints
+### API endpoints
 
 Every server (both Node.js with `--execute` and Python) exposes these endpoints:
 
@@ -619,7 +684,7 @@ curl -X POST http://localhost:3000/modelName \
 curl http://localhost:3000/api/openapi.json
 ```
 
-### Return value serialization
+#### Return value serialization
 
 Both servers normalize model return values consistently:
 
@@ -632,7 +697,7 @@ Both servers normalize model return values consistently:
 | PIL Image (Python) | `{"result": "data:image/png;base64,..."}` |
 | list[dict] (Python) | `{"result": {"columns": [...], "rows": [...]}}` |
 
-# Python
+## Python
 
 JSEE also ships a Python package (`py/`) that turns Python functions into web apps with the same GUI and API. Zero dependencies beyond Python stdlib.
 
@@ -662,7 +727,7 @@ jsee.serve(calculator, port=5050)
 
 Python type hints are auto-mapped to GUI widgets: `Literal` → dropdown, `Annotated[float, jsee.Slider()]` → slider, `bool` → checkbox, `Enum` → dropdown. See [`py/README.md`](py/README.md) for full Python documentation.
 
-## WSGI deployment
+### WSGI deployment
 
 For production deployment, use `create_app()` to get a standard WSGI application:
 
@@ -683,6 +748,6 @@ gunicorn app:app
 
 `create_app()` accepts the same arguments as `serve()` — functions, dicts, or schema.json paths. Note: SSE streaming is not supported in basic WSGI.
 
-# Changelog
+## Changelog
 
 See `CHANGELOG.md`.
