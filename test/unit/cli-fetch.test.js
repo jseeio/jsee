@@ -361,6 +361,33 @@ describe('output writes', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true })
     }
   })
+
+  test('creates parent directories for output paths', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-cli-nested-output-'))
+    const schemaPath = path.join(tmpDir, 'schema.json')
+    const nestedOutputPath = path.join(tmpDir, 'dist', 'nested', 'index.html')
+
+    fs.writeFileSync(schemaPath, JSON.stringify({
+      model: [
+        {
+          name: 'demo',
+          type: 'function',
+          code: 'function demo () { return 1 }'
+        }
+      ],
+      inputs: [],
+      outputs: []
+    }, null, 2))
+
+    try {
+      await gen(['--inputs', schemaPath, '--outputs', nestedOutputPath])
+
+      expect(fs.existsSync(nestedOutputPath)).toBe(true)
+      expect(fs.readFileSync(nestedOutputPath, 'utf8')).toContain('<!DOCTYPE html>')
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('init scaffolds', () => {

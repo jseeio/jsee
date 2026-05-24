@@ -259,6 +259,12 @@ function resolveOutputPath (cwd, outputPath) {
   return path.join(cwd, outputPath)
 }
 
+function writeOutputFile (cwd, outputPath, content) {
+  const resolved = resolveOutputPath(cwd, outputPath)
+  fs.mkdirSync(path.dirname(resolved), { recursive: true })
+  fs.writeFileSync(resolved, content)
+}
+
 let optionalEsbuild
 function getOptionalEsbuild () {
   if (optionalEsbuild) return optionalEsbuild
@@ -1499,11 +1505,11 @@ Documentation: https://jsee.org
       if (o === 'stdout') {
         log(html)
       } else if (o.includes('.html')) {
-        fs.writeFileSync(resolveOutputPath(cwd, o), html)
+        writeOutputFile(cwd, o, html)
       } else if (o.includes('.json')) {
-        fs.writeFileSync(resolveOutputPath(cwd, o), JSON.stringify(schema, null, 2))
+        writeOutputFile(cwd, o, JSON.stringify(schema, null, 2))
       } else if (o.includes('.md')) {
-        fs.writeFileSync(resolveOutputPath(cwd, o), genMarkdownFromSchema(schema))
+        writeOutputFile(cwd, o, genMarkdownFromSchema(schema))
       } else {
         console.error('Invalid output file:', o)
       }
@@ -1613,6 +1619,7 @@ module.exports.resolveLocalImportFile = resolveLocalImportFile
 module.exports.resolveFetchImport = resolveFetchImport
 module.exports.resolveRuntimeMode = resolveRuntimeMode
 module.exports.resolveOutputPath = resolveOutputPath
+module.exports.writeOutputFile = writeOutputFile
 module.exports.needsFullBundle = needsFullBundle
 module.exports.shouldBundleModelCode = shouldBundleModelCode
 module.exports.bundleModelCode = bundleModelCode
