@@ -5,22 +5,29 @@ const crypto = require('crypto')
 
 const minimist = require('minimist')
 const jsdoc2md = require('jsdoc-to-markdown')
-const showdown = require('showdown')
-const showdownKatex = require('showdown-katex')
-const converter = new showdown.Converter({
-  extensions: [
-    showdownKatex({
-      throwOnError: true,
-      displayMode: true,
-      errorColor: '#1500ff',
-      output: 'mathml'
-    }),
-  ],
-  tables: true
-})
-showdown.setFlavor('github')
 
 const { getModelFuncJS, sanitizeName, generateOpenAPISpec, serializeResult, parseMultipart, fileExtToOutputType } = require('./utils.js')
+
+let markdownConverter
+function getMarkdownConverter () {
+  if (markdownConverter) return markdownConverter
+
+  const showdown = require('showdown')
+  const showdownKatex = require('showdown-katex')
+  showdown.setFlavor('github')
+  markdownConverter = new showdown.Converter({
+    extensions: [
+      showdownKatex({
+        throwOnError: true,
+        displayMode: true,
+        errorColor: '#1500ff',
+        output: 'mathml'
+      }),
+    ],
+    tables: true
+  })
+  return markdownConverter
+}
 
 // left padding of multiple lines
 function pad (str, len, start=0) {
@@ -1171,7 +1178,7 @@ Documentation: https://jsee.org
   // Generate description block
   if (description) {
     const descriptionMd = fs.readFileSync(path.join(cwd, description), 'utf8')
-    descriptionHtml = converter.makeHtml(descriptionMd)
+    descriptionHtml = getMarkdownConverter().makeHtml(descriptionMd)
 
     if (descriptionMd.includes('---')) {
       descriptionTxt = descriptionMd

@@ -170,6 +170,8 @@ function createVueApp (env, mountedCallback, logMain) {
   dataInit.dataChanged = false
   // Flag for autorun feedback
   dataInit.clickRun = false
+  // Flag for running state (toggled by main.js run/stop)
+  dataInit.running = false
 
   function len(s) {
     return s.length;
@@ -269,9 +271,28 @@ function createVueApp (env, mountedCallback, logMain) {
         // If example is provided, use it as a new default
         resetInputs(this.inputs, example)
         clearInputsStorage()
+        // Clear DOM file inputs so re-uploading the same file triggers change event
         this.$nextTick(() => {
+          const fileInputs = container.querySelectorAll('input[type="file"]')
+          fileInputs.forEach(el => { el.value = '' })
           this.dataChanged = false
         })
+        // Clear dynamic select options (e.g. target populated from worker)
+        this.inputs.forEach(input => {
+          if ((input.type === 'select' || input.type === 'categorical') && input.options && !input._initialOptions) {
+            input._initialOptions = input.default ? undefined : []
+          }
+        })
+        // Clear outputs
+        if (this.outputs) {
+          this.outputs.forEach(output => {
+            if (output.type === 'chat') {
+              output._messages = []
+            } else {
+              output.value = undefined
+            }
+          })
+        }
       },
       run (caller) {
         if (runValidation(this.inputs, validateFunctions)) return
@@ -281,6 +302,9 @@ function createVueApp (env, mountedCallback, logMain) {
         setTimeout(() => {
           this.clickRun = false
         }, 150)
+      },
+      stop () {
+        env.cancelCurrentRun()
       },
       notify (msg) {
         env.notify(msg)

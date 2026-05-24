@@ -189,6 +189,19 @@ export default class JSEE {
     if (typeof this._cancelWorkerRun === 'function') {
       this._cancelWorkerRun()
     }
+    // Reject the in-flight worker promise so run() stops awaiting
+    if (typeof this._rejectWorkerRun === 'function') {
+      this._rejectWorkerRun(new Error('Cancelled'))
+      this._rejectWorkerRun = null
+    }
+    // Terminate all workers to force-stop blocking WASM computations
+    this._workers.forEach(w => {
+      try { w.terminate() } catch (e) { /* ignore */ }
+    })
+    this._workers = []
+    this._cancelWorkerRun = null
+    // Force model re-init on next run
+    this._needsModelReinit = true
   }
 
   isCancelled () {
@@ -656,6 +669,7 @@ export default class JSEE {
         : utils.toWorkerSerializable(inputs)
 
       const workerPromise = new Promise((resolve, reject) => {
+        this._rejectWorkerRun = reject
         worker.onmessage = (e) => {
           const res = e.data
           if ((typeof res === 'object') && (res._status)) {
@@ -679,6 +693,12 @@ export default class JSEE {
                 reject(res._error)
                 break
             }
+          } else if ((typeof res === 'object') && res._partial) {
+            // Partial/streaming result: update outputs without resolving the promise
+            log('Partial result from worker:', Object.keys(res))
+            const partial = { ...res }
+            delete partial._partial
+            this.output(partial)
           } else {
             log('Response from worker:', res)
             this.progress(0)
@@ -840,6 +860,12 @@ export default class JSEE {
       return
     }
 
+    // Re-init model if workers were terminated by cancelCurrentRun
+    if (this._needsModelReinit) {
+      this._needsModelReinit = false
+      await this.initModel()
+    }
+
     const schema = this.schema
     const data = this.data
     this.running = true
@@ -893,6 +919,7 @@ export default class JSEE {
       if (this.stopElement) {
         this.stopElement.style.display = 'inline-block'
       }
+      if (this.data) this.data.running = true
 
       // Run pipeline
       const results = await this.pipeline(inputValues)
@@ -922,9 +949,14 @@ export default class JSEE {
         await this.run(caller)
       }
     } catch (err) {
-      // Surface pipeline/worker errors so they don't silently swallow failures
-      log('Pipeline error:', err)
-      notyf.error(typeof err === 'string' ? err : (err.message || 'Pipeline error'))
+      // Silently ignore cancellation errors from cancelCurrentRun()
+      if (this.cancelled && err && err.message === 'Cancelled') {
+        log('Run cancelled by user')
+      } else {
+        // Surface pipeline/worker errors so they don't silently swallow failures
+        log('Pipeline error:', err)
+        notyf.error(typeof err === 'string' ? err : (err.message || 'Pipeline error'))
+      }
     } finally {
       // Always clean up UI state so overlay and running flag don't get stuck
       this.overlay.hide()
@@ -932,6 +964,7 @@ export default class JSEE {
         this.stopElement.style.display = 'none'
       }
       this.running = false
+      if (this.data) this.data.running = false
 
       // Notify user when tab is hidden and run succeeded
       if (runSucceeded && schema.notify && document.hidden

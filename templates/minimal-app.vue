@@ -139,6 +139,12 @@
   .jsee-run-btn::after {
     content: ' \25B8';
   }
+  .jsee-stop-btn {
+    background: #e74c3c !important;
+  }
+  .jsee-stop-btn::after {
+    content: ' \25A0' !important;
+  }
 
   .jsee-examples {
     margin-top: 16px;
@@ -219,10 +225,18 @@
                 Reset
               </button>
               <button
+                v-if="!$parent.running"
                 v-on:click="$parent.run('run')"
                 class="jsee-run-btn"
               >
                 Run
+              </button>
+              <button
+                v-else
+                v-on:click="$parent.stop()"
+                class="jsee-run-btn jsee-stop-btn"
+              >
+                Stop
               </button>
             </div>
           </div>

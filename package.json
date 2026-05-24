@@ -2,9 +2,58 @@
   "name": "@jseeio/jsee",
   "version": "0.8.0",
   "description": "JavaScript Execution Environment",
-  "main": "dist/jsee.core.js",
+  "type": "commonjs",
+  "main": "src/cli.js",
+  "exports": {
+    ".": {
+      "browser": "./dist/jsee.core.js",
+      "node": "./src/cli.js",
+      "require": "./src/cli.js",
+      "default": "./dist/jsee.core.js"
+    },
+    "./cli": {
+      "node": "./src/cli.js",
+      "require": "./src/cli.js",
+      "default": "./src/cli.js"
+    },
+    "./core": {
+      "require": "./dist/jsee.core.js",
+      "default": "./dist/jsee.core.js"
+    },
+    "./full": {
+      "require": "./dist/jsee.full.js",
+      "default": "./dist/jsee.full.js"
+    },
+    "./runtime": {
+      "require": "./dist/jsee.runtime.js",
+      "default": "./dist/jsee.runtime.js"
+    },
+    "./dist/jsee.core.js": {
+      "require": "./dist/jsee.core.js",
+      "default": "./dist/jsee.core.js"
+    },
+    "./dist/jsee.full.js": {
+      "require": "./dist/jsee.full.js",
+      "default": "./dist/jsee.full.js"
+    },
+    "./dist/jsee.runtime.js": {
+      "require": "./dist/jsee.runtime.js",
+      "default": "./dist/jsee.runtime.js"
+    },
+    "./package.json": "./package.json"
+  },
   "unpkg": "dist/jsee.core.js",
   "jsdelivr": "dist/jsee.core.js",
+  "sideEffects": false,
+  "files": [
+    "bin/",
+    "dist/",
+    "src/",
+    "templates/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "private": false,
   "scripts": {
     "build-dev": "webpack --mode=development --progress --stats-children --env DEVELOPMENT && node scripts/compat-runtime.js",
@@ -28,6 +77,17 @@
   },
   "author": "Anton Zemlyansky",
   "license": "MIT",
+  "keywords": [
+    "jsee",
+    "schema",
+    "runtime",
+    "web-worker",
+    "visualization",
+    "offline"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/jseeio/jsee"
