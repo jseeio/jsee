@@ -2,12 +2,13 @@
 
 ## 0.8.0
 ### Features:
-- Full bundle: new build target `jsee.full.js` that includes Observable Plot, Three.js, Leaflet, and pdf.js for rich output types out of the box. The CLI and Python server auto-select `jsee.full.js` vs `jsee.core.js` based on schema output types. Build with `npm run build-full`
+- Full bundle: new build target `jsee.full.js` that includes Observable Plot, Three.js, and Leaflet for rich output types out of the box. The CLI and Python server auto-select `jsee.full.js` vs `jsee.core.js` based on schema output types. Build with `npm run build-full`
 - Bundle rename: `jsee.runtime.js` → `jsee.core.js`, new `jsee.full.js` (was `jsee.runtime.extended.js`). `dist/jsee.runtime.js` is still produced as a backward-compatible copy of `jsee.core.js`
 - `chart` output type: SVG charts via Observable Plot — supports line, dot, bar, area, and more. Model returns array of objects, column-oriented data `{x: [...], y: [...]}`, or a full Plot config `{marks: [...]}`. Schema props: `mark`, `x`, `y`, `color`, `width`, `height`
 - `3d` output type: 3D model viewer via Three.js — renders programmatic geometry `{vertices, faces}` or GLTF/GLB URLs. Auto-creates scene with lighting and camera
 - `map` output type: interactive maps via Leaflet — supports markers `[{lat, lng, popup}]`, GeoJSON, and `{center, markers, zoom}` objects. Auto-fits bounds. Schema props: `height`, `zoom`, `center`, `tiles`
-- `pdf` output type: PDF viewer via pdf.js — renders from URL, data URL, or Uint8Array. Prev/next page navigation, auto-scales to container width. Schema props: `height`, `page`
+- `pdf` output type: browser-native PDF viewer — renders from URL, data URL, Blob, ArrayBuffer, or Uint8Array. Included in the core bundle. Schema prop: `height`
+- Dependency cleanup: remove PDF.js/canvas and Showdown/KaTeX from runtime dependencies; Markdown rendering now uses `markdown-it`
 - `gallery` output type (zero-cost, core bundle): CSS grid of images with click-to-expand lightbox. Model returns array of URLs. Schema props: `columns`, `gap`
 - `highlight` output type (zero-cost, core bundle): colored text spans with label badges. Model returns `[{text, label, color}]` segments
 - `gauge` output type (zero-cost, core bundle): SVG semicircle gauge. Model returns number or `{value, label}`. Schema props: `min`, `max`, `label`, `color`

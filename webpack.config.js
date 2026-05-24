@@ -26,6 +26,7 @@ module.exports = (env) => {
         },
         {
           test: /\.js$/,
+          type: 'javascript/auto',
           loader: 'babel-loader'
         },
         {
@@ -34,6 +35,7 @@ module.exports = (env) => {
         },
         {
           test: /\.css$/,
+          sideEffects: true,
           use: [
             'vue-style-loader',
             'css-loader',
@@ -48,6 +50,7 @@ module.exports = (env) => {
         },
         {
           test: /\.scss$/,
+          sideEffects: true,
           use: [
             'vue-style-loader',
             'css-loader',

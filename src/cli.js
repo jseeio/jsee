@@ -4,27 +4,24 @@ const os = require('os')
 const crypto = require('crypto')
 
 const minimist = require('minimist')
-const jsdoc2md = require('jsdoc-to-markdown')
 
 const { getModelFuncJS, sanitizeName, generateOpenAPISpec, serializeResult, parseMultipart, fileExtToOutputType } = require('./utils.js')
+
+let jsdoc2md
+function getJsdocToMarkdown () {
+  if (!jsdoc2md) jsdoc2md = require('jsdoc-to-markdown')
+  return jsdoc2md
+}
 
 let markdownConverter
 function getMarkdownConverter () {
   if (markdownConverter) return markdownConverter
 
-  const showdown = require('showdown')
-  const showdownKatex = require('showdown-katex')
-  showdown.setFlavor('github')
-  markdownConverter = new showdown.Converter({
-    extensions: [
-      showdownKatex({
-        throwOnError: true,
-        displayMode: true,
-        errorColor: '#1500ff',
-        output: 'mathml'
-      }),
-    ],
-    tables: true
+  const MarkdownIt = require('markdown-it')
+  markdownConverter = new MarkdownIt({
+    html: true,
+    linkify: true,
+    typographer: false
   })
   return markdownConverter
 }
@@ -262,7 +259,7 @@ function resolveOutputPath (cwd, outputPath) {
   return path.join(cwd, outputPath)
 }
 
-const FULL_BUNDLE_TYPES = ['chart', '3d', 'map', 'pdf']
+const FULL_BUNDLE_TYPES = ['chart', '3d', 'map']
 
 function needsFullBundle (schema) {
   const outputs = schema.outputs || []
@@ -1027,7 +1024,7 @@ Documentation: https://jsee.org
   } else {
     // Array of js files
     // Generate schema
-    let jsdocData = jsdoc2md.getTemplateDataSync({ files: inputs.map(f => path.join(cwd, f)) })
+    let jsdocData = getJsdocToMarkdown().getTemplateDataSync({ files: inputs.map(f => path.join(cwd, f)) })
     schema = genSchema(jsdocData)
     // jsdocMarkdown = jsdoc2md.renderSync({
     //   data: jsdocData,
@@ -1178,7 +1175,7 @@ Documentation: https://jsee.org
   // Generate description block
   if (description) {
     const descriptionMd = fs.readFileSync(path.join(cwd, description), 'utf8')
-    descriptionHtml = getMarkdownConverter().makeHtml(descriptionMd)
+    descriptionHtml = getMarkdownConverter().render(descriptionMd)
 
     if (descriptionMd.includes('---')) {
       descriptionTxt = descriptionMd

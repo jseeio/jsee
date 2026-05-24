@@ -217,8 +217,8 @@ describe('needsFullBundle', () => {
     expect(needsFullBundle({ outputs: [{ type: 'map' }] })).toBe(true)
   })
 
-  test('returns true for pdf output', () => {
-    expect(needsFullBundle({ outputs: [{ type: 'pdf' }] })).toBe(true)
+  test('returns false for pdf output because browser-native PDF is zero-cost', () => {
+    expect(needsFullBundle({ outputs: [{ type: 'pdf' }] })).toBe(false)
   })
 
   test('returns true for nested full types in groups', () => {

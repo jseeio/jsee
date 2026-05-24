@@ -241,6 +241,13 @@
   max-width: 100%;
   height: auto;
 }
+.jsee-pdf-frame {
+  width: 100%;
+  height: 100%;
+  min-height: 360px;
+  border: none;
+  display: block;
+}
 </style>
 
 <template>
@@ -330,10 +337,6 @@
       </div>
       <div :id="outputName" v-else-if="output.type === 'pdf'" ref="pdfContainer"
         :style="{ height: (output.height || 600) + 'px', overflow: 'auto' }">
-        <div v-if="!hasPdfjs" class="jsee-output-missing">
-          PDF viewer requires <a href="https://mozilla.github.io/pdf.js/" target="_blank">pdf.js</a>.
-          Add to imports or use the full bundle.
-        </div>
       </div>
       <div :id="outputName" v-else-if="output.type === 'gallery'">
         <div class="jsee-gallery-grid"

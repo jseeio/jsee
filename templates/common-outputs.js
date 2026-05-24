@@ -1,12 +1,17 @@
 import { saveAs } from 'file-saver'
 import domtoimage from 'dom-to-image'
-import showdown from 'showdown'
+import MarkdownIt from 'markdown-it'
 
 const { sanitizeName, columnsToRows } = require('../src/utils.js')
 
-const mdConverter = new showdown.Converter({ tables: true })
+const mdConverter = new MarkdownIt({
+  html: true,
+  linkify: true,
+  typographer: false
+})
 
 const Blob = window['Blob']
+const UrlApi = window['URL'] || window['webkitURL']
 
 function stringify (v) {
   return typeof v === 'string'
@@ -27,8 +32,7 @@ const component = {
       _threeRenderer: null,
       _threeAnimId: null,
       _leafletMap: null,
-      _pdfCurrentPage: 1,
-      _pdfDoc: null,
+      _pdfObjectUrl: null,
     }
   },
   mounted() {
@@ -45,6 +49,7 @@ const component = {
     if (this._threeAnimId) cancelAnimationFrame(this._threeAnimId)
     if (this._threeRenderer) this._threeRenderer.dispose()
     if (this._leafletMap) this._leafletMap.remove()
+    this.revokePdfObjectUrl()
   },
   // updated() {
   //   this.executeRenderFunction()
@@ -84,9 +89,6 @@ const component = {
     },
     hasLeaflet() {
       return typeof window !== 'undefined' && !!window.L
-    },
-    hasPdfjs() {
-      return typeof window !== 'undefined' && !!window.pdfjsLib
     },
     viewerMedia () {
       const url = this.output && this.output.value
@@ -276,7 +278,7 @@ const component = {
     },
     renderMarkdown (text) {
       if (typeof text !== 'string') return ''
-      return mdConverter.makeHtml(text)
+      return mdConverter.render(text)
     },
     renderChart() {
       if (!this.hasPlot || !this.$refs.chartContainer) return
@@ -424,78 +426,51 @@ const component = {
         map.setView([0, 0], 2)
       }
     },
-    renderPDF() {
-      if (!this.hasPdfjs || !this.$refs.pdfContainer) return
-      const container = this.$refs.pdfContainer
-      const data = this.output.value
-      if (!data) return
-      container.innerHTML = ''
-      const pdfjsLib = window.pdfjsLib
-      const self = this
-      let loadingTask
-      if (typeof data === 'string') {
-        loadingTask = pdfjsLib.getDocument(data)
-      } else if (data instanceof Uint8Array || data instanceof ArrayBuffer) {
-        loadingTask = pdfjsLib.getDocument({ data })
-      } else {
+    revokePdfObjectUrl() {
+      if (this._pdfObjectUrl && UrlApi) {
+        UrlApi.revokeObjectURL(this._pdfObjectUrl)
+        this._pdfObjectUrl = null
+      }
+    },
+    pdfDataToUrl(data) {
+      if (typeof data === 'string') return data
+      if (!Blob || !UrlApi) return null
+      if (data instanceof Blob) {
+        this.revokePdfObjectUrl()
+        this._pdfObjectUrl = UrlApi.createObjectURL(data)
+        return this._pdfObjectUrl
+      }
+      if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+        this.revokePdfObjectUrl()
+        const bytes = data instanceof ArrayBuffer
+          ? new Uint8Array(data)
+          : new Uint8Array(data.buffer, data.byteOffset || 0, data.byteLength)
+        const blob = new Blob([bytes], { type: 'application/pdf' })
+        this._pdfObjectUrl = UrlApi.createObjectURL(blob)
+        return this._pdfObjectUrl
+      }
+      return null
+    },
+    renderNativePDF(container, data) {
+      const url = this.pdfDataToUrl(data)
+      if (!url) {
         container.textContent = 'Unsupported PDF data format'
         return
       }
-      loadingTask.promise.then(pdf => {
-        self._pdfDoc = pdf
-        self._pdfCurrentPage = self.output.page || 1
-        const renderPage = (pageNum) => {
-          // Keep controls, clear canvases
-          const canvases = container.querySelectorAll('canvas')
-          canvases.forEach(c => c.remove())
-          pdf.getPage(pageNum).then(page => {
-            const containerWidth = container.clientWidth || 600
-            const unscaledViewport = page.getViewport({ scale: 1 })
-            const scale = containerWidth / unscaledViewport.width
-            const viewport = page.getViewport({ scale })
-            const canvas = document.createElement('canvas')
-            canvas.width = viewport.width
-            canvas.height = viewport.height
-            canvas.style.display = 'block'
-            canvas.style.maxWidth = '100%'
-            container.appendChild(canvas)
-            page.render({ canvasContext: canvas.getContext('2d'), viewport })
-          })
-        }
-        // Controls
-        const controls = document.createElement('div')
-        controls.className = 'jsee-pdf-controls'
-        const prevBtn = document.createElement('button')
-        prevBtn.textContent = 'Prev'
-        const nextBtn = document.createElement('button')
-        nextBtn.textContent = 'Next'
-        const pageInfo = document.createElement('span')
-        const updateInfo = () => {
-          pageInfo.textContent = 'Page ' + self._pdfCurrentPage + ' / ' + pdf.numPages
-        }
-        prevBtn.addEventListener('click', () => {
-          if (self._pdfCurrentPage > 1) {
-            self._pdfCurrentPage--
-            updateInfo()
-            renderPage(self._pdfCurrentPage)
-          }
-        })
-        nextBtn.addEventListener('click', () => {
-          if (self._pdfCurrentPage < pdf.numPages) {
-            self._pdfCurrentPage++
-            updateInfo()
-            renderPage(self._pdfCurrentPage)
-          }
-        })
-        controls.appendChild(prevBtn)
-        controls.appendChild(pageInfo)
-        controls.appendChild(nextBtn)
-        container.appendChild(controls)
-        updateInfo()
-        renderPage(self._pdfCurrentPage)
-      }).catch(err => {
-        container.textContent = 'PDF error: ' + err.message
-      })
+      container.innerHTML = ''
+      const iframe = document.createElement('iframe')
+      iframe.className = 'jsee-pdf-frame'
+      iframe.title = this.output.title || this.output.name || 'PDF'
+      iframe.src = url
+      iframe.setAttribute('loading', 'lazy')
+      container.appendChild(iframe)
+    },
+    renderPDF() {
+      if (!this.$refs.pdfContainer) return
+      const container = this.$refs.pdfContainer
+      const data = this.output.value
+      if (!data) return
+      this.renderNativePDF(container, data)
     },
     executeRenderFunction() {
       if (this.isRenderFunction && this.$refs.customContainer) {

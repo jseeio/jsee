@@ -19,7 +19,7 @@ from .types import (
 )
 
 
-FULL_BUNDLE_TYPES = {'chart', '3d', 'map', 'pdf'}
+FULL_BUNDLE_TYPES = {'chart', '3d', 'map'}
 
 
 def _needs_full_bundle(schema):
@@ -507,6 +507,7 @@ def serve(target, host='0.0.0.0', port=5050, **kwargs):
     funcs = _load_model_func(schema, schema_cwd)
   elif isinstance(target, dict):
     schema = target
+    funcs = _load_model_func(schema, schema_cwd)
   elif callable(target):
     schema = generate_schema(target, host, port, **kwargs)
     if kwargs.get('chat'):
@@ -714,6 +715,7 @@ def create_app(target, **kwargs):
     funcs = _load_model_func(schema, schema_cwd)
   elif isinstance(target, dict):
     schema = target
+    funcs = _load_model_func(schema, schema_cwd)
   elif callable(target):
     schema = generate_schema(target, host, port, **kwargs)
     if kwargs.get('chat'):

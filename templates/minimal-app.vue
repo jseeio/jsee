@@ -1,5 +1,5 @@
-<style scoped>
-:deep(.jsee-app) {
+<style scoped lang="scss">
+.jsee-app {
   /* Theme variables — light (default) */
   --jsee-primary: #00d1b2;
   --jsee-primary-dark: #016c5c;
@@ -174,7 +174,7 @@
   }
 }
 /* Dark theme overrides */
-:deep(.jsee-app[data-theme="dark"]) {
+.jsee-app[data-theme="dark"] {
   --jsee-bg: #1a1a1a;
   --jsee-bg-secondary: #222;
   --jsee-text: #e0e0e0;

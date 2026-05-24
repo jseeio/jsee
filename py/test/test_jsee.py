@@ -280,6 +280,12 @@ class TestFindRuntime:
         if path and 'jsee.full.js' in path:
             assert os.path.isfile(path)
 
+    def test_pdf_uses_core_bundle(self):
+        schema = {'outputs': [{'name': 'report', 'type': 'pdf'}]}
+        path = _find_runtime(schema)
+        assert path is not None
+        assert path.endswith('jsee.core.js')
+
 
 # ---------------------------------------------------------------------------
 # Richer schema generation

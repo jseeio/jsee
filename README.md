@@ -37,11 +37,11 @@ npx @jseeio/jsee schema.json -o app.html
 
 Run `jsee --help` for all CLI options.
 
-**Full bundle** (includes Observable Plot, Three.js, Leaflet, pdf.js):
+**Full bundle** (includes Observable Plot, Three.js, and Leaflet):
 ```html
 <script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@latest/dist/jsee.full.js"></script>
 ```
-The full bundle adds `chart`, `3d`, `map`, and `pdf` output types out of the box. The core bundle stays lightweight (~97KB gzip) — you can still use these output types by loading the libraries manually via schema `imports`. The CLI and Python server auto-select the right bundle based on schema output types.
+The full bundle adds `chart`, `3d`, and `map` output types out of the box. The core bundle stays lightweight (~97KB gzip) — you can still use these output types by loading the libraries manually via schema `imports`. The `pdf` output uses the browser's native PDF viewer and is available in the core bundle. The CLI and Python server auto-select the right bundle based on schema output types.
 
 ## Quick start
 
@@ -328,7 +328,7 @@ Use `columns` on inputs/outputs for dashboard-style layouts:
     - `chart` — SVG chart via [Observable Plot](https://observablehq.com/plot/). Model returns array of objects, column-oriented data, or a full Plot config. Schema props: `mark` (line/dot/bar/area/etc.), `x`, `y`, `color`, `width`, `height`. Included in full bundle or load Plot via `imports`
     - `3d` — 3D model viewer via [Three.js](https://threejs.org/). Model returns a URL (GLTF/GLB), data URL, or geometry object `{vertices, faces}`. Schema props: `width`, `height`. Included in full bundle or load Three.js via `imports`
     - `map` — Interactive map via [Leaflet](https://leafletjs.com/). Model returns markers `[{lat, lng, popup}]`, `{center, markers, zoom}`, or GeoJSON. Schema props: `height`, `zoom`, `center`, `tiles`. Included in full bundle or load Leaflet via `imports`
-    - `pdf` — PDF viewer via [pdf.js](https://mozilla.github.io/pdf.js/). Model returns a URL, data URL, or Uint8Array. Prev/next page controls. Schema props: `height`, `page`. Included in full bundle or load pdf.js via `imports`
+    - `pdf` — Browser-native PDF viewer. Model returns a URL, data URL, Blob, ArrayBuffer, or Uint8Array. Schema prop: `height`. Included in the core bundle
     - `gallery` — CSS grid of images. Model returns array of URLs/data URLs. Click to expand lightbox. Schema props: `columns` (default 3), `gap` (default 8px). Zero-cost, included in core bundle
     - `highlight` — Highlighted text with labels. Model returns `[{text, label, color}]` segments. Unlabeled segments render as plain text. Zero-cost, included in core bundle
     - `gauge` — Semicircle gauge. Model returns a number or `{value, label}`. Schema props: `min` (default 0), `max` (default 100), `label`, `color`. Zero-cost, included in core bundle

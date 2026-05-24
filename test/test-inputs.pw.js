@@ -361,6 +361,31 @@ test.describe('Image output', () => {
   })
 })
 
+test.describe('PDF output', () => {
+  test('renders browser-native iframe', async ({ page }) => {
+    const pdfDataUrl = 'data:application/pdf;base64,JVBERi0xLjQKJUVPRgo='
+    const schema = {
+      model: {
+        worker: false,
+        code: `function () { return { report: '${pdfDataUrl}' } }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'x', type: 'int', default: 1 }
+      ],
+      outputs: [
+        { name: 'report', type: 'pdf', height: 300 }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    await page.click('button:has-text("Run")')
+    const frame = page.locator('iframe.jsee-pdf-frame')
+    await expect(frame).toBeVisible()
+    await expect(frame).toHaveAttribute('title', 'report')
+    await expect(frame).toHaveAttribute('src', pdfDataUrl)
+  })
+})
+
 test.describe('Accordion (collapsible group)', () => {
   test('starts collapsed and expands on click', async ({ page }) => {
     const schema = {
