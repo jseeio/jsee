@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.1
+### Fixes:
+- Fix `jsee init` JavaScript templates so generated minimal and chat apps accept the default object payload in both browser and server-side execution modes.
+- Build UMD bundles with `globalThis`, and route CommonJS `require()` for browser-bundle subpaths through a clear Node stub instead of failing with browser-global errors.
+- Harden the exported CLI generator for `node -e` / programmatic contexts where `require.main` is not defined.
+
 ## 0.8.0
 ### Features:
 - Full bundle: new build target `jsee.full.js` that includes Observable Plot, Three.js, and Leaflet for rich output types out of the box. The CLI and Python server auto-select `jsee.full.js` vs `jsee.core.js` based on schema output types. Build with `npm run build-full`

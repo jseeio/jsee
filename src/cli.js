@@ -739,7 +739,9 @@ function template(schema, blocks) {
 
 async function gen (pargv, returnHtml=false) {
   // Determine if JSEE CLI is imported or run directly
-  const imported = path.dirname(__dirname) !== path.dirname(require.main.path)
+  const mainPath = require.main && require.main.path ? require.main.path : process.cwd()
+  const mainFilename = require.main && require.main.filename ? require.main.filename : ''
+  const imported = path.dirname(__dirname) !== path.dirname(mainPath)
 
   // First pass over CLI arguments
   // JSEE-level args
@@ -798,7 +800,7 @@ async function gen (pargv, returnHtml=false) {
     new JSEE({
       container: document.getElementById('jsee-container'),
       schema: {
-        model: { code: function chat(message, history) { return { chat: 'You said: ' + message } }, worker: false },
+        model: { code: function chat(inputs) { return { chat: 'You said: ' + inputs.message } }, worker: false },
         inputs: [{ name: 'message', type: 'string', enter: true }],
         outputs: [{ name: 'chat', type: 'chat' }]
       }
@@ -821,7 +823,7 @@ async function gen (pargv, returnHtml=false) {
     new JSEE({
       container: document.getElementById('jsee-container'),
       schema: {
-        model: { code: function greet(name, count) { return { greeting: (name + '\\n').repeat(count) } }, worker: false },
+        model: { code: function greet(inputs) { return { greeting: (inputs.name + '\\n').repeat(inputs.count) } }, worker: false },
         inputs: [
           { name: 'name', type: 'string', default: 'World' },
           { name: 'count', type: 'slider', min: 1, max: 10, default: 3 }
@@ -846,8 +848,8 @@ async function gen (pargv, returnHtml=false) {
         inputs: [{ name: 'message', type: 'string', enter: true }],
         outputs: [{ name: 'chat', type: 'chat' }]
       }, null, 2) + '\n'
-      files['model.js'] = `function chat(message, history) {
-  return { chat: 'You said: ' + message }
+      files['model.js'] = `function chat(inputs) {
+  return { chat: 'You said: ' + inputs.message }
 }
 `
       files['README.md'] = `# Chat
@@ -870,8 +872,8 @@ npx @jseeio/jsee schema.json
         ],
         outputs: [{ name: 'greeting', type: 'code' }]
       }, null, 2) + '\n'
-      files['model.js'] = `function greet(name, count) {
-  return { greeting: (name + '\\n').repeat(count) }
+      files['model.js'] = `function greet(inputs) {
+  return { greeting: (inputs.name + '\\n').repeat(inputs.count) }
 }
 `
       files['README.md'] = `# My App
@@ -971,8 +973,8 @@ Documentation: https://jsee.org
   log('Current working directory:', process.cwd())
   log('Script location:', __dirname)
   log('Script file:', __filename)
-  log('Require location:', require.main.path)
-  log('Require file:', require.main.filename)
+  log('Require location:', mainPath)
+  log('Require file:', mainFilename)
 
   let cwd = process.cwd()
   let inputs = argv.inputs

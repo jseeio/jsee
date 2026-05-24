@@ -11,6 +11,7 @@ module.exports = (env) => {
       filename: env.FULL ? 'jsee.full.js' : 'jsee.core.js',
       path: path.resolve(__dirname, 'dist'),
       publicPath: '/dist/', // Should fix Uncaught Error when downloaded: Automatic publicPath is not supported in this browser
+      globalObject: 'globalThis',
       library: {
         type: 'umd',
         name: 'JSEE',

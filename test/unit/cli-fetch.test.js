@@ -264,3 +264,52 @@ describe('output writes', () => {
     }
   })
 })
+
+describe('init scaffolds', () => {
+  let originalCwd
+  let tmpDir
+
+  beforeEach(() => {
+    originalCwd = process.cwd()
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-init-'))
+    process.chdir(tmpDir)
+  })
+
+  afterEach(() => {
+    process.chdir(originalCwd)
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  test('minimal scaffold model accepts the default object payload', async () => {
+    await gen(['init'])
+
+    const code = fs.readFileSync(path.join(tmpDir, 'model.js'), 'utf8')
+    const greet = new Function(`${code}\nreturn greet`)()
+
+    expect(greet({ name: 'World', count: 2 })).toEqual({
+      greeting: 'World\nWorld\n'
+    })
+  })
+
+  test('chat scaffold model accepts the default object payload', async () => {
+    await gen(['init', 'chat'])
+
+    const schema = JSON.parse(fs.readFileSync(path.join(tmpDir, 'schema.json'), 'utf8'))
+    const code = fs.readFileSync(path.join(tmpDir, 'model.js'), 'utf8')
+    const chat = new Function(`${code}\nreturn chat`)()
+
+    expect(schema.outputs).toEqual([{ name: 'chat', type: 'chat' }])
+    expect(chat({ message: 'hello', history: [] })).toEqual({
+      chat: 'You said: hello'
+    })
+  })
+})
+
+describe('browser bundle Node stub', () => {
+  test('loads in Node and throws a clear browser-only error when used', () => {
+    const browserBundleOnly = require('../../src/browser-bundle-node')
+
+    expect(browserBundleOnly.browserOnly).toBe(true)
+    expect(() => browserBundleOnly()).toThrow(/browser DOM/)
+  })
+})

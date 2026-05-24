@@ -1,6 +1,6 @@
 {
   "name": "@jseeio/jsee",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "JavaScript Execution Environment",
   "type": "commonjs",
   "main": "src/cli.js",
@@ -17,27 +17,27 @@
       "default": "./src/cli.js"
     },
     "./core": {
-      "require": "./dist/jsee.core.js",
+      "require": "./src/browser-bundle-node.js",
       "default": "./dist/jsee.core.js"
     },
     "./full": {
-      "require": "./dist/jsee.full.js",
+      "require": "./src/browser-bundle-node.js",
       "default": "./dist/jsee.full.js"
     },
     "./runtime": {
-      "require": "./dist/jsee.runtime.js",
+      "require": "./src/browser-bundle-node.js",
       "default": "./dist/jsee.runtime.js"
     },
     "./dist/jsee.core.js": {
-      "require": "./dist/jsee.core.js",
+      "require": "./src/browser-bundle-node.js",
       "default": "./dist/jsee.core.js"
     },
     "./dist/jsee.full.js": {
-      "require": "./dist/jsee.full.js",
+      "require": "./src/browser-bundle-node.js",
       "default": "./dist/jsee.full.js"
     },
     "./dist/jsee.runtime.js": {
-      "require": "./dist/jsee.runtime.js",
+      "require": "./src/browser-bundle-node.js",
       "default": "./dist/jsee.runtime.js"
     },
     "./package.json": "./package.json"
