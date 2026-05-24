@@ -1,6 +1,6 @@
 {
   "name": "@jseeio/jsee",
-  "version": "0.8.4",
+  "version": "0.8.5",
   "description": "JavaScript Execution Environment",
   "type": "commonjs",
   "main": "src/cli.js",

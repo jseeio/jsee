@@ -537,6 +537,8 @@ jsee @statsim/gen -o app.html --bundle # bundled HTML from package app
 npx -p @jseeio/jsee -p @statsim/gen jsee @statsim/gen --serve
 ```
 
+JSEE app packages can also expose their own bin with `require('@jseeio/jsee').runPackage(__dirname, process.argv.slice(2))`. The helper reads the package `jsee` field, uses the package root as the app root, and forwards ordinary JSEE CLI options.
+
 ### Options
 
 | Flag | Description |

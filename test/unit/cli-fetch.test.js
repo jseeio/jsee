@@ -3,7 +3,7 @@ const os = require('os')
 const path = require('path')
 const vm = require('vm')
 const gen = require('../../src/cli')
-const { collectFetchBundleBlocks, resolveLocalImportFile, resolveFetchImport, resolveRuntimeMode, needsFullBundle, shouldBundleModelCode, resolveJseePackageInput, looksLikeMissingPackageInput, getPackageInputInstallHint, isPackageSpecifier } = gen
+const { collectFetchBundleBlocks, resolveLocalImportFile, resolveFetchImport, resolveRuntimeMode, needsFullBundle, shouldBundleModelCode, resolveJseePackageInput, looksLikeMissingPackageInput, getPackageInputInstallHint, findPackageRoot, runPackage, isPackageSpecifier } = gen
 
 function extractHiddenCode (html, src) {
   const marker = `data-src="${src}"`
@@ -260,6 +260,28 @@ describe('package input resolution', () => {
     expect(html).toContain('Demo App')
     const code = extractHiddenCode(html, 'model.js')
     expect(runHiddenModel(code, 'demo', { x: 4 })).toEqual({ y: 5 })
+  })
+
+  test('finds package root from nested bin directory', () => {
+    const binDir = path.join(packageDir, 'bin')
+    fs.mkdirSync(binDir)
+
+    expect(findPackageRoot(binDir)).toBe(packageDir)
+  })
+
+  test('runs package apps from a package bin directory', async () => {
+    const binDir = path.join(packageDir, 'bin')
+    const outputPath = path.join(tmpDir, 'package-run', 'index.html')
+    fs.mkdirSync(binDir)
+    const before = process.cwd()
+
+    await runPackage(binDir, ['--outputs', outputPath, '--bundle'])
+
+    expect(process.cwd()).toBe(before)
+    const html = fs.readFileSync(outputPath, 'utf8')
+    expect(html).toContain('Demo App')
+    const code = extractHiddenCode(html, 'model.js')
+    expect(runHiddenModel(code, 'demo', { x: 6 })).toEqual({ y: 7 })
   })
 })
 

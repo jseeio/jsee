@@ -107,12 +107,7 @@ function resolvePackageJsonPath (specifier, cwd) {
   }
 }
 
-function resolveJseePackageInput (specifier, cwd) {
-  if (!isPackageSpecifier(specifier)) return null
-
-  const packageJsonPath = resolvePackageJsonPath(specifier, cwd)
-  if (!packageJsonPath) return null
-
+function readJseePackageInput (specifier, packageJsonPath) {
   const packageRoot = path.dirname(packageJsonPath)
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'))
   const appConfig = packageJson.jsee
@@ -148,6 +143,57 @@ function resolveJseePackageInput (specifier, cwd) {
     packageRoot,
     schemaPath,
     descriptionPath
+  }
+}
+
+function resolveJseePackageInput (specifier, cwd) {
+  if (!isPackageSpecifier(specifier)) return null
+
+  const packageJsonPath = resolvePackageJsonPath(specifier, cwd)
+  if (!packageJsonPath) return null
+
+  return readJseePackageInput(specifier, packageJsonPath)
+}
+
+function findPackageRoot (startDir) {
+  let dir = path.resolve(startDir)
+  if (fs.existsSync(dir) && fs.statSync(dir).isFile()) dir = path.dirname(dir)
+
+  while (true) {
+    const packageJsonPath = path.join(dir, 'package.json')
+    if (fs.existsSync(packageJsonPath) && fs.statSync(packageJsonPath).isFile()) return dir
+
+    const parent = path.dirname(dir)
+    if (parent === dir) throw new Error(`No package.json found from ${startDir}`)
+    dir = parent
+  }
+}
+
+function hasArgOption (args, names) {
+  return args.some(arg => names.some(name => arg === name || arg.startsWith(name + '=')))
+}
+
+async function runPackage (dirname, args=[]) {
+  if (!Array.isArray(args)) throw new Error('runPackage args must be an array')
+
+  const packageRoot = findPackageRoot(dirname)
+  const packageInput = readJseePackageInput(packageRoot, path.join(packageRoot, 'package.json'))
+  const pargv = []
+
+  if (!hasArgOption(args, ['--inputs', '-i'])) {
+    pargv.push('--inputs', packageInput.schemaPath)
+  }
+  if (!hasArgOption(args, ['--description', '-d']) && packageInput.descriptionPath) {
+    pargv.push('--description', packageInput.descriptionPath)
+  }
+  pargv.push(...args)
+
+  const previousCwd = process.cwd()
+  process.chdir(packageInput.packageRoot)
+  try {
+    return await gen(pargv)
+  } finally {
+    process.chdir(previousCwd)
   }
 }
 
@@ -1395,7 +1441,8 @@ Documentation: https://jsee.org
 
   // Generate description block
   if (description) {
-    const descriptionMd = fs.readFileSync(path.join(cwd, description), 'utf8')
+    const descriptionPath = path.isAbsolute(description) ? description : path.join(cwd, description)
+    const descriptionMd = fs.readFileSync(descriptionPath, 'utf8')
     descriptionHtml = getMarkdownConverter().render(descriptionMd)
 
     if (descriptionMd.includes('---')) {
@@ -1724,6 +1771,9 @@ module.exports.resolveFetchImport = resolveFetchImport
 module.exports.resolveRuntimeMode = resolveRuntimeMode
 module.exports.resolveOutputPath = resolveOutputPath
 module.exports.resolveJseePackageInput = resolveJseePackageInput
+module.exports.readJseePackageInput = readJseePackageInput
+module.exports.findPackageRoot = findPackageRoot
+module.exports.runPackage = runPackage
 module.exports.looksLikeMissingPackageInput = looksLikeMissingPackageInput
 module.exports.getPackageInputInstallHint = getPackageInputInstallHint
 module.exports.isPackageSpecifier = isPackageSpecifier
