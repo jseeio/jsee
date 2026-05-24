@@ -288,6 +288,7 @@ describe('package input resolution', () => {
     const html = await gen(['--inputs', '@statsim/demo', '--outputs', path.join(tmpDir, 'bundle.html'), '--bundle'], true)
 
     expect(html).toContain('id="download-html-btn"')
+    expect(html).toContain("return '<!DOCTYPE html>\\n' + document.documentElement.outerHTML")
     expect(html).toContain('Download HTML')
     expect(html).not.toContain('localhost:3000')
     expect(html).not.toContain('save-html-btn')

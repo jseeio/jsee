@@ -986,7 +986,7 @@ function template(schema, blocks) {
         return bytes + ' B'
       }
       function getDownloadHtml() {
-        return '<!DOCTYPE html>\n' + document.documentElement.outerHTML
+        return '<!DOCTYPE html>\\n' + document.documentElement.outerHTML
       }
       function getDownloadFilename() {
         var base = (downloadTitle || 'jsee').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')
