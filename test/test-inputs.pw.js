@@ -750,6 +750,47 @@ test.describe('File output', () => {
     await expect(btn).toBeVisible()
     await expect(btn).toContainText('report.csv')
   })
+
+  test('uses filename and content from file descriptor result', async ({ page }) => {
+    const schema = {
+      model: {
+        worker: false,
+        code: `function (data) {
+          const ext = String(data.format).toLowerCase()
+          return {
+            file: {
+              filename: 'dataset.' + ext,
+              content: ext === 'csv' ? 'col1,col2\\n1,2\\n' : JSON.stringify({ ok: true }),
+              mime: ext === 'csv' ? 'text/csv' : 'application/json'
+            }
+          }
+        }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'format', type: 'select', options: ['CSV', 'JSON'], default: 'CSV' }
+      ],
+      outputs: [
+        { name: 'file', type: 'file' }
+      ]
+    }
+    await page.goto(urlQueryEscaped(schema))
+    await page.click('button:has-text("Run")')
+    const btn = page.locator('.jsee-file-download-btn')
+    await expect(btn).toContainText('dataset.csv')
+
+    const downloadPromise = page.waitForEvent('download')
+    await btn.click()
+    const download = await downloadPromise
+    expect(download.suggestedFilename()).toBe('dataset.csv')
+    const downloadPath = await download.path()
+    const content = require('fs').readFileSync(downloadPath, 'utf8')
+    expect(content).toBe('col1,col2\n1,2\n')
+
+    await page.selectOption('#format', 'JSON')
+    await page.click('button:has-text("Run")')
+    await expect(btn).toContainText('dataset.json')
+  })
 })
 
 test.describe('Sidebar layout', () => {

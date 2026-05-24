@@ -19,6 +19,27 @@ function stringify (v) {
     : JSON.stringify(v)
 }
 
+function getFileDescriptor (output) {
+  const value = output.value
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {
+      filename: output.filename || output.name || 'output',
+      content: value,
+      mime: output.mime || output.contentType || 'application/octet-stream'
+    }
+  }
+  const has = (key) => Object.prototype.hasOwnProperty.call(value, key)
+  return {
+    filename: value.filename || value.name || output.filename || output.name || 'output',
+    content: has('content') ? value.content
+      : has('value') ? value.value
+        : has('data') ? value.data
+          : has('url') ? value.url
+            : value,
+    mime: value.mime || value.contentType || output.mime || output.contentType || 'application/octet-stream'
+  }
+}
+
 const component = {
   props: ['output'],
   emits: ['notification'],
@@ -260,19 +281,24 @@ const component = {
       }
     },
     downloadFile () {
-      let filename = this.output.filename || this.output.name || 'output'
-      let value = this.output.value
+      const file = getFileDescriptor(this.output)
+      let filename = file.filename
+      let value = file.content
       if (typeof value === 'string' && value.startsWith('data:')) {
         fetch(value)
           .then(r => r.blob())
           .then(blob => saveAs(blob, filename))
           .catch(() => {
-            let blob = new Blob([value], { type: 'application/octet-stream' })
+            let blob = new Blob([value], { type: file.mime })
             saveAs(blob, filename)
           })
       } else {
+        if (typeof Blob !== 'undefined' && value instanceof Blob) {
+          saveAs(value, filename)
+          return
+        }
         let content = typeof value === 'string' ? value : JSON.stringify(value)
-        let blob = new Blob([content], { type: 'application/octet-stream' })
+        let blob = new Blob([content], { type: file.mime })
         saveAs(blob, filename)
       }
     },
