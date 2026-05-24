@@ -283,6 +283,23 @@ describe('package input resolution', () => {
     const code = extractHiddenCode(html, 'model.js')
     expect(runHiddenModel(code, 'demo', { x: 6 })).toEqual({ y: 7 })
   })
+
+  test('shows download button only for bundled generated html', async () => {
+    const html = await gen(['--inputs', '@statsim/demo', '--outputs', path.join(tmpDir, 'bundle.html'), '--bundle'], true)
+
+    expect(html).toContain('id="download-html-btn"')
+    expect(html).toContain('Download HTML')
+    expect(html).not.toContain('localhost:3000')
+    expect(html).not.toContain('save-html-btn')
+  })
+
+  test('shows port status without download button for served html', async () => {
+    const html = await gen(['--inputs', '@statsim/demo', '--port', '4567'], true)
+
+    expect(html).toContain('localhost:4567')
+    expect(html).not.toContain('id="download-html-btn"')
+    expect(html).not.toContain('save-html-btn')
+  })
 })
 
 describe('resolveRuntimeMode', () => {

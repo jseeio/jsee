@@ -838,10 +838,18 @@ function template(schema, blocks) {
     table th { background-color: #f0f0f0; border: 1px solid #e0e0e0; }
     table td { border: 1px solid #e8e8e8; }
     @media screen and (max-width: 800px) { table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; -ms-overflow-style: -ms-autohiding-scrollbar; } }
-    .site-header { border-bottom: 1px solid #e8e8e8; min-height: 55.95px; line-height: 54px; position: relative; }
-    .site-title { font-size: 1.625rem; font-weight: 800; letter-spacing: -1px; margin-bottom: 0; float: left; }
-    @media screen and (max-width: 600px) { .site-title { padding-right: 45px; } }
+    .site-header { border-bottom: 1px solid #e8e8e8; min-height: 55.95px; position: relative; }
+    .site-header .wrapper { min-height: 54px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .site-header .wrapper:after { content: none; }
+    .site-title { font-size: 1.625rem; font-weight: 800; letter-spacing: -1px; line-height: 1.2; margin-bottom: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .site-title, .site-title:visited { color: #424242; }
+    .jsee-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex: 0 0 auto; font-size: 12px; line-height: 1; }
+    .jsee-header-badge, .jsee-header-button { border: 1px solid #e0e0e0; border-radius: 4px; background: #f8f8f8; color: #555; padding: 6px 10px; font: inherit; line-height: 1; white-space: nowrap; }
+    .jsee-header-badge { font-family: Menlo, Inconsolata, Consolas, Roboto Mono, Ubuntu Mono, Liberation Mono, Courier New, monospace; }
+    .jsee-header-button { cursor: pointer; }
+    .jsee-header-button:hover { background: #f0f0f0; color: #111; }
+    .jsee-header-toggle { display: flex; align-items: center; gap: 4px; color: #666; cursor: pointer; white-space: nowrap; }
+    @media screen and (max-width: 600px) { .site-header .wrapper { flex-wrap: wrap; gap: 8px; padding-top: 10px; padding-bottom: 10px; } .site-title { flex: 1 1 100%; white-space: normal; } .jsee-header-actions { width: 100%; justify-content: flex-start; } }
     .site-nav { position: absolute; top: 9px; right: 15px; background-color: #fdfdfd; border: 1px solid #e8e8e8; border-radius: 5px; text-align: right; }
     .site-nav .nav-trigger { display: none; }
     .site-nav .menu-icon { float: right; width: 36px; height: 26px; line-height: 0; padding-top: 10px; text-align: center; }
@@ -901,7 +909,6 @@ function template(schema, blocks) {
     @media screen and (min-width: 800px) { .one-half { width: calc(50% - (30px / 2)); } }
     /** Jsee elements */
     .app-container { background-color: #F0F1F4; border-bottom: 1px solid #e8e8e8; padding-bottom: 55px }
-    #save-html-btn:hover { background-color: #f0f0f0 !important; }
     .schema-description { background-color: #f8f8fa; padding: 20px; margin-top: 20px; border-radius: 10px; border: 1px solid #e8e8e8; }
     .schema-description h2, .schema-description h3, .schema-description h4 { margin-top: 10px; }
     /** Logos */
@@ -916,10 +923,10 @@ function template(schema, blocks) {
 </head>
 <body>
   ${blocks.hiddenElementHtml}
-  ${blocks.serveBarHtml}
   <header class="site-header">
     <div class="wrapper">
       <span class="site-title">${title}</span>
+      ${blocks.headerRightHtml}
     </div>
   </header>
   <div class="page-content app-container">
@@ -970,9 +977,39 @@ function template(schema, blocks) {
         env = new JSEE({ container: container, schema: currentSchema })
       })
     }
-    var saveBtn = document.getElementById('save-html-btn')
-    if (saveBtn) {
-      saveBtn.addEventListener('click', function () { env.download("${title}") })
+    var downloadBtn = document.getElementById('download-html-btn')
+    if (downloadBtn) {
+      var downloadTitle = ${JSON.stringify(title)}
+      function formatHtmlSize(bytes) {
+        if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+        if (bytes >= 1024) return Math.round(bytes / 1024) + ' KB'
+        return bytes + ' B'
+      }
+      function getDownloadHtml() {
+        return '<!DOCTYPE html>\n' + document.documentElement.outerHTML
+      }
+      function getDownloadFilename() {
+        var base = (downloadTitle || 'jsee').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')
+        return (base || 'jsee') + '.html'
+      }
+      function updateDownloadLabel() {
+        var html = getDownloadHtml()
+        var size = new Blob([html], { type: 'text/html' }).size
+        downloadBtn.textContent = 'Download HTML - ' + formatHtmlSize(size)
+      }
+      downloadBtn.addEventListener('click', function () {
+        var html = getDownloadHtml()
+        var blob = new Blob([html], { type: 'text/html' })
+        var url = URL.createObjectURL(blob)
+        var a = document.createElement('a')
+        a.href = url
+        a.download = getDownloadFilename()
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        setTimeout(function () { URL.revokeObjectURL(url) }, 0)
+      })
+      setTimeout(updateDownloadLabel, 0)
     }
   </script>
 </body>
@@ -1612,20 +1649,17 @@ Documentation: https://jsee.org
 
   }
 
-  // Build serve bar (only when serving, not for -o output)
-  let serveBarHtml = ''
+  // Build right-side header status/action. Serve mode shows only runtime status; bundled files can download themselves.
+  let headerRightHtml = ''
   let schemaScript = ''
   const isServing = !hasOutputs
   if (isServing) {
     const toggleHtml = shouldExecute
-      ? '<label style="cursor:pointer"><input type="checkbox" id="exec-toggle" style="margin-right:4px">Browser</label>'
+      ? '<label class="jsee-header-toggle"><input type="checkbox" id="exec-toggle">Browser</label>'
       : ''
-    serveBarHtml = `<div id="jsee-serve-bar" style="background:#f8f8f8;border-bottom:1px solid #e0e0e0;padding:6px 15px;font-size:13px;color:#828282;display:flex;align-items:center;gap:16px">
-      <span style="font-family:monospace">localhost:${argv.port}</span>
-      <span style="flex:1"></span>
-      ${toggleHtml}
-      <button id="save-html-btn" style="background:none;border:1px solid #ddd;border-radius:3px;padding:3px 10px;font-size:12px;color:#555;cursor:pointer" title="Save as self-contained HTML file">Save HTML</button>
-    </div>`
+    headerRightHtml = `<div class="jsee-header-actions">${toggleHtml}<span class="jsee-header-badge">localhost:${argv.port}</span></div>`
+  } else if (shouldBundle) {
+    headerRightHtml = '<div class="jsee-header-actions"><button id="download-html-btn" class="jsee-header-button" type="button" title="Download this standalone HTML file">Download HTML</button></div>'
   }
   if (shouldExecute) {
     const clientSchema = JSON.parse(JSON.stringify(schema))
@@ -1643,7 +1677,7 @@ Documentation: https://jsee.org
     hiddenElementHtml: hiddenElementHtml,
     socialHtml: pad(socialHtml, 2, 1),
     orgHtml: pad(orgHtml, 2, 1),
-    serveBarHtml: serveBarHtml,
+    headerRightHtml: headerRightHtml,
     schemaScript: schemaScript,
   })
 
