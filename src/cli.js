@@ -6,7 +6,7 @@ const Module = require('module')
 
 const minimist = require('minimist')
 
-const { getModelFuncJS, sanitizeName, generateOpenAPISpec, serializeResult, parseMultipart, fileExtToOutputType } = require('./utils.js')
+const { getModelFuncJS, sanitizeName, isRecordObject, normalizeFileOutputValue, generateOpenAPISpec, serializeResult, parseMultipart, fileExtToOutputType } = require('./utils.js')
 
 let jsdoc2md
 function getJsdocToMarkdown () {
@@ -187,6 +187,10 @@ async function runPackage (dirname, args=[]) {
     pargv.push('--description', packageInput.descriptionPath)
   }
   pargv.push(...args)
+
+  if (hasArgOption(args, ['--run'])) {
+    return await gen(pargv)
+  }
 
   const previousCwd = process.cwd()
   process.chdir(packageInput.packageRoot)
@@ -391,6 +395,396 @@ function writeOutputFile (cwd, outputPath, content) {
   const resolved = resolveOutputPath(cwd, outputPath)
   fs.mkdirSync(path.dirname(resolved), { recursive: true })
   fs.writeFileSync(resolved, content)
+}
+
+// Run mode helpers
+function getInputDefaultValue (input) {
+  if (!input || typeof input !== 'object') return undefined
+  if (input.type === 'group' && Array.isArray(input.elements)) {
+    const value = {}
+    input.elements.forEach(element => {
+      const elementValue = getInputDefaultValue(element)
+      if (typeof elementValue !== 'undefined' && element.name) value[element.name] = elementValue
+    })
+    return value
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'default')) return input.default
+
+  switch (input.type) {
+    case 'int':
+    case 'float':
+    case 'number':
+      return 0
+    case 'string':
+    case 'text':
+      return ''
+    case 'color':
+      return '#000000'
+    case 'categorical':
+    case 'select':
+    case 'radio':
+      return input.options && input.options.length ? input.options[0] : ''
+    case 'bool':
+    case 'checkbox':
+    case 'toggle':
+      return false
+    case 'multi-select':
+      return []
+    case 'range':
+      return [input.min || 0, input.max || 100]
+    case 'slider':
+      return input.min || 0
+    case 'folder':
+      return input.default || []
+    case 'file':
+      return ''
+    default:
+      return undefined
+  }
+}
+
+function getSchemaInputDefaults (schema) {
+  const data = {}
+  if (!schema.inputs) return data
+  schema.inputs.forEach(input => {
+    if (!input.name) return
+    const value = getInputDefaultValue(input)
+    if (typeof value !== 'undefined') data[input.name] = value
+  })
+  return data
+}
+
+function loadBrowserStyleModelFunction (src, model, modelPath) {
+  const modelName = getModelExportName(model)
+  const localRequire = modelPath
+    ? Module.createRequire(modelPath)
+    : require
+  const moduleShim = { exports: {} }
+  const dirname = modelPath ? path.dirname(modelPath) : process.cwd()
+  const filename = modelPath || path.join(dirname, '__jsee_model__.js')
+
+  const fn = new Function(
+    'require',
+    'module',
+    'exports',
+    '__filename',
+    '__dirname',
+    `${src}
+return typeof ${toJsIdentifier(modelName)} === 'function' ? ${toJsIdentifier(modelName)} : (module.exports && (module.exports.default || module.exports[${JSON.stringify(modelName)}] || module.exports))`
+  )
+  const target = fn(localRequire, moduleShim, moduleShim.exports, filename, dirname)
+  if (typeof target === 'function') return target
+  if (target && typeof target === 'object') {
+    if (typeof target[modelName] === 'function') return target[modelName]
+    if (typeof target.default === 'function') return target.default
+  }
+  return target
+}
+
+function resolveExportedTarget (target, model) {
+  const modelName = getModelExportName(model)
+  if (typeof target === 'function') return target
+  if (target && typeof target === 'object') {
+    if (typeof target[modelName] === 'function') return target[modelName]
+    if (typeof target.default === 'function') return target.default
+  }
+  return target
+}
+
+async function loadCliModelFunction (model, schemaPath, cwd, log) {
+  if (model.type === 'get' || model.type === 'post') {
+    throw new Error(`--run cannot execute remote ${model.type.toUpperCase()} model ${model.name || model.url}. Use a local JavaScript model.`)
+  }
+  if (model.type === 'py') {
+    throw new Error('--run currently supports local JavaScript models. Python model execution is available through the dev server/API path.')
+  }
+
+  let target
+  let modelPath = null
+
+  if (typeof model.code === 'function') {
+    target = model.code
+  } else if (typeof model.code === 'string' && model.code.trim()) {
+    try {
+      target = loadBrowserStyleModelFunction(model.code, model, null)
+    } catch (error) {
+      target = undefined
+    }
+    if (typeof target !== 'function') {
+      try {
+        target = new Function(`return (${model.code})`)()
+      } catch (error) {
+        // Keep the clearer error below.
+      }
+    }
+  } else if (model.url && !isHttpUrl(model.url)) {
+    modelPath = path.resolve(schemaPath ? path.dirname(schemaPath) : cwd, model.url)
+    target = resolveExportedTarget(require(modelPath), model)
+    if (typeof target !== 'function' && (!target || Object.keys(target).length === 0)) {
+      const src = fs.readFileSync(modelPath, 'utf-8')
+      target = loadBrowserStyleModelFunction(src, model, modelPath)
+    }
+  } else {
+    throw new Error(`--run requires local model code or a local model url for ${model.name || 'model'}`)
+  }
+
+  target = resolveExportedTarget(target, model)
+  if (typeof target !== 'function') {
+    throw new Error(`Could not load a callable function for model ${model.name || model.url || 'model'}`)
+  }
+
+  return getModelFuncJS(model, target, {
+    log,
+    progress: () => {},
+    isCancelled: () => false
+  })
+}
+
+async function runSchemaOnce (schema, data, schemaPath, cwd, log) {
+  let result = data
+  for (const model of schema.model) {
+    const modelFunc = await loadCliModelFunction(model, schemaPath, cwd, log)
+    const next = await modelFunc(result)
+    if (isRecordObject(result) && isRecordObject(next)) {
+      result = Object.assign({}, result, next)
+    } else if (typeof next !== 'undefined') {
+      result = next
+    }
+    if (isRecordObject(result) && result.stop) break
+  }
+  return result
+}
+
+function flattenOutputs (outputs, flat=[]) {
+  if (!Array.isArray(outputs)) return flat
+  outputs.forEach(output => {
+    if (output && output.type === 'group' && Array.isArray(output.elements)) {
+      flattenOutputs(output.elements, flat)
+    } else if (output) {
+      flat.push(output)
+    }
+  })
+  return flat
+}
+
+function cleanRunResultObject (result) {
+  if (!isRecordObject(result)) return result
+  const clean = Object.assign({}, result)
+  delete clean.caller
+  delete clean.stop
+  delete clean._status
+  delete clean._log
+  delete clean._progress
+  return clean
+}
+
+function getRunOutputValue (result, output) {
+  if (!isRecordObject(result)) return result
+  const names = [output.name, sanitizeName(output.name)]
+  if (output.alias) names.push(output.alias)
+  for (const name of names) {
+    if (name && Object.prototype.hasOwnProperty.call(result, name)) return result[name]
+  }
+  if (Object.prototype.hasOwnProperty.call(output, 'value')) return output.value
+  return undefined
+}
+
+function getRunOutputEntries (schema, result) {
+  const cleanResult = cleanRunResultObject(result)
+  const outputs = flattenOutputs(schema.outputs || [])
+  if (outputs.length) {
+    return outputs.map((output, index) => {
+      let value = getRunOutputValue(cleanResult, output)
+      if (typeof value === 'undefined' && outputs.length === 1 && !isRecordObject(cleanResult)) value = cleanResult
+      return {
+        output,
+        name: output.name || `output_${index + 1}`,
+        value
+      }
+    }).filter(entry => typeof entry.value !== 'undefined')
+  }
+
+  if (isRecordObject(cleanResult)) {
+    return Object.keys(cleanResult).map(key => ({
+      output: { name: key, type: typeof cleanResult[key] },
+      name: key,
+      value: cleanResult[key]
+    }))
+  }
+
+  return [{
+    output: { name: 'result', type: typeof cleanResult },
+    name: 'result',
+    value: cleanResult
+  }]
+}
+
+function getRunFileDescriptor (output, value) {
+  if (output.type !== 'file') {
+    return { value, filename: output.filename || output.name, mime: output.mime || output.contentType }
+  }
+  return normalizeFileOutputValue(output, value)
+}
+
+function extensionFromMime (mime) {
+  if (!mime || typeof mime !== 'string') return null
+  const clean = mime.split(';')[0].trim().toLowerCase()
+  const map = {
+    'text/csv': '.csv',
+    'text/plain': '.txt',
+    'text/markdown': '.md',
+    'text/html': '.html',
+    'application/json': '.json',
+    'application/pdf': '.pdf',
+    'image/png': '.png',
+    'image/jpeg': '.jpg',
+    'image/svg+xml': '.svg'
+  }
+  return map[clean] || null
+}
+
+function extensionForRunOutput (output, value, descriptor) {
+  if (descriptor && descriptor.filename && path.extname(descriptor.filename)) return path.extname(descriptor.filename)
+  if (descriptor && descriptor.mime) {
+    const mimeExt = extensionFromMime(descriptor.mime)
+    if (mimeExt) return mimeExt
+  }
+
+  switch ((output.type || '').toLowerCase()) {
+    case 'file':
+      return '.txt'
+    case 'markdown':
+      return '.md'
+    case 'html':
+      return '.html'
+    case 'code':
+    case 'text':
+    case 'string':
+    case 'chat':
+      return '.txt'
+    case 'image':
+      return '.png'
+    case 'pdf':
+      return '.pdf'
+    default:
+      return '.json'
+  }
+}
+
+function getRunOutputFilename (entry) {
+  const descriptor = getRunFileDescriptor(entry.output, entry.value)
+  const base = descriptor.filename
+    ? path.basename(String(descriptor.filename))
+    : sanitizeName(entry.name || 'output')
+  if (path.extname(base)) return base
+  return base + extensionForRunOutput(entry.output, descriptor.value, descriptor)
+}
+
+function formatRunOutputContent (entry, forStdout=false) {
+  const descriptor = getRunFileDescriptor(entry.output, entry.value)
+  const value = descriptor.value
+  const type = (entry.output.type || '').toLowerCase()
+
+  if (Buffer.isBuffer(value)) return { content: value, addNewline: false }
+  if (value instanceof Uint8Array) return { content: Buffer.from(value), addNewline: false }
+
+  if (type === 'file') {
+    if (isRecordObject(value) || Array.isArray(value)) {
+      return { content: JSON.stringify(value, null, 2), addNewline: true }
+    }
+    return { content: typeof value === 'undefined' || value === null ? '' : String(value), addNewline: false }
+  }
+
+  if (['text', 'string', 'code', 'markdown', 'html', 'chat'].includes(type)) {
+    if (isRecordObject(value) || Array.isArray(value)) {
+      return { content: JSON.stringify(value, null, 2), addNewline: true }
+    }
+    return { content: typeof value === 'undefined' || value === null ? '' : String(value), addNewline: true }
+  }
+
+  if (typeof value === 'string' && forStdout && !['table', 'object', 'array', 'json'].includes(type)) {
+    return { content: value, addNewline: true }
+  }
+
+  return { content: JSON.stringify(value, null, 2), addNewline: true }
+}
+
+function writeRunContent (target, formatted) {
+  let content = formatted.content
+  if (typeof content === 'string' && formatted.addNewline && !content.endsWith('\n')) content += '\n'
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  fs.writeFileSync(target, content)
+}
+
+function writeRunStdout (formatted) {
+  let content = formatted.content
+  if (typeof content === 'string' && formatted.addNewline && !content.endsWith('\n')) content += '\n'
+  process.stdout.write(content)
+}
+
+function getRunOutputsDirectory (outputs, cwd) {
+  if (!outputs) return null
+  const value = Array.isArray(outputs) ? outputs[0] : outputs
+  if (value === true || typeof value !== 'string') {
+    throw new Error('--outputs in --run mode expects a directory path')
+  }
+  return resolveOutputPath(cwd, value)
+}
+
+function getRunOutputTarget (entry, argv, inputNames, cwd) {
+  const outputName = sanitizeName(entry.name)
+  const explicitKey = `output-${outputName}`
+  let value
+  if (Object.prototype.hasOwnProperty.call(argv, explicitKey)) {
+    value = argv[explicitKey]
+  } else if (!inputNames.has(outputName) && Object.prototype.hasOwnProperty.call(argv, outputName)) {
+    value = argv[outputName]
+  }
+  if (typeof value === 'undefined') return null
+  if (value === true || typeof value !== 'string') {
+    throw new Error(`Output target --${outputName} requires a file path`)
+  }
+  return resolveOutputPath(cwd, value)
+}
+
+function emitRunOutputs (schema, result, argv, outputs, cwd) {
+  const entries = getRunOutputEntries(schema, result)
+  const inputNames = new Set((schema.inputs || []).map(input => sanitizeName(input.name)))
+  const outputDir = getRunOutputsDirectory(outputs, cwd)
+  const targets = new Map()
+
+  entries.forEach(entry => {
+    const target = getRunOutputTarget(entry, argv, inputNames, cwd)
+    if (target) targets.set(entry.name, target)
+  })
+
+  if (outputDir) {
+    fs.mkdirSync(outputDir, { recursive: true })
+    entries.forEach(entry => {
+      const target = targets.get(entry.name) || path.join(outputDir, getRunOutputFilename(entry))
+      writeRunContent(target, formatRunOutputContent(entry))
+    })
+    return
+  }
+
+  if (targets.size) {
+    entries.forEach(entry => {
+      const target = targets.get(entry.name)
+      if (target) writeRunContent(target, formatRunOutputContent(entry))
+    })
+    return
+  }
+
+  if (entries.length === 1) {
+    writeRunStdout(formatRunOutputContent(entries[0], true))
+    return
+  }
+
+  const resultObject = {}
+  entries.forEach(entry => {
+    resultObject[entry.name] = entry.value
+  })
+  writeRunStdout({ content: JSON.stringify(resultObject, null, 2), addNewline: true })
 }
 
 let optionalEsbuild
@@ -1034,7 +1428,7 @@ async function gen (pargv, returnHtml=false) {
     execute: 'e',
     cdn: 'c',
     runtime: 'r',
-    serve: 's',
+    serve: 's'
   }
   const argvDefault = {
     execute: 'auto', // execute the model code on the server (auto = server-side when serving local .js models)
@@ -1045,12 +1439,14 @@ async function gen (pargv, returnHtml=false) {
     verbose: false, // verbose mode
     cdn: false,
     runtime: 'auto',
-    serve: false
+    serve: false,
+    run: false
   }
+  const booleanArgs = ['help', 'h', 'html', 'client', 'serve', 'run']
   let argv = minimist(pargv, {
     alias: argvAlias,
     default: argvDefault,
-    boolean: ['help', 'h', 'html', 'client', 'serve'],
+    boolean: booleanArgs,
   })
 
   // ── jsee init <template> ──────────────────────────────────────────
@@ -1204,6 +1600,7 @@ Options:
   -b, --bundle             Bundle runtime + dependencies into output
   -f, --fetch               Alias for --bundle
   -s, --serve               Serve explicitly (default when no output is provided)
+      --run                 Execute the model once and write pipeable outputs
   -e, --execute             Execute model server-side (auto-enabled when serving local .js models)
       --client              Force client-side execution (disable auto server-side)
   -c, --cdn <url|bool>      Rewrite model URLs for CDN deployment
@@ -1227,6 +1624,8 @@ Examples:
   jsee schema.json data.csv         Pass a file path as input
   jsee schema.json -o app.html      Generate static HTML file
   jsee schema.json -o app.html --bundle  Generate self-contained HTML with bundled runtime
+  jsee @statsim/gen --run --dataset Moons --format CSV --nSamples 500
+  jsee @statsim/gen --run --dataset Moons --file moons.csv
   jsee -p 8080                      Start dev server on port 8080
   jsee report.pdf                   Serve a PDF file (auto-detected viewer)
   jsee data/                        Serve a folder (file browser with preview)
@@ -1298,7 +1697,7 @@ Documentation: https://jsee.org
   }
 
   // if outputs is a string with js file names, split it into an array
-  if (typeof outputs === 'string') {
+  if (typeof outputs === 'string' && !argv.run) {
     outputs = outputs.split(',')
   }
 
@@ -1343,8 +1742,11 @@ Documentation: https://jsee.org
     schema.inputs.forEach((inp, inp_index) => {
       if (inp.name) {
         const inputName = sanitizeName(inp.name)
-        if (inp.alias) {
-          argvAlias[inputName] = inp.alias
+        const inputAliases = []
+        if (inp.alias) inputAliases.push(...toArray(inp.alias))
+        if (inp.name !== inputName) inputAliases.push(inp.name)
+        if (inputAliases.length) {
+          argvAlias[inputName] = inputAliases
         }
         // Use positional arguments as schema input defaults
         if (imported && argv._.length > inp_index) {
@@ -1367,6 +1769,7 @@ Documentation: https://jsee.org
   argv = minimist(pargv, {
     alias: argvAlias,
     default: argvDefault,
+    boolean: booleanArgs
   })
 
   // Now deactivate the inputs present in argv
@@ -1397,6 +1800,17 @@ Documentation: https://jsee.org
     schema.model = [schema.model]
   }
 
+  if (argv.run) {
+    const data = Object.assign(
+      {},
+      getSchemaInputDefaults(schema),
+      getDataFromArgv(schema, argv, true)
+    )
+    const result = await runSchemaOnce(schema, data, schemaPath, cwd, log)
+    emitRunOutputs(schema, result, argv, outputs, process.cwd())
+    return result
+  }
+
   // Resolve server-side execution mode
   const hasOutputs = Array.isArray(outputs) ? outputs.length > 0 : Boolean(outputs)
   let shouldExecute = argv.execute
@@ -1423,18 +1837,7 @@ Documentation: https://jsee.org
   if (shouldExecute) {
     await Promise.all(schema.model.map(async m => {
       log('Preparing a model to run on the server side:', m.name, m.url)
-      const modelPath = path.join(schemaPath ? path.dirname(schemaPath) : cwd, m.url)
-      let target = require(modelPath)
-      // Handle browser-style model files (no module.exports) — eval the source
-      // to extract the named function, similar to how the worker does it
-      if (typeof target !== 'function' && (!target || Object.keys(target).length === 0)) {
-        const src = fs.readFileSync(modelPath, 'utf-8')
-        const fn = new Function(src + `\nreturn typeof ${m.name} === 'function' ? ${m.name} : undefined`)()
-        if (typeof fn === 'function') {
-          target = fn
-        }
-      }
-      modelFuncs[m.name] = await getModelFuncJS(m, target, {log})
+      modelFuncs[m.name] = await loadCliModelFunction(m, schemaPath, cwd, log)
       m.type = 'post'
       m.url = `/${m.name}`
       m.worker = false
@@ -1815,3 +2218,5 @@ module.exports.writeOutputFile = writeOutputFile
 module.exports.needsFullBundle = needsFullBundle
 module.exports.shouldBundleModelCode = shouldBundleModelCode
 module.exports.bundleModelCode = bundleModelCode
+module.exports.runSchemaOnce = runSchemaOnce
+module.exports.emitRunOutputs = emitRunOutputs

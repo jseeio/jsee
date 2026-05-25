@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.7
+### Features:
+- Add `jsee --run` for one-shot CLI execution of local JavaScript JSEE apps. Default output is pipeable stdout; `--outputs <dir>` writes all outputs into a directory; named output flags such as `--file out.csv` write individual outputs.
+- Allow raw camelCase schema input names on the CLI, so inputs such as `nSamples` work with both `--nSamples` and sanitized `--nsamples`.
+
+### Fixes:
+- Keep `runPackage(..., ['--run', ...])` output paths relative to the caller working directory instead of the package root.
+
 ## 0.8.1
 ### Fixes:
 - Fix `jsee init` JavaScript templates so generated minimal and chat apps accept the default object payload in both browser and server-side execution modes.

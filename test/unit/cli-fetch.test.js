@@ -21,6 +21,42 @@ function runHiddenModel (code, name, input) {
   return context[name](input)
 }
 
+async function captureStdout (fn) {
+  const chunks = []
+  const originalWrite = process.stdout.write
+  process.stdout.write = function (chunk, encoding, callback) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), typeof encoding === 'string' ? encoding : 'utf8'))
+    if (typeof encoding === 'function') encoding()
+    if (typeof callback === 'function') callback()
+    return true
+  }
+  try {
+    await fn()
+  } finally {
+    process.stdout.write = originalWrite
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+function writeJseePackage (tmpDir, specifier, schema, modelCode) {
+  const parts = specifier.startsWith('@') ? specifier.split('/') : [specifier]
+  const packageDir = specifier.startsWith('@')
+    ? path.join(tmpDir, 'node_modules', parts[0], parts[1])
+    : path.join(tmpDir, 'node_modules', specifier)
+  fs.mkdirSync(packageDir, { recursive: true })
+  fs.writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify({
+    name: specifier,
+    version: '1.0.0',
+    main: 'model.js',
+    exports: { '.': './model.js' },
+    jsee: 'schema.json'
+  }, null, 2))
+  fs.writeFileSync(path.join(packageDir, 'schema.json'), JSON.stringify(schema, null, 2))
+  fs.writeFileSync(path.join(packageDir, 'model.js'), modelCode)
+  fs.writeFileSync(path.join(packageDir, 'README.md'), `# ${specifier}\n`)
+  return packageDir
+}
+
 describe('collectFetchBundleBlocks', () => {
   test('collects model, view and render blocks', () => {
     const schema = {
@@ -300,6 +336,108 @@ describe('package input resolution', () => {
     expect(html).toContain('localhost:4567')
     expect(html).not.toContain('id="download-html-btn"')
     expect(html).not.toContain('save-html-btn')
+  })
+
+  test('runs package input once and writes a single output to stdout', async () => {
+    const stdout = await captureStdout(() =>
+      gen(['--inputs', '@statsim/demo', '--run', '--x', '4'])
+    )
+
+    expect(stdout).toBe('5\n')
+  })
+
+  test('accepts raw camelCase schema input names in run mode', async () => {
+    writeJseePackage(tmpDir, '@statsim/camel-demo', {
+      model: { name: 'camelDemo', url: 'model.js', worker: false },
+      inputs: [{ name: 'nSamples', type: 'int', default: 2 }],
+      outputs: [{ name: 'rows', type: 'number' }]
+    }, `module.exports = function camelDemo (input) {
+  return { rows: input.nSamples }
+}
+`)
+
+    const stdout = await captureStdout(() =>
+      gen(['--inputs', '@statsim/camel-demo', '--run', '--nSamples', '4'])
+    )
+
+    expect(stdout).toBe('4\n')
+  })
+
+  test('streams a single file output to stdout', async () => {
+    writeJseePackage(tmpDir, '@statsim/file-demo', {
+      model: { name: 'fileDemo', url: 'model.js', worker: false },
+      inputs: [{ name: 'name', type: 'string', default: 'World' }],
+      outputs: [{ name: 'file', type: 'file' }]
+    }, `module.exports = function fileDemo (input) {
+  return { file: { filename: 'demo.txt', content: 'hello ' + input.name, mime: 'text/plain' } }
+}
+`)
+
+    const stdout = await captureStdout(() =>
+      gen(['--inputs', '@statsim/file-demo', '--run', '--name', 'Ada'])
+    )
+
+    expect(stdout).toBe('hello Ada')
+  })
+
+  test('writes a named output target in run mode', async () => {
+    writeJseePackage(tmpDir, '@statsim/file-demo', {
+      model: { name: 'fileDemo', url: 'model.js', worker: false },
+      inputs: [{ name: 'name', type: 'string', default: 'World' }],
+      outputs: [{ name: 'file', type: 'file' }]
+    }, `module.exports = function fileDemo (input) {
+  return { file: { filename: 'demo.txt', content: 'hello ' + input.name, mime: 'text/plain' } }
+}
+`)
+    const outputPath = path.join(tmpDir, 'named.txt')
+
+    await gen(['--inputs', '@statsim/file-demo', '--run', '--name', 'Ada', '--file', outputPath])
+
+    expect(fs.readFileSync(outputPath, 'utf8')).toBe('hello Ada')
+  })
+
+  test('writes all outputs into a directory in run mode', async () => {
+    writeJseePackage(tmpDir, '@statsim/multi-demo', {
+      model: { name: 'multiDemo', url: 'model.js', worker: false },
+      inputs: [],
+      outputs: [
+        { name: 'train', type: 'table' },
+        { name: 'test', type: 'table' },
+        { name: 'note', type: 'text' }
+      ]
+    }, `module.exports = function multiDemo () {
+  return {
+    train: [{ x: 1, y: 2 }],
+    test: [{ x: 3, y: 4 }],
+    note: 'ready'
+  }
+}
+`)
+    const outputDir = path.join(tmpDir, 'run-output')
+
+    await gen(['--inputs', '@statsim/multi-demo', '--run', '--outputs', outputDir])
+
+    expect(JSON.parse(fs.readFileSync(path.join(outputDir, 'train.json'), 'utf8'))).toEqual([{ x: 1, y: 2 }])
+    expect(JSON.parse(fs.readFileSync(path.join(outputDir, 'test.json'), 'utf8'))).toEqual([{ x: 3, y: 4 }])
+    expect(fs.readFileSync(path.join(outputDir, 'note.txt'), 'utf8')).toBe('ready\n')
+  })
+
+  test('runPackage writes run output targets relative to the caller cwd', async () => {
+    const filePackageDir = writeJseePackage(tmpDir, '@statsim/file-demo', {
+      model: { name: 'fileDemo', url: 'model.js', worker: false },
+      inputs: [],
+      outputs: [{ name: 'file', type: 'file' }]
+    }, `module.exports = function fileDemo () {
+  return { file: { filename: 'demo.txt', content: 'hello bin', mime: 'text/plain' } }
+}
+`)
+    const binDir = path.join(filePackageDir, 'bin')
+    fs.mkdirSync(binDir)
+
+    await runPackage(binDir, ['--run', '--file', 'from-bin.txt'])
+
+    expect(fs.readFileSync(path.join(tmpDir, 'from-bin.txt'), 'utf8')).toBe('hello bin')
+    expect(fs.existsSync(path.join(filePackageDir, 'from-bin.txt'))).toBe(false)
   })
 })
 

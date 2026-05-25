@@ -34,7 +34,7 @@ Smallest browser example:
 <script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@latest/dist/jsee.core.js"></script>
 ```
 
-Pin a version for production, for example `@jseeio/jsee@0.8.1`.
+Pin a version for production, for example `@jseeio/jsee@0.8.7`.
 
 **npm CLI/dev server:**
 
@@ -534,10 +534,14 @@ jsee schema.json                       # dev server on port 3000
 jsee @statsim/gen --serve              # serve a resolvable JSEE app package
 jsee schema.json -o app.html           # generate static HTML
 jsee @statsim/gen -o app.html --bundle # bundled HTML from package app
+jsee @statsim/gen --run --dataset Moons --nSamples 500
+jsee @statsim/gen --run --dataset Moons --file moons.csv
 npx -p @jseeio/jsee -p @statsim/gen jsee @statsim/gen --serve
 ```
 
 JSEE app packages can also expose their own bin with `require('@jseeio/jsee').runPackage(__dirname, process.argv.slice(2))`. The helper reads the package `jsee` field, uses the package root as the app root, and forwards ordinary JSEE CLI options.
+
+Use `--run` for one-shot CLI execution. With no output target, JSEE writes a pipeable stdout stream: a single `file` output writes its file content, a single text/table/object output writes that value, and multiple outputs write a JSON object. In `--run` mode, `--outputs <dir>` writes all outputs into a directory, while an output-name flag such as `--file moons.csv` or `--output-file moons.csv` writes one named output to a specific path.
 
 ### Options
 
@@ -551,6 +555,7 @@ JSEE app packages can also expose their own bin with `require('@jseeio/jsee').ru
 | `-b, --bundle` | Bundle runtime + all deps into a single offline HTML |
 | `-f, --fetch` | Backward-compatible alias for `--bundle` |
 | `-s, --serve` | Serve explicitly (default when no output is provided) |
+| `--run` | Execute the model once from the CLI and write pipeable outputs |
 | `-e, --execute` | Run models server-side (auto-enabled when serving local .js models) |
 | `--client` | Force client-side execution (disable auto server-side) |
 | `-c, --cdn <url\|bool>` | Rewrite model URLs for CDN deployment |

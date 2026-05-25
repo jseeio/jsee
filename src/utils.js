@@ -5,6 +5,41 @@ function isObject (item) {
   return (typeof item === 'object' && !Array.isArray(item) && item !== null)
 }
 
+function isBinaryLike (value) {
+  if (!value || typeof value !== 'object') return false
+  if (typeof Buffer !== 'undefined' && Buffer.isBuffer && Buffer.isBuffer(value)) return true
+  if (typeof ArrayBuffer !== 'undefined' && value instanceof ArrayBuffer) return true
+  if (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView && ArrayBuffer.isView(value)) return true
+  return false
+}
+
+function isRecordObject (item) {
+  return isObject(item) && !isBinaryLike(item)
+}
+
+function normalizeFileOutputValue (output, value) {
+  const source = output || {}
+  const fallback = {
+    value,
+    filename: source.filename || source.name,
+    mime: source.mime || source.contentType
+  }
+
+  if (!isRecordObject(value)) return fallback
+
+  let content = value
+  if (Object.prototype.hasOwnProperty.call(value, 'content')) content = value.content
+  else if (Object.prototype.hasOwnProperty.call(value, 'value')) content = value.value
+  else if (Object.prototype.hasOwnProperty.call(value, 'data')) content = value.data
+  else if (Object.prototype.hasOwnProperty.call(value, 'url')) content = value.url
+
+  return {
+    value: content,
+    filename: value.filename || value.name || fallback.filename,
+    mime: value.mime || value.contentType || fallback.mime
+  }
+}
+
 function shouldPreserveWorkerValue (value) {
   if (!value || typeof value !== 'object') {
     return true
@@ -1291,6 +1326,9 @@ function inferOutputType (key, value) {
 
 module.exports = {
   isObject,
+  isBinaryLike,
+  isRecordObject,
+  normalizeFileOutputValue,
   loadFromDOM,
   getModelFuncJS,
   getModelFuncAPI,

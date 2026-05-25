@@ -1010,16 +1010,11 @@ export default class JSEE {
           || (output.alias && res[output.alias])
         if (typeof r !== 'undefined') {
           log(`Updating output: ${output.name} with data: ${typeof r}`)
-          if (output.type === 'file' && r && typeof r === 'object' && !Array.isArray(r)) {
-            if (typeof r.filename === 'string') output.filename = r.filename
-            if (typeof r.name === 'string' && !output.filename) output.filename = r.name
-            if (typeof r.mime === 'string') output.mime = r.mime
-            if (typeof r.contentType === 'string') output.mime = r.contentType
-            if (Object.prototype.hasOwnProperty.call(r, 'content')) output.value = r.content
-            else if (Object.prototype.hasOwnProperty.call(r, 'value')) output.value = r.value
-            else if (Object.prototype.hasOwnProperty.call(r, 'data')) output.value = r.data
-            else if (Object.prototype.hasOwnProperty.call(r, 'url')) output.value = r.url
-            else output.value = r
+          if (output.type === 'file') {
+            const fileValue = utils.normalizeFileOutputValue(output, r)
+            if (typeof fileValue.filename === 'string') output.filename = fileValue.filename
+            if (typeof fileValue.mime === 'string') output.mime = fileValue.mime
+            output.value = fileValue.value
             return
           }
           // Convert large base64 image data URLs to blob URLs for efficiency
