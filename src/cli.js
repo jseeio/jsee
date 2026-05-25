@@ -852,6 +852,64 @@ function buildBundledModelExposeCode (bundleGlobalName, modelName) {
 `
 }
 
+
+function escapeRegExp (value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function readPackageJsonForFile (filePath) {
+  try {
+    const packageRoot = findPackageRoot(filePath)
+    const packageJsonPath = path.join(packageRoot, 'package.json')
+    return {
+      packageRoot,
+      packageJson: JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'))
+    }
+  } catch (error) {
+    return null
+  }
+}
+
+function createEmptyModulePlugin (specifiers) {
+  const list = Array.from(new Set(specifiers.filter(Boolean)))
+  if (!list.length) return null
+  const filter = new RegExp(`^(?:${list.map(escapeRegExp).join('|')})$`)
+  return {
+    name: 'jsee-empty-browser-modules',
+    setup (build) {
+      build.onResolve({ filter }, args => ({ path: args.path, namespace: 'jsee-empty' }))
+      build.onLoad({ filter: /.*/, namespace: 'jsee-empty' }, () => ({ contents: 'module.exports = {}', loader: 'js' }))
+    }
+  }
+}
+
+function getBrowserFieldEsbuildOptions (modelPath) {
+  const packageInfo = readPackageJsonForFile(modelPath)
+  if (!packageInfo) return {}
+
+  const browser = packageInfo.packageJson.browser
+  if (!browser || typeof browser !== 'object' || Array.isArray(browser)) {
+    return { absWorkingDir: packageInfo.packageRoot }
+  }
+
+  const alias = {}
+  const empty = []
+  Object.entries(browser).forEach(([key, value]) => {
+    if (!key || key.startsWith('.') || key.startsWith('/')) return
+    if (value === false) empty.push(key)
+    else if (typeof value === 'string' && value.length) alias[key] = value
+  })
+
+  const plugins = []
+  const emptyPlugin = createEmptyModulePlugin(empty)
+  if (emptyPlugin) plugins.push(emptyPlugin)
+
+  const options = { absWorkingDir: packageInfo.packageRoot }
+  if (Object.keys(alias).length) options.alias = alias
+  if (plugins.length) options.plugins = plugins
+  return options
+}
+
 async function bundleModelCode (model, modelPath, code) {
   if (!shouldBundleModelCode(code)) return code
 
@@ -867,14 +925,14 @@ async function bundleModelCode (model, modelPath, code) {
     throw new Error(`Bundling ${model.url || modelPath} requires a valid JavaScript model name or an explicit module export.`)
   }
 
-  const options = {
+  const options = Object.assign({
     bundle: true,
     write: false,
     platform: 'browser',
     format: 'iife',
     globalName: bundleGlobalName,
     logLevel: 'silent'
-  }
+  }, getBrowserFieldEsbuildOptions(modelPath))
 
   if (needsExportShim) {
     options.stdin = {

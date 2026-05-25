@@ -34,7 +34,7 @@ Smallest browser example:
 <script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@latest/dist/jsee.core.js"></script>
 ```
 
-Pin a version for production, for example `@jseeio/jsee@0.8.7`.
+Pin a version for production, for example `@jseeio/jsee@0.8.8`.
 
 **npm CLI/dev server:**
 

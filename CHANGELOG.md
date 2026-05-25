@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.8 - 2026-05-25
+
+- Applied app package `browser` field aliases during CLI dependency bundling so installed JSEE app packages can bundle legacy browser dependencies reliably.
+
 ## 0.8.7
 ### Features:
 - Add `jsee --run` for one-shot CLI execution of local JavaScript JSEE apps. Default output is pipeable stdout; `--outputs <dir>` writes all outputs into a directory; named output flags such as `--file out.csv` write individual outputs.

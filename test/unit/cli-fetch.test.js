@@ -3,7 +3,7 @@ const os = require('os')
 const path = require('path')
 const vm = require('vm')
 const gen = require('../../src/cli')
-const { collectFetchBundleBlocks, resolveLocalImportFile, resolveFetchImport, resolveRuntimeMode, needsFullBundle, shouldBundleModelCode, resolveJseePackageInput, looksLikeMissingPackageInput, getPackageInputInstallHint, findPackageRoot, runPackage, isPackageSpecifier } = gen
+const { collectFetchBundleBlocks, resolveLocalImportFile, resolveFetchImport, resolveRuntimeMode, needsFullBundle, shouldBundleModelCode, resolveJseePackageInput, looksLikeMissingPackageInput, getPackageInputInstallHint, findPackageRoot, runPackage, isPackageSpecifier, bundleModelCode } = gen
 
 function extractHiddenCode (html, src) {
   const marker = `data-src="${src}"`
@@ -545,6 +545,34 @@ function gen (input) {
     expect(code).toContain('__jsee_bundle_gen')
     expect(code).not.toContain("const scale = require('./helper')")
     expect(runHiddenModel(code, 'gen', { x: 4 })).toEqual({ y: 8 })
+  })
+
+  test('applies package browser aliases while bundling dependencies', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify({
+      name: 'browser-alias-demo',
+      browser: {
+        fs: false,
+        path: './path-shim.js'
+      }
+    }, null, 2))
+    fs.writeFileSync(path.join(tmpDir, 'path-shim.js'), 'exports.join = function () { return Array.prototype.join.call(arguments, "/") }\n')
+    fs.writeFileSync(path.join(tmpDir, 'legacy.js'), `const fs = require('fs')
+const path = require('path')
+module.exports = function legacy () {
+  return path.join('a', 'b') + ':' + typeof fs.readFileSync
+}
+`)
+    const modelPath = path.join(tmpDir, 'model.js')
+    const source = `const legacy = require('./legacy')
+module.exports = function gen () {
+  return { y: legacy() }
+}
+`
+    fs.writeFileSync(modelPath, source)
+
+    const code = await bundleModelCode({ name: 'gen', url: 'model.js' }, modelPath, source)
+
+    expect(runHiddenModel(code, 'gen', {})).toEqual({ y: 'a/b:undefined' })
   })
 
   test('supports legacy fetch alias', async () => {
