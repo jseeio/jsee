@@ -1,15 +1,31 @@
 const {
   isObject,
   sanitizeName,
+  loadFromDOM,
   getUrl,
   delay,
   debounce,
   getName,
   isWorkerInitMessage,
   getProgressState,
+  getIntervalDelay,
   shouldContinueInterval,
   getModelFuncJS,
   getModelFuncAPI,
+  getModuleModelTarget,
+  inferInputsFromModel,
+  normalizeSecurityOptions,
+  normalizePyodideOptions,
+  getPyodideLoadOptions,
+  bindPyodideInputs,
+  getPyodideEntryName,
+  buildPyodideEntryCallCode,
+  pyodideResultToJs,
+  isNetworkUrl,
+  assertNetworkAllowed,
+  assertImportNetworkAllowed,
+  assertEvalAllowed,
+  sanitizeHtml,
   validateSchema,
   toWorkerSerializable,
   wrapStreamInputs,
@@ -29,7 +45,8 @@ const {
   createValidateFn,
   runValidation,
   fileExtToOutputType,
-  inferOutputType
+  inferOutputType,
+  generateOpenAPISpec
 } = require('../../src/utils')
 
 describe('isObject', () => {
@@ -64,6 +81,18 @@ describe('sanitizeName', () => {
   })
   test('handles already clean names', () => {
     expect(sanitizeName('foo')).toBe('foo')
+  })
+})
+
+describe('getModuleModelTarget', () => {
+  test('selects named exports and falls back to default/model', () => {
+    const named = () => 'named'
+    const fallback = () => 'fallback'
+
+    expect(getModuleModelTarget({ predict: named }, { export: 'predict' })).toBe(named)
+    expect(getModuleModelTarget({ default: fallback }, { export: 'missing' })).toBe(fallback)
+    expect(getModuleModelTarget({ model: fallback }, {})).toBe(fallback)
+    expect(() => getModuleModelTarget({}, { export: 'missing' })).toThrow('Module model export not found')
   })
 })
 
@@ -154,6 +183,29 @@ describe('getUrl', () => {
   })
   test('bare names without extension still resolve to CDN', () => {
     expect(getUrl('lodash')).toBe('https://cdn.jsdelivr.net/npm/lodash')
+  })
+})
+
+describe('loadFromDOM', () => {
+  afterEach(() => {
+    delete global.document
+  })
+
+  test('decodes base64 hidden assets', () => {
+    const code = `function demo () {
+  return '</script>'
+}
+`
+    const encoded = Buffer.from(code, 'utf8').toString('base64')
+    global.document = {
+      querySelector: jest.fn(() => ({
+        textContent: encoded,
+        getAttribute: (name) => name === 'data-encoding' ? 'base64' : null
+      }))
+    }
+
+    expect(loadFromDOM('model.js')).toBe(code)
+    expect(global.document.querySelector).toHaveBeenCalledWith('script[data-src="model.js"]')
   })
 })
 
@@ -505,6 +557,245 @@ describe('getName', () => {
   })
 })
 
+describe('inferInputsFromModel', () => {
+  test('keeps inferred default parameters as strings and warns about numeric defaults', () => {
+    function add (a = 1, b = 2) {
+      return a + b
+    }
+    const result = inferInputsFromModel({ code: add })
+
+    expect(result.inputs).toEqual([
+      { name: 'a', type: 'string' },
+      { name: 'b', type: 'string' }
+    ])
+    expect(result.warnings.join('\n')).toContain('input "a" as string')
+    expect(result.warnings.join('\n')).toContain('default value suggests number')
+  })
+
+  test('infers numeric defaults only when inferTypes is enabled', () => {
+    function add (a = 1, b = 2, label = 'total') {
+      return a + b + label
+    }
+    const result = inferInputsFromModel({ code: add }, { inferTypes: true })
+
+    expect(result.inputs).toEqual([
+      { name: 'a', type: 'number' },
+      { name: 'b', type: 'number' },
+      { name: 'label', type: 'string' }
+    ])
+    expect(result.warnings.join('\n')).toContain('input "a" as number')
+  })
+
+  test('reads JSDoc type hints for diagnostics without changing inferred types', () => {
+    const result = inferInputsFromModel({
+      code: `/**
+ * @param {number} n Count
+ * @param {string} label Label
+ */
+function model (n, label) {
+  return n
+}`
+    })
+
+    expect(result.inputs).toEqual([
+      { name: 'n', type: 'string' },
+      { name: 'label', type: 'string' }
+    ])
+    expect(result.warnings.join('\n')).toContain('JSDoc declares number')
+    expect(result.warnings.join('\n')).toContain('input "label" as string')
+  })
+
+  test('infers JSDoc numeric and boolean hints only when inferTypes is enabled', () => {
+    const result = inferInputsFromModel({
+      code: `/**
+ * @param {number} count Count
+ * @param {boolean} enabled Enabled
+ * @param {string} label Label
+ */
+function model (count, enabled, label) {
+  return count
+}`
+    }, { inferTypes: true })
+
+    expect(result.inputs).toEqual([
+      { name: 'count', type: 'number' },
+      { name: 'enabled', type: 'checkbox' },
+      { name: 'label', type: 'string' }
+    ])
+  })
+
+  test('handles single-parameter arrow functions', () => {
+    const result = inferInputsFromModel({ code: 'value => value * 2' })
+    expect(result.inputs).toEqual([
+      { name: 'value', type: 'string' }
+    ])
+  })
+
+  test('warns and skips destructured parameters', () => {
+    const result = inferInputsFromModel({ code: '({ value }) => value' })
+    expect(result.inputs).toEqual([])
+    expect(result.warnings.join('\n')).toContain('destructured parameter')
+  })
+})
+
+describe('bindPyodideInputs', () => {
+  function fakePyodide () {
+    const values = new Map()
+    return {
+      values,
+      toPy: value => ({ py: value }),
+      globals: {
+        set: (name, value) => values.set(name, value)
+      }
+    }
+  }
+
+  test('installs Python inputs and ctx globals', () => {
+    const pyodide = fakePyodide()
+    const target = {}
+
+    bindPyodideInputs(pyodide, { x: 2, caller: 'run' }, target)
+
+    expect(pyodide.values.get('inputs')).toEqual({
+      py: { x: 2, caller: 'run' }
+    })
+    expect(pyodide.values.get('ctx')).toEqual({
+      py: { caller: 'run' }
+    })
+  })
+
+  test('preserves non-colliding legacy JS globals', () => {
+    const pyodide = fakePyodide()
+    const target = {}
+
+    const first = bindPyodideInputs(pyodide, { x: 2 }, target)
+    const second = bindPyodideInputs(pyodide, { x: 5 }, target)
+
+    expect(target.x).toBe(5)
+    expect(first.legacyGlobals).toContain('x')
+    expect(second.legacyGlobals).toContain('x')
+  })
+
+  test('does not overwrite existing JS globals', () => {
+    const pyodide = fakePyodide()
+    const target = {
+      location: { href: 'https://example.test/' }
+    }
+    const warnings = []
+
+    const result = bindPyodideInputs(pyodide, {
+      location: 'input-location',
+      value: 7
+    }, target, {
+      warn: message => warnings.push(message)
+    })
+
+    expect(target.location).toEqual({ href: 'https://example.test/' })
+    expect(target.value).toBe(7)
+    expect(result.collisions).toContain('location')
+    expect(result.legacyGlobals).toContain('value')
+    expect(warnings.join('\n')).toContain('inputs["location"]')
+  })
+})
+
+describe('Pyodide entry helpers', () => {
+  test('normalizes default and custom Pyodide runtime options', () => {
+    expect(normalizePyodideOptions({}).url).toBe('https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js')
+
+    expect(normalizePyodideOptions({
+      pyodide: 'https://cdn.jsdelivr.net/pyodide/v314.0.2/full/pyodide.js'
+    })).toEqual({
+      rawUrl: 'https://cdn.jsdelivr.net/pyodide/v314.0.2/full/pyodide.js',
+      url: 'https://cdn.jsdelivr.net/pyodide/v314.0.2/full/pyodide.js',
+      indexURL: 'https://cdn.jsdelivr.net/pyodide/v314.0.2/full/',
+      code: undefined,
+      packages: undefined
+    })
+
+    expect(normalizePyodideOptions({
+      pyodide: {
+        url: 'pyodide/pyodide.js',
+        indexURL: 'pyodide/',
+        packages: ['numpy', '']
+      }
+    })).toEqual({
+      rawUrl: 'pyodide/pyodide.js',
+      url: 'pyodide/pyodide.js',
+      indexURL: 'pyodide/',
+      code: undefined,
+      packages: ['numpy']
+    })
+  })
+
+  test('returns Pyodide load options only when indexURL is known', () => {
+    expect(getPyodideLoadOptions({ indexURL: 'pyodide/' })).toEqual({ indexURL: 'pyodide/' })
+    expect(getPyodideLoadOptions({ packages: ['numpy'] })).toEqual({ packages: ['numpy'] })
+    expect(getPyodideLoadOptions({ indexURL: 'pyodide/', packages: ['numpy'] })).toEqual({ indexURL: 'pyodide/', packages: ['numpy'] })
+    expect(getPyodideLoadOptions({})).toBe(undefined)
+  })
+
+  test('normalizes valid entry function names', () => {
+    expect(getPyodideEntryName({ entry: ' calculate ' })).toBe('calculate')
+    expect(getPyodideEntryName({})).toBe(null)
+  })
+
+  test('rejects invalid entry function names', () => {
+    expect(() => getPyodideEntryName({ entry: 'not-valid()' })).toThrow('valid Python function name')
+    expect(() => getPyodideEntryName({ entry: 3 })).toThrow('function name string')
+  })
+
+  test('builds a wrapper that passes inputs and ctx', () => {
+    const code = buildPyodideEntryCallCode('calculate')
+
+    expect(code).toContain('__jsee_entry_name = "calculate"')
+    expect(code).toContain('__jsee_kwargs[__jsee_name] = inputs')
+    expect(code).toContain('__jsee_kwargs[__jsee_name] = ctx')
+    expect(code).toContain('__jsee_result = await __jsee_result')
+  })
+
+  test('converts and destroys Pyodide proxy results', () => {
+    const proxy = {
+      destroyed: false,
+      toJs: jest.fn(() => ({ result: 7 })),
+      destroy () {
+        this.destroyed = true
+      }
+    }
+
+    expect(pyodideResultToJs(proxy)).toEqual({ result: 7 })
+    expect(proxy.toJs).toHaveBeenCalledWith({ dict_converter: Object.fromEntries })
+    expect(proxy.destroyed).toBe(true)
+  })
+})
+
+describe('secure-mode network guards', () => {
+  test('detects http and protocol-relative network URLs', () => {
+    expect(isNetworkUrl('https://example.com/model.js')).toBe(true)
+    expect(isNetworkUrl('http://example.com/model.js')).toBe(true)
+    expect(isNetworkUrl('//cdn.example.com/model.js')).toBe(true)
+    expect(isNetworkUrl('/local/model.js')).toBe(false)
+    expect(isNetworkUrl('data:text/plain,ok')).toBe(false)
+  })
+
+  test('blocks network URLs only when allowNetwork is false', () => {
+    expect(() => assertNetworkAllowed('https://example.com/model.js', { allowNetwork: false }, 'model URL'))
+      .toThrow('security.allowNetwork is false')
+    expect(() => assertNetworkAllowed('/local/model.js', { allowNetwork: false }, 'model URL'))
+      .not.toThrow()
+    expect(() => assertNetworkAllowed('https://example.com/model.js', { allowNetwork: true }, 'model URL'))
+      .not.toThrow()
+  })
+
+  test('checks import policy against raw schema URLs before resolved loader URLs', () => {
+    expect(() => assertImportNetworkAllowed([
+      { _rawUrl: '/local/import.js', url: 'http://localhost/local/import.js' }
+    ], { allowNetwork: false }, 'model.imports')).not.toThrow()
+    expect(() => assertImportNetworkAllowed([
+      { _rawUrl: 'https://example.com/import.js', url: 'https://example.com/import.js' }
+    ], { allowNetwork: false }, 'model.imports')).toThrow('security.allowNetwork is false')
+  })
+})
+
 describe('isWorkerInitMessage', () => {
   test('returns true for first model payload with code', () => {
     expect(isWorkerInitMessage({ code: 'function run () {}' }, false)).toBe(true)
@@ -544,24 +835,28 @@ describe('getProgressState', () => {
   })
 })
 
-describe('shouldContinueInterval', () => {
-  test('returns true only for active non-cancelled run caller', () => {
+describe('interval helpers', () => {
+  test('normalizes positive interval delays', () => {
+    expect(getIntervalDelay(1000)).toBe(1000)
+    expect(getIntervalDelay('250')).toBe(250)
+  })
+
+  test('returns 0 for disabled or invalid interval delays', () => {
+    expect(getIntervalDelay(0)).toBe(0)
+    expect(getIntervalDelay(null)).toBe(0)
+    expect(getIntervalDelay('')).toBe(0)
+    expect(getIntervalDelay('abc')).toBe(0)
+  })
+
+  test('continues only for configured non-cancelled intervals', () => {
+    expect(shouldContinueInterval(1000, false)).toBe(true)
+    expect(shouldContinueInterval(1000, true)).toBe(false)
+  })
+
+  test('preserves the previous helper argument shape without caller gating', () => {
     expect(shouldContinueInterval(1000, true, false, 'run')).toBe(true)
-  })
-
-  test('returns false when run is cancelled', () => {
+    expect(shouldContinueInterval(1000, true, false, 'autorun')).toBe(true)
     expect(shouldContinueInterval(1000, true, true, 'run')).toBe(false)
-  })
-
-  test('returns false for non-run callers', () => {
-    expect(shouldContinueInterval(1000, true, false, 'reactive')).toBe(false)
-    expect(shouldContinueInterval(1000, true, false, 'autorun')).toBe(false)
-  })
-
-  test('returns false when interval is missing or run is inactive', () => {
-    expect(shouldContinueInterval(0, true, false, 'run')).toBe(false)
-    expect(shouldContinueInterval(null, true, false, 'run')).toBe(false)
-    expect(shouldContinueInterval(1000, false, false, 'run')).toBe(false)
   })
 })
 
@@ -649,9 +944,56 @@ describe('getModelFuncAPI', () => {
       body: JSON.stringify({ x: 10 })
     })
   })
+
+  test('blocks API requests when allowNetwork is false', async () => {
+    const fn = getModelFuncAPI({ type: 'post', url: 'https://api.example.com/run' }, mockLog, undefined, {
+      allowNetwork: false
+    })
+
+    expect(() => fn({ x: 10 })).toThrow('security.allowNetwork is false')
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+})
+
+describe('security runtime guards', () => {
+  test('blocks dynamic code execution when allowEval is false', () => {
+    expect(() => assertEvalAllowed({ allowEval: false }, 'inline model code'))
+      .toThrow('security.allowEval is false; blocked inline model code')
+  })
+
+  test('allows dynamic code execution by default', () => {
+    expect(() => assertEvalAllowed(undefined, 'inline model code')).not.toThrow()
+  })
 })
 
 describe('validateSchema', () => {
+  test('normalizes secure-mode defaults and explicit overrides', () => {
+    expect(normalizeSecurityOptions({ mode: 'secure' })).toEqual({
+      mode: 'secure',
+      trusted: false,
+      allowEval: false,
+      allowNetwork: false,
+      allowRawHtml: false,
+      allowNotifications: false,
+      allowFileViewer: false
+    })
+
+    expect(normalizeSecurityOptions({
+      mode: 'secure',
+      allowNetwork: true
+    })).toEqual({
+      mode: 'secure',
+      trusted: false,
+      allowEval: false,
+      allowNetwork: true,
+      allowRawHtml: false,
+      allowNotifications: false,
+      allowFileViewer: false
+    })
+
+    expect(normalizeSecurityOptions({ trusted: false }).mode).toBe('secure')
+  })
+
   test('returns empty report for valid minimal schema', () => {
     const report = validateSchema({
       model: {
@@ -709,6 +1051,136 @@ describe('validateSchema', () => {
     expect(report.warnings.join(' ')).toContain('not recognized')
   })
 
+  test('rejects removed TensorFlow model type', () => {
+    const report = validateSchema({
+      model: { type: 'tf', url: 'model.json' },
+      inputs: []
+    })
+    expect(report.errors.join(' ')).toContain("model[0].type 'tf' is not supported")
+    expect(report.errors.join(' ')).toContain('Load TensorFlow.js with imports')
+  })
+
+  test('warns for malformed Pyodide entry function names', () => {
+    const report = validateSchema({
+      model: { type: 'py', entry: 'bad-name()', code: 'def model(): pass' },
+      inputs: []
+    })
+    expect(report.errors).toEqual([])
+    expect(report.warnings.join(' ')).toContain('model[0].entry should be a valid Python function name')
+  })
+
+  test('warns for malformed Pyodide runtime options', () => {
+    const report = validateSchema({
+      model: { type: 'py', pyodide: { url: 7, indexURL: false }, code: 'def model(): pass' },
+      inputs: []
+    })
+    expect(report.errors).toEqual([])
+    expect(report.warnings.join(' ')).toContain('model[0].pyodide.url should be a string')
+    expect(report.warnings.join(' ')).toContain('model[0].pyodide.indexURL should be a string')
+  })
+
+  test('warns when secure-mode advisory flags conflict with schema features', () => {
+    const report = validateSchema({
+      security: { mode: 'secure' },
+      notify: true,
+      imports: ['https://cdn.example.com/lib.js'],
+      model: {
+        type: 'post',
+        url: 'https://api.example.com/run',
+        code: 'function run () {}'
+      },
+      inputs: [
+        { name: 'upload', type: 'file' }
+      ],
+      outputs: [
+        { name: 'page', type: 'html' },
+        { name: 'doc', type: 'pdf' }
+      ]
+    })
+    const warnings = report.warnings.join('\n')
+
+    expect(report.errors).toEqual([])
+    expect(warnings).toContain('security.mode enables opt-in runtime enforcement')
+    expect(warnings).toContain('security.allowEval is false')
+    expect(warnings).toContain('security.allowNetwork is false')
+    expect(warnings).toContain('security.allowRawHtml is false')
+    expect(warnings).toContain('security.allowNotifications is false')
+    expect(warnings).toContain('security.allowFileViewer is false')
+  })
+
+  test('accepts module models and warns for invalid export selector', () => {
+    const valid = validateSchema({
+      model: { type: 'module', url: './model.mjs', export: 'predict' }
+    })
+    expect(valid.errors).toEqual([])
+    expect(valid.warnings).toEqual([])
+
+    const invalid = validateSchema({
+      model: { type: 'module', url: './model.mjs', export: 3 }
+    })
+    expect(invalid.errors).toEqual([])
+    expect(invalid.warnings.join(' ')).toContain('model[0].export should be a string')
+  })
+
+  test('warns for malformed security options without failing schema validation', () => {
+    const report = validateSchema({
+      security: {
+        mode: 'locked',
+        trusted: 'no',
+        allowEval: 'no'
+      },
+      model: { code: 'function run () {}' }
+    })
+    const warnings = report.warnings.join('\n')
+
+    expect(report.errors).toEqual([])
+    expect(warnings).toContain("security.mode should be 'trusted' or 'secure'")
+    expect(warnings).toContain('security.trusted should be a boolean')
+    expect(warnings).toContain('security.allowEval should be a boolean')
+  })
+
+  test('warns when inferInputTypes is not boolean', () => {
+    const report = validateSchema({
+      inferInputTypes: 'yes',
+      model: { code: 'function run (value = 1) { return value }' }
+    })
+    expect(report.errors).toEqual([])
+    expect(report.warnings.join('\n')).toContain('inferInputTypes should be a boolean')
+  })
+
+  test('sanitizes raw HTML when secure mode disables raw HTML', () => {
+    const dirty = '<p onclick="window.bad = 1"><strong>ok</strong></p><script>window.bad = 1</script><a href="javascript:window.bad = 1">bad</a><iframe src="https://example.com"></iframe>'
+    const clean = sanitizeHtml(dirty, { mode: 'secure' })
+
+    expect(clean).toContain('<strong>ok</strong>')
+    expect(clean).toContain('bad</a>')
+    expect(clean).not.toContain('onclick')
+    expect(clean).not.toContain('<script')
+    expect(clean).not.toContain('javascript:')
+    expect(clean).not.toContain('<iframe')
+  })
+
+  test('sanitizes obfuscated URLs in the fallback sanitizer', () => {
+    const dirty = [
+      '<a href="java\nscript:window.bad = 1">newline</a>',
+      '<a href="jav&#x61;script:window.bad = 1">entity</a>',
+      '<img src="data:text/html,<script>window.bad = 1</script>">'
+    ].join('')
+    const clean = sanitizeHtml(dirty, { mode: 'secure' })
+    const compact = clean.replace(/[\u0000-\u001F\u007F\s]+/g, '').toLowerCase()
+
+    expect(clean).toContain('newline</a>')
+    expect(clean).toContain('entity</a>')
+    expect(compact).not.toContain('javascript:')
+    expect(compact).not.toContain('data:text/html')
+    expect(clean).not.toContain('<script')
+  })
+
+  test('leaves raw HTML unchanged in trusted mode', () => {
+    const dirty = '<p onclick="window.bad = 1"><strong>ok</strong></p>'
+    expect(sanitizeHtml(dirty, { mode: 'trusted' })).toBe(dirty)
+  })
+
   test('accepts file input raw flag when it is boolean', () => {
     const report = validateSchema({
       model: { code: 'function run () {}' },
@@ -752,6 +1224,50 @@ describe('validateSchema', () => {
     })
     expect(report.errors).toEqual([])
     expect(report.warnings.join(' ')).toContain('stream is supported only for file inputs')
+  })
+})
+
+describe('generateOpenAPISpec', () => {
+  test('generates declared output, multipart, SSE, errors, and examples schemas', () => {
+    const spec = generateOpenAPISpec({
+      title: 'Analysis API',
+      model: { name: 'analyze', type: 'post', stream: true },
+      inputs: [
+        { name: 'x', type: 'int' },
+        { name: 'upload', type: 'file' }
+      ],
+      outputs: [
+        { name: 'summary', type: 'markdown' },
+        { name: 'score', type: 'number' },
+        { name: 'rows', type: 'table' },
+        {
+          name: 'assets',
+          type: 'group',
+          elements: [
+            { name: 'report', type: 'pdf' }
+          ]
+        }
+      ],
+      examples: [{ x: 3 }]
+    })
+
+    const operation = spec.paths['/analyze'].post
+    const requestContent = operation.requestBody.content
+    const responseContent = operation.responses['200'].content
+    const responseSchema = responseContent['application/json'].schema
+
+    expect(requestContent['application/json'].examples.example1.value).toEqual({ x: 3 })
+    expect(requestContent['multipart/form-data'].schema.properties.upload).toEqual({
+      type: 'string',
+      format: 'binary'
+    })
+    expect(responseSchema.properties.summary).toEqual({ type: 'string' })
+    expect(responseSchema.properties.score).toEqual({ type: 'number' })
+    expect(responseSchema.properties.rows.oneOf).toBeDefined()
+    expect(responseSchema.properties.report.oneOf).toBeDefined()
+    expect(responseContent['text/event-stream']).toBeDefined()
+    expect(operation.responses['400'].content['application/json'].schema.properties.error).toEqual({ type: 'string' })
+    expect(operation.responses['500'].content['application/json'].schema.required).toContain('error')
   })
 })
 
@@ -951,15 +1467,24 @@ describe('error scenarios', () => {
     })
 
     test('converts Buffer to base64 image', () => {
-      const buf = Buffer.from([0x89, 0x50, 0x4e, 0x47])
+      const buf = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
       const result = serializeResult(buf)
       expect(result.result).toMatch(/^data:image\/png;base64,/)
     })
 
     test('converts Uint8Array to base64 image', () => {
-      const arr = new Uint8Array([0x89, 0x50, 0x4e, 0x47])
+      const arr = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
       const result = serializeResult(arr)
       expect(result.result).toMatch(/^data:image\/png;base64,/)
+    })
+
+    test('sniffs common binary MIME types', () => {
+      expect(serializeResult(Buffer.from('%PDF-1.4\n')).result).toMatch(/^data:application\/pdf;base64,/)
+      expect(serializeResult(Buffer.from([0xff, 0xd8, 0xff, 0xe0])).result).toMatch(/^data:image\/jpeg;base64,/)
+      expect(serializeResult(Buffer.from('GIF89a')).result).toMatch(/^data:image\/gif;base64,/)
+      expect(serializeResult(Buffer.from('RIFF\x24\x00\x00\x00WEBPVP8 ')).result).toMatch(/^data:image\/webp;base64,/)
+      expect(serializeResult(Buffer.from('RIFF\x24\x00\x00\x00WAVEfmt ')).result).toMatch(/^data:audio\/wav;base64,/)
+      expect(serializeResult(Buffer.from([1, 2, 3])).result).toMatch(/^data:application\/octet-stream;base64,/)
     })
 
     test('handles null and undefined', () => {

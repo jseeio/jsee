@@ -33,6 +33,12 @@
     border-color: var(--jsee-focus-border, #7ab8e6);
     box-shadow: 0 0 0 2px var(--jsee-focus-ring, rgba(72, 139, 199, 0.2));
   }
+  &:disabled {
+    background: var(--jsee-disabled-bg, #f5f5f5);
+    color: var(--jsee-text-secondary, #777);
+    cursor: not-allowed;
+    opacity: 0.75;
+  }
 }
 .jsee-textarea {
   min-height: 60px;
@@ -61,6 +67,10 @@
   transition: background 0.2s;
   cursor: pointer;
   &.active { background: var(--jsee-toggle-active, #00d1b2); }
+}
+.jsee-toggle input:disabled + .jsee-toggle-track {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 .jsee-toggle-thumb {
   position: absolute;
@@ -271,6 +281,10 @@
   font-size: 13px;
   text-align: left;
   &:hover { background: var(--jsee-border, #f0f0f0); }
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
 }
 .jsee-group {
   display: flex;
@@ -324,6 +338,7 @@
       v-bind:id="input.name"
       v-bind:type="input.type == 'color' ? 'color' : 'text'"
       v-bind:placeholder="input.placeholder ? input.placeholder : input.name"
+      v-bind:disabled="input.disabled"
       v-on:change="changeHandler"
       v-on:keydown.enter="input.enter ? $emit('inchange') : null"
       class="jsee-input"
@@ -338,6 +353,7 @@
       v-model="input.value"
       v-bind:id="input.name"
       v-bind:placeholder="input.placeholder ? input.placeholder : input.name"
+      v-bind:disabled="input.disabled"
       v-on:change="changeHandler"
       v-on:input="autosize"
       class="jsee-textarea"
@@ -418,6 +434,7 @@
       <input
         v-model="input.value"
         v-bind:id="input.name"
+        v-bind:disabled="input.disabled"
         v-on:change="changeHandler"
         type="checkbox"
       >
@@ -428,7 +445,7 @@
   <div class="jsee-field" v-if="input.type == 'toggle'">
     <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px;">
       <span class="jsee-toggle">
-        <input type="checkbox" v-model="input.value" v-bind:id="input.name" v-on:change="changeHandler">
+        <input type="checkbox" v-model="input.value" v-bind:id="input.name" v-bind:disabled="input.disabled" v-on:change="changeHandler">
         <span class="jsee-toggle-track" v-bind:class="{ active: input.value }"></span>
         <span class="jsee-toggle-thumb" v-bind:class="{ active: input.value }"></span>
       </span>
@@ -441,6 +458,7 @@
     <select
       v-model="input.value"
       v-bind:id="input.name"
+      v-bind:disabled="input.disabled"
       v-on:change="changeHandler"
       class="jsee-select"
       v-bind:class="{ 'jsee-input-invalid': input._error }"
@@ -453,7 +471,7 @@
   <div class="jsee-field" v-if="input.type == 'radio'">
     <label class="jsee-label">{{ input.name }}</label>
     <label v-for="option in input.options" :key="option" class="jsee-radio-label">
-      <input type="radio" v-model="input.value" :value="option" :name="input.name" v-on:change="changeHandler">
+      <input type="radio" v-model="input.value" :value="option" :name="input.name" v-bind:disabled="input.disabled" v-on:change="changeHandler">
       {{ option }}
     </label>
   </div>
@@ -461,7 +479,7 @@
   <div class="jsee-field" v-if="input.type == 'multi-select'">
     <label class="jsee-label">{{ input.name }}</label>
     <label v-for="option in input.options" :key="option" class="jsee-checkbox-label">
-      <input type="checkbox" :value="option" v-model="input.value" v-on:change="changeHandler">
+      <input type="checkbox" :value="option" v-model="input.value" v-bind:disabled="input.disabled" v-on:change="changeHandler">
       {{ option }}
     </label>
   </div>
@@ -474,6 +492,7 @@
         v-model:url="input.url"
         v-bind:raw="input.raw === true || input.stream === true"
         v-bind:autoload="input.urlAutoLoad === true"
+        v-bind:security="security"
         v-on:change="changeHandler"
       ></file-picker>
     </div>
@@ -510,12 +529,12 @@
           :style="{
             padding: '3px 8px', fontSize: '12px', borderBottom: '1px solid var(--jsee-border, #f0f0f0)',
             display: 'flex', alignItems: 'center', gap: '6px',
-            cursor: input.select === 'one' ? 'pointer' : undefined,
+            cursor: !input.disabled && input.select === 'one' ? 'pointer' : undefined,
             background: input.select === 'one' && file.selected ? 'var(--jsee-focus-ring, rgba(72,139,199,0.2))' : undefined
           }"
-          @click="input.select === 'one' && folderSelectOne(file)">
+          @click="!input.disabled && input.select === 'one' && folderSelectOne(file)">
           <input v-if="input.select === true || input.select === 'many'" type="checkbox"
-            v-model="file.selected" @change="folderSelectionChanged">
+            v-model="file.selected" v-bind:disabled="input.disabled" @change="folderSelectionChanged">
           <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ file.name }}</span>
           <span style="color:var(--jsee-text-secondary, #aaa); font-size:10px">{{ formatSize(file.size) }}</span>
         </div>
@@ -525,7 +544,8 @@
 
   <div class="jsee-field" v-if="input.type == 'action' || input.type == 'button'">
     <button
-      v-on:click="$parent.$parent.run(input.name.toLowerCase().replace(/ /g, '_'))"
+      v-on:click="runAction"
+      v-bind:disabled="input.disabled"
       class="jsee-btn"
     >
       {{ input.title ? input.title : input.name }}
@@ -540,7 +560,7 @@
         <strong>{{ input.label || input.name }}</strong>
       </div>
       <div class="jsee-group jsee-accordion-body" v-bind:class="{ collapsed: collapsed }" style="max-height: 2000px;">
-        <vue-input v-for="(el, index) in input.elements" v-bind:input="el"></vue-input>
+        <vue-input v-for="(el, index) in input.elements" v-bind:input="el" v-bind:security="security"></vue-input>
       </div>
     </div>
     <!-- Tabs -->
@@ -555,15 +575,15 @@
       <div class="jsee-tabs-body">
         <div v-for="(el, ti) in input.elements" :key="ti" v-show="activeTab === ti">
           <template v-if="el.type === 'group'">
-            <vue-input v-for="(child, ci) in el.elements" :key="ci" :input="child"></vue-input>
+            <vue-input v-for="(child, ci) in el.elements" :key="ci" :input="child" :security="security"></vue-input>
           </template>
-          <vue-input v-else :input="el"></vue-input>
+          <vue-input v-else :input="el" :security="security"></vue-input>
         </div>
       </div>
     </div>
     <!-- Blocks (default) -->
     <div v-else class="jsee-group">
-      <vue-input v-for="(el, index) in input.elements" v-bind:input="el"></vue-input>
+      <vue-input v-for="(el, index) in input.elements" v-bind:input="el" v-bind:security="security"></vue-input>
     </div>
   </div>
 </template>

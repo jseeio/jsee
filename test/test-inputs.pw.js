@@ -32,6 +32,69 @@ test.describe('Input layout', () => {
   })
 })
 
+test.describe('Disabled inputs', () => {
+  test('locks every interactive control type', async ({ page }) => {
+    const schema = {
+      persist: false,
+      model: {
+        worker: false,
+        code: `function disabledMatrix (inputs) {
+          return { caller: inputs.caller || 'none' }
+        }`,
+        autorun: false
+      },
+      inputs: [
+        { name: 'n', type: 'int', default: 1, disabled: true },
+        { name: 's', type: 'string', default: 'locked', disabled: true },
+        { name: 'c', type: 'color', default: '#123456', disabled: true },
+        { name: 't', type: 'text', default: 'locked', disabled: true },
+        { name: 'sl', type: 'slider', min: 0, max: 10, default: 5, disabled: true },
+        { name: 'r', type: 'range', min: 0, max: 10, default: [2, 8], disabled: true },
+        { name: 'd', type: 'date', default: '2026-01-01', disabled: true },
+        { name: 'cb', type: 'checkbox', default: true, disabled: true },
+        { name: 'tg', type: 'toggle', default: true, disabled: true },
+        { name: 'sel', type: 'select', options: ['a', 'b'], default: 'a', disabled: true },
+        { name: 'rad', type: 'radio', options: ['a', 'b'], default: 'a', disabled: true },
+        { name: 'multi', type: 'multi-select', options: ['a', 'b'], default: ['a'], disabled: true },
+        {
+          name: 'folder',
+          type: 'folder',
+          select: true,
+          disabled: true,
+          default: [{ name: 'a.txt', path: 'a.txt', size: 1, type: 'text/plain', selected: true }]
+        },
+        { name: 'do_it', type: 'action', title: 'Do It', disabled: true }
+      ],
+      outputs: [{ name: 'caller', type: 'code' }]
+    }
+
+    await page.goto(urlQueryEscaped(schema))
+
+    const selectors = [
+      '#n',
+      '#s',
+      '#c',
+      '#t',
+      '#sl',
+      'input[type="range"]',
+      '#d',
+      '#cb',
+      '#tg',
+      '#sel',
+      'input[type="radio"][value="a"]',
+      'input[type="radio"][value="b"]',
+      'input[type="checkbox"][value="a"]',
+      'input[type="checkbox"][value="b"]',
+      '.jsee-field:has-text("folder") input[type="checkbox"]',
+      'button:has-text("Do It")'
+    ]
+
+    for (const selector of selectors) {
+      await expect(page.locator(selector).first()).toBeDisabled()
+    }
+  })
+})
+
 test.describe('Slider input', () => {
   test('renders with default value and responds to changes', async ({ page }) => {
     const schema = echoSchema([
@@ -348,6 +411,167 @@ test.describe('Markdown output', () => {
     await expect(page.locator('table')).toBeVisible()
     await expect(page.locator('body')).toContainText('Alice')
     await expect(page.locator('body')).toContainText('Bob')
+  })
+})
+
+test.describe('Secure output rendering', () => {
+  test('sanitizes raw HTML, markdown, and chat when secure mode disables raw HTML', async ({ page }) => {
+    const schema = {
+      security: { mode: 'secure', allowEval: true },
+      model: {
+        worker: false,
+        code: `function () {
+          return {
+            page: '<p><strong>safe html</strong></p><img src="x" onerror="window.__jseeHtmlBad = 1"><script>window.__jseeHtmlScript = 1</script><a href="javascript:window.__jseeHrefBad = 1">bad</a>',
+            note: '## Safe markdown\\n\\n<img src="x" onerror="window.__jseeMarkdownBad = 1">\\n\\n<script>window.__jseeMarkdownScript = 1</script>\\n\\n**bold**',
+            chat: '<img src="x" onerror="window.__jseeChatBad = 1"> **safe chat**'
+          }
+        }`
+      },
+      inputs: [],
+      outputs: [
+        { name: 'page', type: 'html' },
+        { name: 'note', type: 'markdown' },
+        { name: 'chat', type: 'chat' }
+      ]
+    }
+
+    await page.goto(urlQueryEscaped(schema))
+    await page.click('button:has-text("Run")')
+    await expect(page.locator('#page strong')).toContainText('safe html')
+    await expect(page.locator('#note strong')).toContainText('bold')
+    await expect(page.locator('.jsee-chat-bubble strong')).toContainText('safe chat')
+    await page.waitForTimeout(300)
+
+    const flags = await page.evaluate(() => {
+      const values = {
+        htmlBad: window.__jseeHtmlBad,
+        htmlScript: window.__jseeHtmlScript,
+        hrefBad: window.__jseeHrefBad,
+        markdownBad: window.__jseeMarkdownBad,
+        markdownScript: window.__jseeMarkdownScript,
+        chatBad: window.__jseeChatBad
+      }
+      return Object.fromEntries(Object.entries(values).filter((entry) => typeof entry[1] !== 'undefined'))
+    })
+    expect(flags).toEqual({})
+
+    const unsafeDom = await page.locator('#outputs').evaluate(el => ({
+      eventAttrs: el.querySelectorAll('[onerror]').length,
+      scripts: el.querySelectorAll('script').length,
+      jsUrls: Array.from(el.querySelectorAll('[href]'))
+        .filter(node => /^javascript:/i.test(node.getAttribute('href') || '')).length
+    }))
+    expect(unsafeDom).toEqual({
+      eventAttrs: 0,
+      scripts: 0,
+      jsUrls: 0
+    })
+  })
+
+  test('enforces secure network, notification, and file viewer flags at runtime', async ({ page }) => {
+    let apiHits = 0
+    await page.route('**/secure-probe-api', route => {
+      apiHits += 1
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ result: 'network-called' })
+      })
+    })
+
+    await page.goto(`http://localhost:${port}/load/`)
+    const results = await page.evaluate(async () => {
+      document.body.innerHTML = '<div id="network"></div><div id="notify"></div><div id="media"></div>'
+      const notificationCalls = {
+        requestPermission: 0,
+        constructed: 0
+      }
+      Object.defineProperty(document, 'hidden', { value: true, configurable: true })
+      window.Notification = function () {
+        notificationCalls.constructed += 1
+      }
+      window.Notification.permission = 'default'
+      window.Notification.requestPermission = () => {
+        notificationCalls.requestPermission += 1
+        return Promise.resolve('granted')
+      }
+
+      const networkApp = new JSEE({
+        container: '#network',
+        schema: {
+          security: { mode: 'secure', allowEval: true },
+          model: { type: 'post', url: '/secure-probe-api', worker: false },
+          inputs: [{ name: 'x', type: 'int', default: 1 }],
+          outputs: [{ name: 'result', type: 'code' }]
+        },
+        verbose: false
+      })
+      await networkApp._initPromise
+      await networkApp.run().catch(() => {})
+
+      const notifyApp = new JSEE({
+        container: '#notify',
+        schema: {
+          security: { mode: 'secure', allowEval: true },
+          notify: true,
+          model: { worker: false, code: 'function done () { return { result: "ok" } }' },
+          outputs: [{ name: 'result', type: 'code' }]
+        },
+        verbose: false
+      })
+      await notifyApp._initPromise
+      await notifyApp.run()
+
+      const mediaApp = new JSEE({
+        container: '#media',
+        schema: {
+          security: { mode: 'secure', allowEval: true },
+          model: {
+            worker: false,
+            code: `function media () {
+              return {
+                image: 'data:image/png;base64,iVBORw0KGgo=',
+                audio: 'data:audio/wav;base64,UklGRg==',
+                video: 'data:video/mp4;base64,AAAA',
+                report: 'data:application/pdf;base64,JVBERi0xLjQKJUVPRgo=',
+                gallery: ['data:image/png;base64,iVBORw0KGgo='],
+                viewer: '/tmp/report.pdf',
+                download: 'secret'
+              }
+            }`
+          },
+          outputs: [
+            { name: 'image', type: 'image' },
+            { name: 'audio', type: 'audio' },
+            { name: 'video', type: 'video' },
+            { name: 'report', type: 'pdf' },
+            { name: 'gallery', type: 'gallery' },
+            { name: 'viewer', type: 'viewer' },
+            { name: 'download', type: 'file' }
+          ]
+        },
+        verbose: false
+      })
+      await mediaApp._initPromise
+      await mediaApp.run()
+      await new Promise(resolve => setTimeout(resolve, 100))
+
+      return {
+        notificationCalls,
+        mediaElements: document.querySelectorAll('#media img, #media audio, #media video, #media iframe, #media .jsee-file-download-btn').length,
+        blockedMessages: Array.from(document.querySelectorAll('#media .jsee-output-missing')).map(el => el.textContent.trim())
+      }
+    })
+
+    expect(apiHits).toBe(0)
+    expect(results.notificationCalls).toEqual({
+      requestPermission: 0,
+      constructed: 0
+    })
+    expect(results.mediaElements).toBe(0)
+    expect(results.blockedMessages.length).toBeGreaterThanOrEqual(7)
+    expect(results.blockedMessages.every(message => message.includes('security.allowFileViewer'))).toBe(true)
   })
 })
 

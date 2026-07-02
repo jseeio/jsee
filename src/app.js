@@ -22,35 +22,204 @@ const components = {
 
 const filtrex = require('filtrex')
 const JsonViewer = require('vue3-json-viewer').default
-const { sanitizeName, debounce, createValidateFn, runValidation } = require('./utils.js')
+const { sanitizeName, debounce, createValidateFn, runValidation, normalizeSecurityOptions } = require('./utils.js')
 
-const STORAGE_KEY = 'jsee:inputs'
+const LEGACY_STORAGE_KEY = 'jsee:inputs'
+const STORAGE_SKIP_TYPES = new Set(['file', 'folder', 'action', 'button'])
 
-function saveInputsToStorage (inputs) {
+function stableHash (value) {
+  const text = String(value == null ? '' : value)
+  let hash = 5381
+  for (let i = 0; i < text.length; i++) {
+    hash = ((hash << 5) + hash) + text.charCodeAt(i)
+    hash = hash >>> 0
+  }
+  return hash.toString(36)
+}
+
+function getOptionValue (option) {
+  if (option && typeof option === 'object') {
+    if (typeof option.value !== 'undefined') return option.value
+    if (typeof option.name !== 'undefined') return option.name
+    if (typeof option.label !== 'undefined') return option.label
+  }
+  return option
+}
+
+function optionIncludesValue (options, value) {
+  if (!Array.isArray(options) || options.length === 0) return true
+  return options
+    .map(getOptionValue)
+    .some(option => option === value || String(option) === String(value))
+}
+
+function isNumberWithinInputRange (input, value, integer=false) {
+  const numberValue = Number(value)
+  if (!Number.isFinite(numberValue)) return false
+  if (integer && !Number.isInteger(numberValue)) return false
+  if (typeof input.min !== 'undefined' && numberValue < Number(input.min)) return false
+  if (typeof input.max !== 'undefined' && numberValue > Number(input.max)) return false
+  return true
+}
+
+function isValidStoredInputValue (input, value) {
+  switch (input.type) {
+    case 'int':
+      return isNumberWithinInputRange(input, value, true)
+    case 'float':
+    case 'number':
+    case 'slider':
+      return isNumberWithinInputRange(input, value)
+    case 'range':
+      return Array.isArray(value)
+        && value.length === 2
+        && value.every(v => isNumberWithinInputRange(input, v))
+        && Number(value[0]) <= Number(value[1])
+    case 'bool':
+    case 'checkbox':
+    case 'toggle':
+      return typeof value === 'boolean'
+    case 'categorical':
+    case 'select':
+    case 'radio':
+      return optionIncludesValue(input.options, value)
+    case 'multi-select':
+      return Array.isArray(value) && value.every(v => optionIncludesValue(input.options, v))
+    case 'color':
+      return typeof value === 'string' && /^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(value)
+    case 'date':
+      return typeof value === 'string' && (value === '' || /^\d{4}-\d{2}-\d{2}$/.test(value))
+    case 'string':
+    case 'text':
+      return typeof value === 'string'
+    default:
+      return true
+  }
+}
+
+function normalizeStoredInputValue (input, value) {
+  switch (input.type) {
+    case 'int':
+      return Math.trunc(Number(value))
+    case 'float':
+    case 'number':
+    case 'slider':
+      return Number(value)
+    case 'range':
+      return [Number(value[0]), Number(value[1])]
+    default:
+      return value
+  }
+}
+
+function shouldPersistInput (input) {
+  return input
+    && input.type !== 'group'
+    && input.disabled !== true
+    && !STORAGE_SKIP_TYPES.has(input.type)
+}
+
+function getInputStorageBase (input, index) {
+  const name = input.name ? sanitizeName(input.name) : `input_${index}`
+  return `${index}_${name}`
+}
+
+function getInputStorageKey (input, index, path) {
+  return path.concat(getInputStorageBase(input, index)).join('.')
+}
+
+function forEachStorageInput (inputs, callback, path=[]) {
+  if (!Array.isArray(inputs)) return
+  inputs.forEach((input, index) => {
+    if (!input) return
+    const key = getInputStorageKey(input, index, path)
+    if (input.type === 'group') {
+      forEachStorageInput(input.elements, callback, path.concat(getInputStorageBase(input, index)))
+      return
+    }
+    callback(input, index, key, path)
+  })
+}
+
+function normalizeInputShape (inputs, path=[]) {
+  if (!Array.isArray(inputs)) return []
+  return inputs.map((input, index) => {
+    const key = getInputStorageKey(input || {}, index, path)
+    if (!input) {
+      return { key, type: 'unknown' }
+    }
+    const shape = {
+      key,
+      name: input.name || '',
+      type: input.type || 'string'
+    }
+    if (typeof input.min !== 'undefined') shape.min = input.min
+    if (typeof input.max !== 'undefined') shape.max = input.max
+    if (Array.isArray(input.options)) shape.options = input.options.map(getOptionValue)
+    if (input.type === 'group') {
+      shape.elements = normalizeInputShape(input.elements, path.concat(getInputStorageBase(input, index)))
+    }
+    return shape
+  })
+}
+
+function getContainerStorageId (container) {
+  if (typeof container === 'string') return container
+  if (!container || typeof document === 'undefined') return 'body'
+  if (container.id) return `#${container.id}`
+  if (container.dataset && container.dataset.jseeId) return `[data-jsee-id="${container.dataset.jseeId}"]`
+  if (container === document.body) return 'body'
+  const siblings = Array.prototype.slice.call(document.body.querySelectorAll('*'))
+  const index = siblings.indexOf(container)
+  const tag = container.tagName ? container.tagName.toLowerCase() : 'element'
+  return `${tag}:${index}`
+}
+
+function getInputsStorageKey (schema, container) {
+  const page = schema.page || {}
+  const locationPath = (typeof window !== 'undefined' && window.location)
+    ? window.location.pathname
+    : 'page'
+  const appId = schema.id || page.url || schema.name || schema.title || locationPath || 'app'
+  const containerId = getContainerStorageId(container)
+  const shape = normalizeInputShape(schema.inputs)
+  return `${LEGACY_STORAGE_KEY}:${stableHash(`${appId}:${containerId}`)}:${stableHash(JSON.stringify(shape))}`
+}
+
+function getStoredValue (values, input, index, key, path) {
+  if (Object.prototype.hasOwnProperty.call(values, key)) return values[key]
+  if (path.length === 0 && input.name && Object.prototype.hasOwnProperty.call(values, input.name)) {
+    return values[input.name]
+  }
+  const legacyIndexKey = `input_${index}`
+  if (path.length === 0 && Object.prototype.hasOwnProperty.call(values, legacyIndexKey)) {
+    return values[legacyIndexKey]
+  }
+  return undefined
+}
+
+function saveInputsToStorage (inputs, storageKey) {
   try {
     const values = {}
-    inputs.forEach((input, index) => {
-      if (input.type === 'file' || input.type === 'folder' || input.type === 'action' || input.type === 'button') return
-      if (input.type === 'group') return // skip groups for now
-      const key = input.name || `input_${index}`
+    forEachStorageInput(inputs, (input, index, key) => {
+      if (!shouldPersistInput(input)) return
       values[key] = input.value
     })
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(values))
+    localStorage.setItem(storageKey, JSON.stringify(values))
   } catch (e) { /* quota exceeded or private mode */ }
 }
 
-function loadInputsFromStorage (inputs) {
+function loadInputsFromStorage (inputs, storageKey) {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(storageKey) || localStorage.getItem(LEGACY_STORAGE_KEY)
     if (!raw) return false
     const values = JSON.parse(raw)
     let restored = false
-    inputs.forEach((input, index) => {
-      if (input.type === 'file' || input.type === 'folder' || input.type === 'action' || input.type === 'button') return
-      if (input.type === 'group') return
-      const key = input.name || `input_${index}`
-      if (typeof values[key] !== 'undefined') {
-        input.value = values[key]
+    forEachStorageInput(inputs, (input, index, key, path) => {
+      if (!shouldPersistInput(input)) return
+      const value = getStoredValue(values, input, index, key, path)
+      if (typeof value !== 'undefined' && isValidStoredInputValue(input, value)) {
+        input.value = normalizeStoredInputValue(input, value)
         restored = true
       }
     })
@@ -58,8 +227,11 @@ function loadInputsFromStorage (inputs) {
   } catch (e) { return false }
 }
 
-function clearInputsStorage () {
-  try { localStorage.removeItem(STORAGE_KEY) } catch (e) { /* ignore */ }
+function clearInputsStorage (storageKey) {
+  try {
+    localStorage.removeItem(storageKey)
+    localStorage.removeItem(LEGACY_STORAGE_KEY)
+  } catch (e) { /* ignore */ }
 }
 
 function setInputValue (input, value) {
@@ -152,6 +324,14 @@ function createVueApp (env, mountedCallback, logMain) {
 
   // Vue's data is based on schema
   const dataInit = env.schema
+  dataInit._security = env.security || normalizeSecurityOptions(env.schema.security)
+  // Determine a container for Vue app
+  const container = env.container
+    ? (typeof env.container === 'string')
+      ? document.querySelector(env.container)
+      : env.container
+    : document.body
+  const storageKey = getInputsStorageKey(env.schema, container)
 
   // Reset input values to default ones
   resetInputs(dataInit.inputs)
@@ -159,7 +339,7 @@ function createVueApp (env, mountedCallback, logMain) {
   // Restore saved inputs from localStorage (unless URL params are present or persist: false)
   const hasUrlParams = new URLSearchParams(window.location.search).toString().length > 0
   if (env.schema.persist !== false && !hasUrlParams) {
-    loadInputsFromStorage(dataInit.inputs)
+    loadInputsFromStorage(dataInit.inputs, storageKey)
   }
 
   if (!('outputs' in dataInit)) {
@@ -173,8 +353,8 @@ function createVueApp (env, mountedCallback, logMain) {
   // Flag for running state (toggled by main.js run/stop)
   dataInit.running = false
 
-  function len(s) {
-    return s.length;
+  function len (s) {
+    return s.length
   }
 
   let filtrexOptions = {
@@ -216,13 +396,6 @@ function createVueApp (env, mountedCallback, logMain) {
     }
   })
 
-  // Determine a container for Vue app
-  const container = env.container
-    ? (typeof env.container === 'string')
-      ? document.querySelector(env.container)
-      : env.container
-    : document.body
-
   // Determine a template and GUI framework
   const framework = (env.schema.design && typeof env.schema.design.framework !== 'undefined')
     ? env.schema.design.framework
@@ -238,6 +411,18 @@ function createVueApp (env, mountedCallback, logMain) {
     data () {
       return dataInit
     },
+    provide () {
+      return {
+        jsee: {
+          state: this,
+          display: (index) => this.display(index),
+          reset: (example) => this.reset(example),
+          run: (caller) => this.run(caller),
+          stop: () => this.stop(),
+          notify: (msg) => this.notify(msg)
+        }
+      }
+    },
     watch: {
       inputs: {
         deep: true,
@@ -247,7 +432,7 @@ function createVueApp (env, mountedCallback, logMain) {
         handler: debounce(function (v) {
           this.dataChanged = true
           if (env.schema.persist !== false) {
-            saveInputsToStorage(this.inputs)
+            saveInputsToStorage(this.inputs, storageKey)
           }
           runValidation(this.inputs, validateFunctions)
           if (env.schema.reactive) {
@@ -270,7 +455,7 @@ function createVueApp (env, mountedCallback, logMain) {
         // Reset input values to default ones
         // If example is provided, use it as a new default
         resetInputs(this.inputs, example)
-        clearInputsStorage()
+        clearInputsStorage(storageKey)
         // Clear DOM file inputs so re-uploading the same file triggers change event
         this.$nextTick(() => {
           const fileInputs = container.querySelectorAll('input[type="file"]')

@@ -1,7 +1,7 @@
 class Overlay {
-  constructor (parent) {
+  constructor (parent, id='overlay') {
     this.element = document.createElement('div')
-    this.element.id = 'overlay'
+    this.element.id = id
     this.element.innerHTML = ''
     parent.appendChild(this.element)
 
@@ -20,6 +20,13 @@ class Overlay {
   hide () {
     this.element.style.display = 'none'
     this.setProgress(null)
+  }
+
+  destroy () {
+    this.hide()
+    if (this.element.parentNode) {
+      this.element.parentNode.removeChild(this.element)
+    }
   }
 
   setProgress (state) {

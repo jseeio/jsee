@@ -25,6 +25,7 @@ const Overlay = require('./overlay')
 
 require('notyf/notyf.min.css')
 
+/* global EXTENDED */
 if (typeof EXTENDED !== 'undefined' && EXTENDED) {
   require('./extended-imports')
 }
@@ -33,29 +34,32 @@ const fetch = window['fetch']
 const Blob = window['Blob']
 
 let verbose = true
+let instanceCounter = 0
 function log () {
   if (verbose) {
     console.log(`[JSEE v${VERSION}]`, ...arguments)
     const logElement = document.querySelector('#log')
     if (logElement) {
-      logElement.innerHTML += `\n${[...arguments].join(' ')}`
+      logElement.textContent += `\n${[...arguments].join(' ')}`
       logElement.scrollTop = logElement.scrollHeight // auto scroll to bottom
-      if (logElement.innerHTML.length > 10000) {
-        logElement.innerHTML = logElement.innerHTML.slice(-10000)
+      if (logElement.textContent.length > 10000) {
+        logElement.textContent = logElement.textContent.slice(-10000)
       }
     }
   }
 }
 
-// const Worker = window['Worker']
-
-// Deep clone a simple object
-function clone (obj) {
-  // return JSON.parse(JSON.stringify(obj))
-  return Object.assign({}, obj)
+function makeInstanceUid (value) {
+  instanceCounter += 1
+  const source = value || `instance-${instanceCounter}`
+  const safe = String(source)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return `jsee-${safe || `instance-${instanceCounter}`}`
 }
 
-
+// const Worker = window['Worker']
 
 const getName = utils.getName
 
@@ -72,11 +76,59 @@ function getValue (input) {
   }
 }
 
+function hasOwn (obj, key) {
+  return Object.prototype.hasOwnProperty.call(obj, key)
+}
+
+function outputLookupNames (output) {
+  const names = []
+  if (output.name) {
+    names.push(output.name)
+    names.push(utils.sanitizeName(output.name))
+  }
+  if (output.alias) {
+    names.push(...(Array.isArray(output.alias) ? output.alias : [output.alias]))
+  }
+  return names.filter(Boolean)
+}
+
+function resolveOutputResult (res, output) {
+  for (const name of outputLookupNames(output)) {
+    if (hasOwn(res, name)) {
+      return { found: true, value: res[name] }
+    }
+  }
+  return { found: false, value: undefined }
+}
+
+function collectOutputNames (outputs, names=new Set()) {
+  if (!Array.isArray(outputs)) {
+    return names
+  }
+  outputs.forEach(output => {
+    if (!output) {
+      return
+    }
+    if (output.type === 'group' && output.elements) {
+      collectOutputNames(output.elements, names)
+      return
+    }
+    outputLookupNames(output).forEach(name => names.add(name))
+  })
+  return names
+}
+
 function getModelType (model) {
   if (typeof model.code === 'string' && model.code.trim().length > 0) {
     if (model.code.split(' ').map(v => v.trim()).includes('def')) {
       return 'py'
     }
+    return 'function'
+  }
+  if (isPythonModelUrl(model.url)) {
+    return 'py'
+  }
+  if (isJavascriptModelUrl(model.url)) {
     return 'function'
   }
   if (model.url) {
@@ -85,28 +137,18 @@ function getModelType (model) {
   return 'function'
 }
 
-// Nice trick to get a function parameters by Jack Allan
-// From: https://stackoverflow.com/a/9924463/2998960
-const STRIP_COMMENTS = /((\/\/.*$)|(\/\*[\s\S]*?\*\/))/mg
-const ARGUMENT_NAMES = /([^\s,]+)/g
-function getParamNames (func) {
-  const fnStr = func.toString().replace(STRIP_COMMENTS, '')
-  let result = fnStr.slice(fnStr.indexOf('(')+1, fnStr.indexOf(')')).match(ARGUMENT_NAMES)
-  if (result === null)
-    result = []
-  return result
+function urlPathMatchesExtension (value, extension) {
+  if (typeof value !== 'string') return false
+  const clean = value.split('#')[0].split('?')[0]
+  return clean.toLowerCase().endsWith(extension)
 }
 
-function getInputs (model) {
-  if (model.code) {
-    const params = getParamNames(model.code).filter(p => !['(', ')', '#', '{', '}'].some(c => p.includes(c)))
-    log('Trying to infer inputs from params:', params)
-    return params.map(p => ({
-      'name': p,
-      'type': 'string'
-    }))
-  }
-  return []
+function isJavascriptModelUrl (value) {
+  return urlPathMatchesExtension(value, '.js') || urlPathMatchesExtension(value, '.mjs')
+}
+
+function isPythonModelUrl (value) {
+  return urlPathMatchesExtension(value, '.py')
 }
 
 function collectStreamInputConfig (inputs, config={}) {
@@ -128,6 +170,22 @@ function collectStreamInputConfig (inputs, config={}) {
   return config
 }
 
+function applySecurityToInputs (inputs, security) {
+  if (!Array.isArray(inputs)) return
+  const options = utils.normalizeSecurityOptions(security)
+  inputs.forEach(input => {
+    if (!isObject(input)) return
+    if (input.type === 'group') {
+      applySecurityToInputs(input.elements, options)
+      return
+    }
+    if (options.allowFileViewer === false && (input.type === 'file' || input.type === 'folder')) {
+      input.disabled = true
+      input._securityBlocked = 'security.allowFileViewer'
+    }
+  })
+}
+
 export default class JSEE {
   constructor (params, alt1, alt2) {
     // Check if JSEE was initialized with args rather than with a params object
@@ -146,8 +204,12 @@ export default class JSEE {
     // Set global verbose flag
     // This check sets verbose to true in all cases except when params.verbose is explicitly set to false
     verbose = !(params.verbose === false)
+    this.uid = makeInstanceUid(params.id || params.uid)
+    this.progressId = `${this.uid}-progress`
+    this.overlayId = `${this.uid}-overlay`
     this.container = params.container
     this.schema = params.schema || params.config // Previous naming
+    this.security = utils.normalizeSecurityOptions()
     this.utils = utils
     this.__version__ = VERSION
     this.cancelled = false
@@ -157,6 +219,9 @@ export default class JSEE {
     this._workers = []
     this._pendingRun = null
     this._runToken = null
+    this._intervalLoop = false
+    this._intervalToken = null
+    this._intervalPromise = null
     this._needsModelReinit = false
 
     // Check if schema is provided
@@ -188,9 +253,22 @@ export default class JSEE {
     notyf.success(txt)
   }
 
+  stopInterval () {
+    this._intervalLoop = false
+    this._intervalToken = null
+    this._intervalPromise = null
+    if (!this.running && this.data) {
+      this.data.running = false
+    }
+    if (!this.running && this.overlay) {
+      this.overlay.hide()
+    }
+  }
+
   cancelCurrentRun () {
     log('Stopping current run')
     const cancelError = new Error('Cancelled')
+    this.stopInterval()
     this.cancelled = true
     this._pendingRun = null
     this._runToken = {}
@@ -236,10 +314,10 @@ export default class JSEE {
     }
     // Clean up overlay
     if (this.overlay) {
-      this.overlay.hide()
+      this.overlay.destroy()
     }
     // Remove progress bar
-    const progress = document.querySelector('#progress')
+    const progress = document.getElementById(this.progressId)
     if (progress) progress.remove()
     // Null out references
     this.app = null
@@ -248,6 +326,9 @@ export default class JSEE {
     this.model = null
     this.schema = null
     this._cancelWorkerRun = null
+    this._intervalLoop = false
+    this._intervalToken = null
+    this._intervalPromise = null
   }
 
   progress (i) {
@@ -257,14 +338,15 @@ export default class JSEE {
     }
 
     // Check if progress div is defined
-    let progress = document.querySelector('#progress')
+    let progress = document.getElementById(this.progressId)
     if (!progress && progressState.mode === 'determinate' && progressState.value === 0) {
       return
     }
 
     if (!progress) {
       progress = document.createElement('div')
-      progress.setAttribute('id', 'progress')
+      progress.setAttribute('id', this.progressId)
+      progress.setAttribute('class', 'jsee-progress')
       progress.style = 'position: fixed; top: 0; left: 0; width: 0; height: 3px; background: #00d1b2; z-index: 1000;'
       document.body.appendChild(progress)
     }
@@ -307,7 +389,8 @@ export default class JSEE {
     await this.initPipeline() // Inits: this.pipeline (function)
 
     // Request notification permission if schema opts in
-    if (this.schema.notify && typeof Notification !== 'undefined' && Notification.permission === 'default') {
+    if (this.schema.notify && this.security.allowNotifications !== false
+        && typeof Notification !== 'undefined' && Notification.permission === 'default') {
       Notification.requestPermission()
     }
 
@@ -317,7 +400,8 @@ export default class JSEE {
       // (we assume that they are set by the server and trigger the model run)
       log('[Init] First run of the model due to autorun or reactive inputs')
       // Catch here to prevent unhandled rejection from init-time run
-      this.run('init').catch(err => log('Init run error:', err))
+      const initCaller = this.schema.autorun ? 'autorun' : 'reactive'
+      this.run(initCaller).catch(err => log('Init run error:', err))
     }
   }
 
@@ -331,8 +415,8 @@ export default class JSEE {
       const schema = utils.loadFromDOM(this.schemaUrl)
       if (schema) {
         // Schema block found in the hidden element, use its content
-        this.schema = JSON.parse(schema);
-        log(`Loaded schema from the hidden DOM element for ${this.schemaUrl}:`, this.schema);
+        this.schema = JSON.parse(schema)
+        log(`Loaded schema from the hidden DOM element for ${this.schemaUrl}:`, this.schema)
       } else {
         // Fetch schema from the URL
         log('Fetching schema from:', this.schemaUrl)
@@ -367,6 +451,8 @@ export default class JSEE {
       notyf.error(firstError)
       throw new Error(`Schema validation failed: ${schemaValidation.errors.join('; ')}`)
     }
+
+    this.security = utils.normalizeSecurityOptions(this.schema.security)
   }
 
   async initModel () {
@@ -425,17 +511,26 @@ export default class JSEE {
     // Async for-loop over this.model
     for (const [i, m] of this.model.entries()) {
       if (typeof m.worker === 'undefined') {
-        m.worker = i === 0 // Run first model in a web worker
+        m.worker = m.type === 'module' ? false : i === 0 // Run first model in a web worker
       }
 
       // Load code if url is provided
-      if (m.url && (m.url.includes('.js') || m.url.includes('.py'))) {
+      const isJsUrl = isJavascriptModelUrl(m.url)
+      const isPyUrl = isPythonModelUrl(m.url)
+      const shouldLoadSourceFromUrl = m.url && (isPyUrl || (isJsUrl && this.security.allowEval !== false && m.type !== 'module'))
+      if (m.url && isJsUrl && this.security.allowEval === false && m.type !== 'module') {
+        const cachedModelCode = utils.loadFromDOM(m.url)
+        if (cachedModelCode) {
+          utils.assertEvalAllowed(this.security, `model[${i}].url cached script`)
+        }
+      }
+      if (shouldLoadSourceFromUrl) {
         // Try to get the code from a hidden DOM element first
         const modelCode = utils.loadFromDOM(m.url)
         if (modelCode) {
           // Code block found in the hidden element, use its content
           m.code = modelCode
-          log(`Loaded code from the hidden DOM element for ${m.url}`);
+          log(`Loaded code from the hidden DOM element for ${m.url}`)
         } else {
           // Update model URL if needed
           if (!m.url.includes('/') && this.schemaUrl && this.schemaUrl.includes('/')) {
@@ -443,6 +538,7 @@ export default class JSEE {
             log(`Changed the old model URL to ${m.url} (based on the schema URL)`)
           }
           log('Loaded code from:', m.url)
+          utils.assertNetworkAllowed(m.url, this.security, `model[${i}].url`)
           m.code = await fetch(m.url)
           m.code = await m.code.text()
         }
@@ -450,7 +546,7 @@ export default class JSEE {
 
       // Update model name if absent
       if (typeof m.name === 'undefined'){
-        if ((m.url) && (m.url.includes('.js'))) {
+        if ((m.url) && isJavascriptModelUrl(m.url)) {
           m.name = m.url.split('/').pop().split('.')[0]
           log('Use model name from url:', m.name)
         } else if (m.code) {
@@ -469,21 +565,42 @@ export default class JSEE {
         m.type = getModelType(m)
       }
 
+      if (m.type === 'module' && m.url) {
+        m._moduleUrl = utils.getUrl(m.url)
+      }
+      if (m.worker && m.type !== 'module' && isJsUrl && m.url && !m.code) {
+        m._workerUrl = utils.getUrl(m.url)
+      }
+
+      if (m.type === 'py') {
+        const pyodideOptions = utils.normalizePyodideOptions(m, { resolveUrl: true })
+        const pyodideCode = utils.loadFromDOM(pyodideOptions.rawUrl) || utils.loadFromDOM(pyodideOptions.url)
+        const embeddedAssets = utils.loadPyodideEmbeddedAssets(pyodideOptions)
+        m._pyodide = Object.assign({}, pyodideOptions)
+        if (pyodideCode) m._pyodide.code = pyodideCode
+        if (embeddedAssets) m._pyodide.embeddedAssets = embeddedAssets
+      }
+
       // Load imports from hidden DOM element
       if (m.imports && Array.isArray(m.imports) && m.imports.length) {
-        for (let [i, imp] of m.imports.entries()) {
+        for (let [importIndex, imp] of m.imports.entries()) {
           if (typeof imp === 'string') {
             // Convert string to object
-            m.imports[i] = {
+            m.imports[importIndex] = {
               url: imp
             }
-            imp = m.imports[i]
+            imp = m.imports[importIndex]
           }
           if (!m.type.includes('py')) {
-            imp.code = utils.loadFromDOM(imp.url)      // Try raw path first (matches --fetch data-src)
-            imp.url = utils.getUrl(imp.url)             // Resolve to absolute URL for network/worker
+            const rawImportUrl = imp.url
+            imp._rawUrl = rawImportUrl
+            imp.code = utils.loadFromDOM(rawImportUrl)  // Try raw path first (matches --fetch data-src)
+            imp.url = utils.getUrl(rawImportUrl)        // Resolve to absolute URL for network/worker
             if (!imp.code) {
               imp.code = utils.loadFromDOM(imp.url)     // Fallback: resolved URL (legacy compat)
+            }
+            if (!imp.code) {
+              utils.assertNetworkAllowed(rawImportUrl, this.security, `model[${i}].imports[${importIndex}]`)
             }
           }
         }
@@ -492,11 +609,12 @@ export default class JSEE {
       if (m.imports && Array.isArray(m.imports) && m.imports.length && m.worker) {
         const cssImports = m.imports.filter(imp => utils.isCssImport(imp.url))
         for (const imp of cssImports) {
+          if (!imp.code) {
+            utils.assertNetworkAllowed(imp._rawUrl || imp.url, this.security, 'worker CSS import')
+          }
           await utils.importScripts(imp)
         }
       }
-
-      console.log('Imports:', m.imports)
     } // end of model-loop
 
     log('Models initialized:', this.model.length)
@@ -509,7 +627,14 @@ export default class JSEE {
     if (typeof this.schema.inputs === 'undefined') {
       if (this.model.length > 0) {
         this.model[0].container = 'args'
-        this.schema.inputs = getInputs(this.model[0])
+        const inferred = utils.inferInputsFromModel(this.model[0], {
+          inferTypes: this.schema.inferInputTypes === true
+        })
+        log('Trying to infer inputs from params:', inferred.inputs.map(input => input.name))
+        inferred.warnings.forEach(warning => {
+          log('[Schema inference warning]', warning)
+        })
+        this.schema.inputs = inferred.inputs
       } else {
         this.schema.inputs = []
       }
@@ -539,6 +664,7 @@ export default class JSEE {
       input.default = utils.coerceParam(paramValue, input.type, input.name)
     })
     log('Inputs are:', this.schema.inputs)
+    applySecurityToInputs(this.schema.inputs, this.security)
   }
 
   initVue () {
@@ -552,7 +678,7 @@ export default class JSEE {
           this.inputsContainer = container.querySelector('#inputs')
           this.modelContainer = container.querySelector('#model')
           // Init overlay
-          this.overlay = new Overlay(this.inputsContainer ? this.inputsContainer : this.outputsContainer)
+          this.overlay = new Overlay(this.inputsContainer ? this.inputsContainer : this.outputsContainer, this.overlayId)
           resolve()
         }, log)
         this.data = this.app.$data
@@ -579,11 +705,9 @@ export default class JSEE {
           case 'py':
             modelFunc = await this.initPython(m)
             break
-          case 'tf':
-            modelFunc = await this.initTF(m)
-            break
           case 'function':
           case 'class':
+          case 'module':
           case 'async-init':
           case 'async-function':
             modelFunc = await this.initJS(m)
@@ -658,7 +782,7 @@ export default class JSEE {
     }
 
     // Wrap anonymous functions
-    if (!model.name) {
+    if (!model.name && model.type !== 'py' && model.type !== 'module') {
       model.code = `function anon () { return (${model.code})(...arguments) }`
       model.name = 'anon'
     }
@@ -666,14 +790,17 @@ export default class JSEE {
     // Timeout prevents permanently frozen UI if worker hangs (default 30s, configurable via model.timeout)
     const timeoutMs = model.timeout || DEFAULT_WORKER_TIMEOUT
     this._cancelWorkerRun = () => worker.postMessage({ _cmd: 'cancel' })
+    let workerInitialized = false
 
     const modelFunc = (inputs) => {
-      const isInitCall = inputs && inputs.code !== undefined
+      const isInitCall = utils.isWorkerInitMessage(inputs, workerInitialized)
       const payload = isInitCall
         ? inputs
         : utils.toWorkerSerializable(inputs)
 
+      let rejectWorkerRun = null
       const workerPromise = new Promise((resolve, reject) => {
+        rejectWorkerRun = reject
         this._rejectWorkerRun = reject
         worker.onmessage = (e) => {
           const res = e.data
@@ -683,6 +810,7 @@ export default class JSEE {
                 notyf.success('Loaded model (in worker)')
                 log('Loaded model (in worker):', res)
                 this.progress(0)
+                workerInitialized = true
                 resolve(res)
                 break
               case 'log':
@@ -745,18 +873,31 @@ export default class JSEE {
       // Skip timeout for init call (loading model can be slow); apply to execution calls
       if (isInitCall) return workerPromise
 
+      let timeoutId = null
+      let settled = false
       const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => {
-          worker.terminate()
+        timeoutId = setTimeout(() => {
+          if (settled) return
+          settled = true
+          try { worker.terminate() } catch (e) { /* ignore */ }
+          this._workers = this._workers.filter(w => w !== worker)
           reject(new Error(`Worker timed out after ${timeoutMs}ms`))
         }, timeoutMs)
       })
       return Promise.race([workerPromise, timeoutPromise])
+        .finally(() => {
+          settled = true
+          if (timeoutId !== null) clearTimeout(timeoutId)
+          if (this._rejectWorkerRun === rejectWorkerRun) {
+            this._rejectWorkerRun = null
+          }
+        })
     }
 
     // Initial worker call with model definition and stream input config
     const modelInitPayload = Object.assign({}, model, {
-      _streamInputConfig: this.streamInputConfig || {}
+      _streamInputConfig: this.streamInputConfig || {},
+      _security: this.security
     })
     await modelFunc(modelInitPayload)
 
@@ -767,18 +908,56 @@ export default class JSEE {
   async initPython (model) {
     // Add loading indicator
     this.overlay.show()
-    await utils.importScripts(['https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js'])
-    const pyodide = await loadPyodide()
+    utils.assertEvalAllowed(this.security, 'Pyodide model code')
+    const pyodideOptions = utils.normalizePyodideOptions(model, { resolveUrl: true })
+    const pyodideCode = pyodideOptions.code
+      || utils.loadFromDOM(pyodideOptions.rawUrl)
+      || utils.loadFromDOM(pyodideOptions.url)
+    const runtimeOptions = pyodideCode
+      ? Object.assign({}, pyodideOptions, { code: pyodideCode })
+      : pyodideOptions
+    if (runtimeOptions.code) {
+      utils.assertEvalAllowed(this.security, 'cached Pyodide loader script')
+    }
+    const preparedRuntimeOptions = await utils.preparePyodideRuntimeOptions(runtimeOptions, window)
+    utils.assertPyodideNetworkAllowed(preparedRuntimeOptions, this.security)
+    if (typeof loadPyodide === 'undefined') {
+      const runtimeImport = preparedRuntimeOptions.code
+        ? { url: preparedRuntimeOptions.url, code: preparedRuntimeOptions.code }
+        : preparedRuntimeOptions.url
+      await utils.importScripts(runtimeImport)
+    }
+    const pyodide = await loadPyodide(utils.getPyodideLoadOptions(preparedRuntimeOptions))
     if (model.imports && Array.isArray(model.imports) && model.imports.length) {
-      await pyodide.loadPackage(model.imports.map(i => i.url))
+      if (this.security.allowNetwork === false && !preparedRuntimeOptions.embeddedAssets) {
+        throw new Error('security.allowNetwork is false; blocked Pyodide package loading')
+      }
+      const packages = model.imports
+        .map(i => typeof i === 'string' ? i : i.url)
+        .filter(Boolean)
+      await pyodide.loadPackage(packages)
+    } else if (this.security.allowNetwork === false) {
+      log('Skipping Pyodide loadPackagesFromImports because security.allowNetwork is false')
     } else {
       await pyodide.loadPackagesFromImports(model.code)
     }
-    return async (data) => {
-      for (let key in data) {
-        window[key] = data[key]
+    const entry = utils.getPyodideEntryName(model)
+    const bindInputs = (data) => utils.bindPyodideInputs(pyodide, data, window, {
+      warn: message => log('[Pyodide input warning]', message)
+    })
+    if (entry) {
+      await pyodide.runPythonAsync(model.code)
+      const callCode = utils.buildPyodideEntryCallCode(entry)
+      return async (data) => {
+        bindInputs(data)
+        const result = await pyodide.runPythonAsync(callCode)
+        return utils.pyodideResultToJs(result)
       }
-      return await pyodide.runPythonAsync(model.code);
+    }
+    return async (data) => {
+      bindInputs(data)
+      const result = await pyodide.runPythonAsync(model.code)
+      return utils.pyodideResultToJs(result)
     }
   }
 
@@ -796,15 +975,31 @@ export default class JSEE {
     // Load imports if defined (before calling the model)
     if (model.imports && model.imports.length) {
       log('Loading imports from schema')
+      utils.assertImportNetworkAllowed(model.imports, this.security, 'model.imports')
+      model.imports.forEach((imp, index) => {
+        if (imp && imp.code && !utils.isCssImport(imp.url)) {
+          utils.assertEvalAllowed(this.security, `model.imports[${index}] inline script`)
+        }
+      })
       await utils.importScripts(...model.imports)
       notyf.success('Loaded: JS imports')
     }
 
     // Target here represents raw JS object (e.g. class), not the final callable function
     let target
-    if (typeof model.code === 'string') {
+    if (model.type === 'module') {
+      if (!model.url) {
+        throw new Error('type: module requires model.url')
+      }
+      utils.assertNetworkAllowed(model.url, this.security, 'module model URL')
+      const moduleUrl = model._moduleUrl || utils.getUrl(model.url)
+      log('Loading module model from:', moduleUrl)
+      const mod = await import(/* webpackIgnore: true */ moduleUrl)
+      target = utils.getModuleModelTarget(mod, model)
+    } else if (typeof model.code === 'string') {
       // 1 -> 2
       // Danger zone
+      utils.assertEvalAllowed(this.security, 'JavaScript model.code')
       if (model.name) {
         log('Evaluating code from string (has name)')
         target = Function(
@@ -816,6 +1011,17 @@ export default class JSEE {
       }
     } else {
       target = model.code
+    }
+
+    if (typeof target === 'undefined' && model.url && model.type !== 'module') {
+      utils.assertNetworkAllowed(model.url, this.security, 'JavaScript model URL')
+      const scriptUrl = utils.getUrl(model.url)
+      log('Loading script from URL:', scriptUrl)
+      await utils.importScripts(scriptUrl)
+      if (!model.name) {
+        throw new Error('JavaScript URL model requires model.name when code is not fetched')
+      }
+      target = window[model.name]
     }
 
     const modelFunc = await utils.getModelFuncJS(model, target, this)
@@ -833,42 +1039,87 @@ export default class JSEE {
       const onChunk = model.stream ? (chunk) => {
         this.output(chunk)
       } : undefined
-      return utils.getModelFuncAPI(model, log, onChunk)
+      return utils.getModelFuncAPI(model, log, onChunk, this.security)
     }
   }
 
-  initTF () {
-    let script = document.createElement('script')
-    script.src = 'dist/tf.min.js'
-    script.onload = () => {
-      log('Loaded TF.js')
-      this.overlay.hide()
-      window['tf'].loadLayersModel(this.schema.model.url).then(res => {
-        log('Loaded Tensorflow model')
-      })
+  shouldUseInterval (caller) {
+    if (!utils.getIntervalDelay(this.schema && this.schema.interval)) {
+      return false
     }
-    document.head.appendChild(script)
+    return caller === 'run' || caller === 'autorun' || caller === 'init'
+  }
+
+  async startInterval (caller='run') {
+    if (this._intervalLoop && this._intervalPromise) {
+      return this._intervalPromise
+    }
+
+    const intervalDelay = utils.getIntervalDelay(this.schema && this.schema.interval)
+    if (!intervalDelay) {
+      return this.runOnce(caller)
+    }
+
+    const intervalToken = {}
+    this._intervalLoop = true
+    this._intervalToken = intervalToken
+    this.cancelled = false
+    if (this.data) this.data.running = true
+
+    const loopPromise = (async () => {
+      let nextCaller = caller === 'init' ? 'autorun' : caller
+      while (this._intervalLoop && this._intervalToken === intervalToken && !this.isCancelled()) {
+        const runSucceeded = await this.runOnce(nextCaller)
+        nextCaller = 'interval'
+        if (!runSucceeded || !this._intervalLoop || this._intervalToken !== intervalToken || this.isCancelled()) {
+          break
+        }
+        log('Interval is defined:', intervalDelay)
+        if (this.data) this.data.running = true
+        await utils.delay(intervalDelay)
+      }
+    })()
+
+    const managedPromise = loopPromise.finally(() => {
+      if (this._intervalPromise === managedPromise || this._intervalToken === intervalToken) {
+        this._intervalLoop = false
+        this._intervalToken = null
+        this._intervalPromise = null
+        if (!this.running && this.data) this.data.running = false
+      }
+    })
+    this._intervalPromise = managedPromise
+    return managedPromise
   }
 
   async run (caller='run') {
+    const runCaller = caller || 'run'
+    if (this.shouldUseInterval(runCaller)) {
+      return this.startInterval(runCaller)
+    }
+    return this.runOnce(runCaller)
+  }
+
+  async runOnce (caller='run') {
     // caller can be:
     // 1. custom input button name
     // 2. `run`
     // 3. `autorun`
+    // 4. `interval`
 
-    // Prevent overlapping runs: autorun skips, manual clicks queue
-    // Prevent overlapping runs: reactive/autorun calls are dropped, manual clicks queue
+    // Prevent overlapping runs: automatic calls are dropped, manual clicks queue
     if (this.running) {
-      if (caller === 'autorun' || caller === 'reactive') return
+      if (caller === 'autorun' || caller === 'reactive' || caller === 'interval') return false
       log('Run already in progress, queuing', caller)
       this._pendingRun = caller
-      return
+      return false
     }
 
     // Re-init model if workers were terminated by cancelCurrentRun
     if (this._needsModelReinit) {
       this._needsModelReinit = false
       await this.initModel()
+      await this.initPipeline()
     }
 
     const schema = this.schema
@@ -886,7 +1137,7 @@ export default class JSEE {
       let inputValues = {}
       data.inputs.forEach(input => {
         // Skip buttons
-        if (input.name && !(input.type == 'action' || input.type == 'button')) {
+        if (input.name && !(input.type === 'action' || input.type === 'button')) {
           inputValues[input.name] = getValue(input)
         } else if (input.type === 'group' && !input.name && input.elements) {
           // Unnamed groups (e.g. tabs layout): flatten children into top-level
@@ -954,13 +1205,6 @@ export default class JSEE {
       }
 
       runSucceeded = true
-
-      // Check if interval is defined
-      if (utils.shouldContinueInterval(schema.interval, this.running, this.isCancelled(), caller)) {
-        log('Interval is defined:', schema.interval)
-        await utils.delay(schema.interval)
-        await this.run(caller)
-      }
     } catch (err) {
       // Silently ignore cancellation errors from cancelCurrentRun()
       if (this.cancelled && err && err.message === 'Cancelled') {
@@ -977,10 +1221,10 @@ export default class JSEE {
       // Always clean up UI state so overlay and running flag don't get stuck
       this.overlay.hide()
       this.running = false
-      if (this.data) this.data.running = false
+      if (this.data) this.data.running = this._intervalLoop === true
 
       // Notify user when tab is hidden and run succeeded
-      if (runSucceeded && schema.notify && document.hidden
+      if (runSucceeded && schema.notify && this.security.allowNotifications !== false && document.hidden
           && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         const title = this.model[0] && (this.model[0].title || this.model[0].name) || 'JSEE'
         new Notification('Run complete', { body: title })
@@ -993,6 +1237,7 @@ export default class JSEE {
         this.run(pending).catch(err => log('Queued run error:', err))
       }
     }
+    return runSucceeded
   }
 
   async outputAsync (res) {
@@ -1005,10 +1250,9 @@ export default class JSEE {
       if (output.type === 'group' && output.elements) {
         this._mapResultsToOutputs(output.elements, res)
       } else {
-        const r = res[output.name]
-          || res[utils.sanitizeName(output.name)]
-          || (output.alias && res[output.alias])
-        if (typeof r !== 'undefined') {
+        const resolved = resolveOutputResult(res, output)
+        if (resolved.found) {
+          const r = resolved.value
           log(`Updating output: ${output.name} with data: ${typeof r}`)
           if (output.type === 'file') {
             const fileValue = utils.normalizeFileOutputValue(output, r)
@@ -1062,6 +1306,8 @@ export default class JSEE {
     }
 
     const inputNames = this.schema.inputs ? this.schema.inputs.map(i => i.name) : []
+    const outputNames = collectOutputNames(this.data.outputs || this.schema.outputs || [])
+    const resultKeys = isObject(res) ? Object.keys(res) : []
     log('Input names:', inputNames)
 
     if (isObject(res)) {
@@ -1101,7 +1347,12 @@ export default class JSEE {
             type: utils.inferOutputType(key, res[key]),
             value: res[key]
           }))
-      } else if (Object.keys(res).every(key => inputNames.includes(key))) {
+      } else if (this.data.outputs && this.data.outputs.length
+          && resultKeys.some(key => outputNames.has(key))) {
+        // Declared outputs win over input updates when names overlap.
+        log('Updating outputs from matching result keys:', Object.keys(res))
+        this._mapResultsToOutputs(this.data.outputs, res)
+      } else if (resultKeys.length > 0 && resultKeys.every(key => inputNames.includes(key))) {
         // Update input fields from results
         // e.g. loading a csv file and updating list of target variables
         // This will be dynamically updated in the UI
@@ -1173,28 +1424,39 @@ export default class JSEE {
     // Cache the model
     const clone = document.cloneNode(true)
 
-    // Change #download-btn to 'Offline: version'
     const downloadBtn = clone.getElementById('download-btn')
-    downloadBtn.textContent = 'Offline: latest'
-    downloadBtn.disabled = true
-    downloadBtn.style.cursor = 'not-allowed'
+      || clone.getElementById('download-html-btn')
+      || clone.getElementById('save-html-btn')
+    if (downloadBtn) {
+      downloadBtn.textContent = 'Offline: latest'
+      downloadBtn.disabled = true
+      downloadBtn.style.cursor = 'not-allowed'
+    }
 
-    let hiddenElement = clone.getElementById('hidden-storage');
+    let hiddenElement = clone.getElementById('hidden-storage')
     if (!hiddenElement) {
-      hiddenElement = clone.createElement('div');
-      hiddenElement.style.display = 'none'; // Make it hidden
-      hiddenElement.id = 'hidden-storage'; // Assign an ID
+      hiddenElement = clone.createElement('div')
+      hiddenElement.style.display = 'none' // Make it hidden
+      hiddenElement.id = 'hidden-storage' // Assign an ID
       clone.body.prepend(hiddenElement)
+    }
+
+    function encodeHiddenValue (value) {
+      const text = typeof value === 'object' ? JSON.stringify(value) : String(value)
+      const bytes = new TextEncoder().encode(text)
+      let binary = ''
+      bytes.forEach(byte => { binary += String.fromCharCode(byte) })
+      return btoa(binary)
     }
 
     function storeInHiddenElement (url, value) {
       const element = clone.createElement('script')
-      element.type = 'text/plain' // Make it non-executable
+      element.type = 'application/json' // Make it non-executable
       element.style.display = 'none' // Make it hidden
       element.setAttribute('data-src', url) // Use data attribute for key
-      element.textContent = typeof value === 'object' ? JSON.stringify(value) : value
+      element.setAttribute('data-encoding', 'base64')
+      element.textContent = encodeHiddenValue(value)
       hiddenElement.appendChild(element)
-      console.log('[Hidden store] Stored:', url)
     }
 
     // Remove Google Analytics script tags
@@ -1208,10 +1470,8 @@ export default class JSEE {
     // Remove serve bar (bundled HTML is standalone, no server)
     try { clone.getElementById('jsee-serve-bar')?.remove() } catch (e) {}
 
-    console.log('Caching schema:', this.schema)
     storeInHiddenElement(this.schemaUrl, this.schema)
 
-    console.log('Caching models:', this.model)
     for (const model of this.model) {
       storeInHiddenElement(model.url, model.code)
       // Iterate over imports
@@ -1239,20 +1499,19 @@ export default class JSEE {
     const externalScripts = Array.from(clone.querySelectorAll('script[src]'))
     for (const script of externalScripts) {
       try {
-        const response = await fetch(script.src);
-        if (!response.ok) throw new Error('Network response was not ok for script:' + script.src);
+        const response = await fetch(script.src)
+        if (!response.ok) throw new Error('Network response was not ok for script:' + script.src)
         const content = await response.text()
         const inlineScript = document.createElement('script')
-        inlineScript.textContent = content
+        inlineScript.textContent = content.replace(/<\/script/gi, '<\\/script')
         inlineScript.setAttribute('data-src', script.src)
         script.parentNode.replaceChild(inlineScript, script)
       } catch (error) {
-        console.error("Error fetching script:", error.message);
+        console.error('Error fetching script:', error.message)
       }
     }
     // Prepare the HTML for download and trigger the download
     const html = '<!DOCTYPE html>\n' + clone.documentElement.outerHTML
-    console.log(html)
     const blob = new Blob([html], { type: 'text/html' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')

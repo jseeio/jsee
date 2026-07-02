@@ -2,10 +2,16 @@ import { saveAs } from 'file-saver'
 import domtoimage from 'dom-to-image'
 import MarkdownIt from 'markdown-it'
 
-const { sanitizeName, columnsToRows } = require('../src/utils.js')
+const { sanitizeName, columnsToRows, normalizeSecurityOptions, sanitizeHtml, isNetworkUrl } = require('../src/utils.js')
 
 const mdConverter = new MarkdownIt({
   html: true,
+  linkify: true,
+  typographer: false
+})
+
+const safeMdConverter = new MarkdownIt({
+  html: false,
   linkify: true,
   typographer: false
 })
@@ -41,7 +47,7 @@ function getFileDescriptor (output) {
 }
 
 const component = {
-  props: ['output'],
+  props: ['output', 'security'],
   emits: ['notification'],
   data () {
     return {
@@ -111,6 +117,12 @@ const component = {
     hasLeaflet() {
       return typeof window !== 'undefined' && !!window.L
     },
+    securityOptions () {
+      return normalizeSecurityOptions(this.security)
+    },
+    outputBlockedReason () {
+      return this.getOutputBlockedReason()
+    },
     viewerMedia () {
       const url = this.output && this.output.value
       if (typeof url !== 'string' || !url) return null
@@ -129,6 +141,47 @@ const component = {
     }
   },
   methods: {
+    isFileViewerOutputType (type) {
+      return ['file', 'pdf', 'gallery', 'viewer', 'image', 'audio', 'video'].includes(type)
+    },
+    collectOutputUrls (value, urls=[]) {
+      if (typeof value === 'string') {
+        urls.push(value)
+        return urls
+      }
+      if (Array.isArray(value)) {
+        value.forEach(item => this.collectOutputUrls(item, urls))
+        return urls
+      }
+      if (value && typeof value === 'object') {
+        ;['url', 'src', 'href', 'content', 'value', 'data'].forEach(key => {
+          if (typeof value[key] === 'string') urls.push(value[key])
+        })
+      }
+      return urls
+    },
+    isNetworkBackedOutput () {
+      if (!this.output) return false
+      if (this.output.type === 'map') {
+        const value = this.output.value
+        const tiles = this.output.tiles || (value && value.tiles) || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+        return isNetworkUrl(tiles)
+      }
+      if (!['image', 'audio', 'video', 'pdf', 'gallery', 'viewer', '3d', 'file'].includes(this.output.type)) {
+        return false
+      }
+      return this.collectOutputUrls(this.output.value).some(url => isNetworkUrl(url))
+    },
+    getOutputBlockedReason () {
+      if (!this.output) return ''
+      if (this.securityOptions.allowFileViewer === false && this.isFileViewerOutputType(this.output.type)) {
+        return 'File/media output blocked by security.allowFileViewer.'
+      }
+      if (this.securityOptions.allowNetwork === false && this.isNetworkBackedOutput()) {
+        return 'Network output blocked by security.allowNetwork.'
+      }
+      return ''
+    },
     toggleFullScreen() {
       const el = this.$refs.cardRoot || this.$el
       if (!this.isFullScreen) {
@@ -174,6 +227,10 @@ const component = {
       return lines.join('\n')
     },
     save () {
+      if (this.outputBlockedReason) {
+        this.$emit('notification', this.outputBlockedReason)
+        return
+      }
       // Prepare filename
       let filename
       let extension
@@ -239,24 +296,28 @@ const component = {
       saveAs(blob, filename)
     },
     copy () {
+      if (this.outputBlockedReason) {
+        this.$emit('notification', this.outputBlockedReason)
+        return
+      }
       if (this.output.type === 'function') {
         // Copy the image to the clipboard
         domtoimage.toBlob(this.$refs.customContainer)
           .then(blob => {
-            const item = new ClipboardItem({ [blob.type]: blob });
+            const item = new ClipboardItem({ [blob.type]: blob })
             navigator.clipboard.write([item])
               .then(() => {
-                this.$emit('notification', 'Image copied to clipboard');
+                this.$emit('notification', 'Image copied to clipboard')
               })
               .catch(err => {
-                console.error('Failed to copy image: ', err);
-                this.$emit('notification', 'Failed to copy image');
-              });
+                console.error('Failed to copy image: ', err)
+                this.$emit('notification', 'Failed to copy image')
+              })
           })
           .catch(err => {
-            console.error('Failed to generate image blob: ', err);
-            this.$emit('notification', 'Failed to generate image');
-          });
+            console.error('Failed to generate image blob: ', err)
+            this.$emit('notification', 'Failed to generate image')
+          })
       } else if (this.output.type === 'image') {
         fetch(this.output.value)
           .then(r => r.blob())
@@ -281,6 +342,10 @@ const component = {
       }
     },
     downloadFile () {
+      if (this.outputBlockedReason) {
+        this.$emit('notification', this.outputBlockedReason)
+        return
+      }
       const file = getFileDescriptor(this.output)
       let filename = file.filename
       let value = file.content
@@ -304,7 +369,14 @@ const component = {
     },
     renderMarkdown (text) {
       if (typeof text !== 'string') return ''
-      return mdConverter.render(text)
+      const converter = this.securityOptions.allowRawHtml === false
+        ? safeMdConverter
+        : mdConverter
+      return sanitizeHtml(converter.render(text), this.securityOptions)
+    },
+    renderHtml (html) {
+      if (typeof html !== 'string') return ''
+      return sanitizeHtml(html, this.securityOptions)
     },
     renderChart() {
       if (!this.hasPlot || !this.$refs.chartContainer) return
@@ -342,6 +414,7 @@ const component = {
       }
     },
     render3D() {
+      if (this.outputBlockedReason) return
       if (!this.hasThree || !this.$refs.threeDContainer) return
       const container = this.$refs.threeDContainer
       const data = this.output.value
@@ -406,6 +479,7 @@ const component = {
       }
     },
     renderMap() {
+      if (this.outputBlockedReason) return
       if (!this.hasLeaflet || !this.$refs.mapContainer) return
       const container = this.$refs.mapContainer
       const data = this.output.value
@@ -492,6 +566,7 @@ const component = {
       container.appendChild(iframe)
     },
     renderPDF() {
+      if (this.outputBlockedReason) return
       if (!this.$refs.pdfContainer) return
       const container = this.$refs.pdfContainer
       const data = this.output.value

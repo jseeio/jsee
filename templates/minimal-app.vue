@@ -201,49 +201,50 @@
 
 <template>
   <section>
-    <div class="jsee-app" :data-theme="$parent.design && $parent.design.theme ? $parent.design.theme : undefined" :style="designStyle">
-      <div class="jsee-header" v-if="$parent.model">
-        <h2 class="jsee-title" v-if="$parent.model.title">{{ $parent.model.title }}</h2>
-        <p class="jsee-description" v-if="$parent.model.description">{{ $parent.model.description }}</p>
+    <div class="jsee-app" :data-theme="design && design.theme ? design.theme : undefined" :style="designStyle">
+      <div class="jsee-header" v-if="model">
+        <h2 class="jsee-title" v-if="model.title">{{ model.title }}</h2>
+        <p class="jsee-description" v-if="model.description">{{ model.description }}</p>
       </div>
-      <div class="jsee-grid" :data-layout="$parent.design && $parent.design.layout ? $parent.design.layout : undefined" :style="gridStyle">
+      <div class="jsee-grid" :data-layout="design && design.layout ? design.layout : undefined" :style="gridStyle">
         <div>
           <!-- Inputs -->
           <div class="jsee-card">
-            <div class="jsee-card-body" id="inputs" v-if="$parent.inputs && $parent.inputs.length > 0"
+            <div class="jsee-card-body" id="inputs" v-if="inputs && inputs.length > 0"
               :class="{ 'jsee-12-grid': hasInputColumns }">
               <div
-                v-for="(input, index) in $parent.inputs"
+                v-for="(input, index) in inputs"
                 :key="index"
                 class="jsee-input-col"
                 :style="input.columns ? { gridColumn: 'span ' + input.columns } : undefined"
               >
                 <vue-input
                   v-bind:input="input"
-                  v-if="input.display !== false && $parent.display(index)"
-                  v-on:inchange="$parent.run()"
+                  v-bind:security="security"
+                  v-if="input.display !== false && displayInput(index)"
+                  v-on:inchange="run()"
                 ></vue-input>
               </div>
-              <pre v-if="$parent.model.debug">{{ $parent.inputs }}</pre>
+              <pre v-if="model && model.debug">{{ inputs }}</pre>
             </div>
-            <div class="jsee-card-footer" v-bind:class="{ reset: $parent.dataChanged }">
+            <div class="jsee-card-footer" v-bind:class="{ reset: dataChanged }">
               <button
-                v-on:click="$parent.reset()"
-                v-if="$parent.inputs && $parent.inputs.length > 0 && $parent.dataChanged"
+                v-on:click="reset()"
+                v-if="inputs && inputs.length > 0 && dataChanged"
                 class="jsee-reset-btn"
               >
                 Reset
               </button>
               <button
-                v-if="!$parent.running"
-                v-on:click="$parent.run('run')"
+                v-if="!running"
+                v-on:click="run('run')"
                 class="jsee-run-btn"
               >
                 Run
               </button>
               <button
                 v-else
-                v-on:click="$parent.stop()"
+                v-on:click="stop()"
                 class="jsee-run-btn jsee-stop-btn"
               >
                 Stop
@@ -251,11 +252,11 @@
             </div>
           </div>
           <!-- Examples -->
-          <div class="jsee-examples" v-if="$parent.examples">
+          <div class="jsee-examples" v-if="examples">
             <p>Examples</p>
-            <div v-for="(example, index) in $parent.examples">
+            <div v-for="(example, index) in examples">
               <button
-                v-on:click="$parent.reset(example)"
+                v-on:click="reset(example)"
                 class="jsee-example-btn"
               >
                 {{ JSON.stringify(example, null, 2) }}
@@ -265,18 +266,19 @@
         </div>
         <div id="outputs">
           <!-- Outputs -->
-          <div v-if="$parent.outputs" :class="{ 'jsee-12-grid': hasOutputColumns }">
+          <div v-if="outputs" :class="{ 'jsee-12-grid': hasOutputColumns }">
             <div
-              v-for="(output, index) in $parent.outputs"
+              v-for="(output, index) in outputs"
               :key="index"
               :style="output.columns ? { gridColumn: 'span ' + output.columns } : undefined"
             >
               <vue-output
                 v-bind:output="output"
-                v-on:notification="$parent.notify($event)"
+                v-bind:security="security"
+                v-on:notification="notify($event)"
               ></vue-output>
             </div>
-            <pre v-if="$parent.debug">{{ $parent.outputs }}</pre>
+            <pre v-if="debug">{{ outputs }}</pre>
           </div>
         </div>
       </div>
@@ -313,9 +315,42 @@
   }
 
   export default {
+    inject: {
+      jsee: { default: null }
+    },
     computed: {
+      state () {
+        return this.jsee && this.jsee.state ? this.jsee.state : {}
+      },
+      model () {
+        return this.state.model
+      },
+      design () {
+        return this.state.design
+      },
+      inputs () {
+        return this.state.inputs || []
+      },
+      outputs () {
+        return this.state.outputs || []
+      },
+      examples () {
+        return this.state.examples
+      },
+      security () {
+        return this.state._security
+      },
+      dataChanged () {
+        return this.state.dataChanged === true
+      },
+      running () {
+        return this.state.running === true
+      },
+      debug () {
+        return this.state.debug === true
+      },
       designStyle () {
-        const d = this.$parent.design
+        const d = this.design
         if (!d) return undefined
         const s = {}
         if (d.primary) {
@@ -351,17 +386,34 @@
         return Object.keys(s).length ? s : undefined
       },
       gridStyle () {
-        const d = this.$parent.design
+        const d = this.design
         if (!d || !d.grid || !Array.isArray(d.grid) || d.grid.length < 2) return undefined
         return { gridTemplateColumns: d.grid.map(n => `minmax(0, ${n}fr)`).join(' ') }
       },
       hasInputColumns () {
-        const inputs = this.$parent.inputs
+        const inputs = this.inputs
         return inputs && inputs.some(i => i.columns)
       },
       hasOutputColumns () {
-        const outputs = this.$parent.outputs
+        const outputs = this.outputs
         return outputs && outputs.some(o => o.columns)
+      }
+    },
+    methods: {
+      displayInput (index) {
+        return this.jsee && this.jsee.display ? this.jsee.display(index) : true
+      },
+      reset (example) {
+        if (this.jsee && this.jsee.reset) this.jsee.reset(example)
+      },
+      run (caller) {
+        if (this.jsee && this.jsee.run) this.jsee.run(caller)
+      },
+      stop () {
+        if (this.jsee && this.jsee.stop) this.jsee.stop()
+      },
+      notify (msg) {
+        if (this.jsee && this.jsee.notify) this.jsee.notify(msg)
       }
     }
   }

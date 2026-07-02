@@ -262,12 +262,12 @@
         </button>
       </div>
       <div v-for="(el, ti) in output.elements" :key="ti" v-show="activeOutputTab === ti">
-        <vue-output :output="el" v-on:notification="$emit('notification', $event)"></vue-output>
+        <vue-output :output="el" :security="security" v-on:notification="$emit('notification', $event)"></vue-output>
       </div>
     </template>
     <template v-else>
       <vue-output v-for="(el, ti) in output.elements" :key="ti"
-        :output="el" v-on:notification="$emit('notification', $event)"></vue-output>
+        :output="el" :security="security" v-on:notification="$emit('notification', $event)"></vue-output>
     </template>
   </div>
   <!-- Regular output: card wrapper -->
@@ -288,8 +288,11 @@
       </div>
     </div>
     <div class="jsee-output-body">
-      <div :id="outputName" v-if="(output.type == 'svg') || (output.type == 'html')">
-        <div v-html="output.value"></div>
+      <div :id="outputName" v-if="outputBlockedReason" class="jsee-output-missing">
+        {{ outputBlockedReason }}
+      </div>
+      <div :id="outputName" v-else-if="(output.type == 'svg') || (output.type == 'html')">
+        <div v-html="renderHtml(output.value)"></div>
       </div>
       <div :id="outputName" v-else-if="output.type == 'object'">
         <json-viewer :value="output.value" copyable sort />

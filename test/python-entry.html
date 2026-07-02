@@ -1,0 +1,53 @@
+<html>
+  <div id="jsee-container">
+  <script src="/dist/jsee.core.js"></script>
+  <script>
+    new JSEE({
+      schema: {
+        "model": {
+          "type": "py",
+          "description": "Testing pyodide entry function",
+          "entry": "calculate",
+          "worker": true,
+          "autorun": false,
+          "code": [
+            "module_loads = globals().get('module_loads', 0) + 1",
+            "",
+            "def calculate(a, b, ctx=None):",
+            "    return {",
+            "        'result': a + b,",
+            "        'module_loads': module_loads,",
+            "        'run_caller': ctx.get('caller') if ctx else None,",
+            "    }"
+          ].join("\n")
+        },
+        "inputs": [
+          {
+            "type": "int",
+            "name": "a",
+            "default": 2
+          },
+          {
+            "type": "int",
+            "name": "b",
+            "default": 5
+          }
+        ],
+        "outputs": [
+          {
+            "type": "code",
+            "name": "result"
+          },
+          {
+            "type": "code",
+            "name": "module_loads"
+          },
+          {
+            "type": "code",
+            "name": "run_caller"
+          }
+        ]
+      }
+    })
+  </script>
+</html>

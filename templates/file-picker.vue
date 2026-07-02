@@ -98,6 +98,8 @@
 </template>
 
 <script>
+const { normalizeSecurityOptions, isNetworkUrl } = require('../src/utils.js')
+
 export default {
   name: 'FilePicker',
   props: {
@@ -108,6 +110,7 @@ export default {
     url:           { type: String,  default: '' },
     raw:           { type: Boolean, default: false },
     autoload:      { type: Boolean, default: false },
+    security:      { type: Object,  default: null },
     labelValue:    { type: String,  default: 'Choose File' }
   },
   emits : ['update:modelValue', 'update:url', 'change'],
@@ -129,6 +132,9 @@ export default {
     },
     requiresTypeCheck () { return this.accept !== '*/*' },
     acceptedTypes ()     { return this.accept.split(',') },
+    securityOptions () {
+      return normalizeSecurityOptions(this.security)
+    },
     urlModel: {
       get () { return this.url },
       set (v) { this.$emit('update:url', v) }
@@ -156,32 +162,30 @@ export default {
   methods: {
     /* drag-drop handling */
     cancelHandlers (e) { e.preventDefault(); e.stopPropagation() },
-    setActive (e)      { this.isActive = true;  this.cancelHandlers(e) },
-    cancelActive (e)   { this.isActive = false; this.cancelHandlers(e) },
+    setActive (e) { this.isActive = true; this.cancelHandlers(e) },
+    cancelActive (e) { this.isActive = false; this.cancelHandlers(e) },
 
     fileAdded (e) {
-      this.isActive = false;
-      this.cancelHandlers(e);
+      this.isActive = false
+      this.cancelHandlers(e)
 
-      const wasDropped = !!e.dataTransfer;
+      const wasDropped = !!e.dataTransfer
       if (wasDropped && this.urlModel && this.urlModel.length > 0) {
-        console.log('[File picker] URL mode active, ignoring dropped files');
-        return;
+        return
       }
-      const files = wasDropped ? e.dataTransfer.files : e.target.files;
-      this.label = Array.from(files).map(f => f.name).join(', ');
+      const files = wasDropped ? e.dataTransfer.files : e.target.files
+      this.label = Array.from(files).map(f => f.name).join(', ')
       const totalSizeinKB = Array.from(files).reduce((acc, f) => acc + f.size / 1024, 0).toFixed(2)
-      this.info = `Selected ${files.length} file(s) of size ${totalSizeinKB} KB`;
+      this.info = `Selected ${files.length} file(s) of size ${totalSizeinKB} KB`
 
       if (wasDropped && !this.allowMultiple && files.length > 1)
-        throw new Error('vue-file-picker: Multiple files are not allowed');
+        throw new Error('vue-file-picker: Multiple files are not allowed')
       if (wasDropped && this.requiresTypeCheck)
         for (const f of files)
           if (!this.acceptedTypes.includes(f.type))
-            throw new Error('vue-file-picker: File type not allowed');
+            throw new Error('vue-file-picker: File type not allowed')
 
-      console.log('[File picker] Files added:', files);
-      this.loadFile(files);
+      this.loadFile(files)
     },
 
     loadFile (e) {
@@ -204,6 +208,12 @@ export default {
 
     loadUrl () {
       if (this.urlModel && this.urlModel.length > 0) {
+        if (this.securityOptions.allowNetwork === false && isNetworkUrl(this.urlModel)) {
+          this.urlSuccess = false
+          this.urlError = true
+          this.info = 'URL blocked by security.allowNetwork'
+          return
+        }
         if (this.raw) {
           this.urlSuccess = true
           this.urlError = false

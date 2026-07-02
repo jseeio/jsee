@@ -11,7 +11,9 @@
           "container": "object",
           "code": `
             import numpy as np
-            from js import a, b
+            from js import a, b, location as js_location
+            assert inputs["location"] == "earth"
+            assert str(js_location) != "earth"
             np.mean([a, b])
           `.replace(/^\s+/gm, ''),
           "autorun": false,
@@ -28,6 +30,11 @@
           {
             "type": "int",
             "name": "b"
+          },
+          {
+            "type": "string",
+            "name": "location",
+            "default": "earth"
           }
         ],
         "outputs": [

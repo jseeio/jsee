@@ -2,8 +2,11 @@ const FileReader = window['FileReader']
 import FilePicker from './file-picker.vue'
 
 const component = {
-  props: ['input'],
+  props: ['input', 'security'],
   emits: ['inchange'],
+  inject: {
+    jsee: { default: null }
+  },
   components: { FilePicker },
   data () {
     return {
@@ -32,8 +35,13 @@ const component = {
       el.style.height = 'auto'
       el.style.height = el.scrollHeight + 'px'
     },
-    call (method) {
-      console.log('calling: ', method)
+    runAction () {
+      const caller = this.input && this.input.name
+        ? this.input.name.toLowerCase().replace(/ /g, '_')
+        : 'run'
+      if (this.jsee && this.jsee.run) {
+        this.jsee.run(caller)
+      }
     },
     folderSelected (e) {
       const files = Array.from(e.target.files)
