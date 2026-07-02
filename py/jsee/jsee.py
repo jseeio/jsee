@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
 import base64
+import asyncio
 import datetime
 import enum
+import html as html_lib
 import inspect
 import io
 import json
@@ -10,7 +12,7 @@ import os
 import typing
 import importlib
 from inspect import signature, _empty
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import urllib.parse
 
 from .types import (
@@ -83,11 +85,15 @@ TEMPLATE = """<!DOCTYPE html>
     }})
     var saveBtn = document.getElementById('save-html-btn')
     if (saveBtn) {{
-      saveBtn.addEventListener('click', function () {{ env.download("{name}") }})
+      saveBtn.addEventListener('click', function () {{ env.download({download_name_json}) }})
     }}
   </script>
 </body>
 </html>"""
+
+
+def _safe_json_for_script(value):
+  return json.dumps(value).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
 
 
 def _type_hint_to_jsee(hint):
@@ -184,9 +190,6 @@ def _return_hint_to_output(hint):
   # list — suggest table
   if origin is list or hint is list:
     return [{'name': 'result', 'type': 'table'}]
-  if hint is bytes or hint is bytearray:
-    return [{'name': 'result', 'type': 'image'}]
-
   return None
 
 
@@ -348,28 +351,203 @@ def jsee_inputs_to_json_schema(inputs):
   return {'type': 'object', 'properties': properties, 'required': required}
 
 
+def _flatten_outputs(outputs, flat=None):
+  if flat is None:
+    flat = []
+  if not isinstance(outputs, list):
+    return flat
+  for output in outputs:
+    if not isinstance(output, dict):
+      continue
+    if output.get('type') == 'group':
+      _flatten_outputs(output.get('elements'), flat)
+      continue
+    if output.get('name'):
+      flat.append(output)
+  return flat
+
+
+def _table_output_json_schema():
+  return {
+    'oneOf': [
+      {
+        'type': 'object',
+        'properties': {
+          'columns': {'type': 'array', 'items': {'type': 'string'}},
+          'rows': {'type': 'array', 'items': {'type': 'array', 'items': {}}},
+        },
+        'required': ['columns', 'rows'],
+        'additionalProperties': True,
+      },
+      {
+        'type': 'array',
+        'items': {'type': 'object', 'additionalProperties': True},
+      },
+    ]
+  }
+
+
+def _file_like_output_json_schema():
+  return {
+    'oneOf': [
+      {'type': 'string'},
+      {
+        'type': 'object',
+        'properties': {
+          'filename': {'type': 'string'},
+          'name': {'type': 'string'},
+          'mime': {'type': 'string'},
+          'contentType': {'type': 'string'},
+          'content': {},
+          'value': {},
+          'data': {},
+          'url': {'type': 'string'},
+        },
+        'additionalProperties': True,
+      },
+    ]
+  }
+
+
+def jsee_output_to_json_schema(output):
+  t = (output or {}).get('type')
+  if t == 'number':
+    return {'type': 'number'}
+  if t == 'gauge':
+    return {
+      'oneOf': [
+        {'type': 'number'},
+        {'type': 'object', 'additionalProperties': True},
+      ]
+    }
+  if t == 'table':
+    return _table_output_json_schema()
+  if t in ('file', 'image', 'audio', 'video', 'pdf', 'viewer'):
+    return _file_like_output_json_schema()
+  if t in ('markdown', 'html', 'svg', 'code', 'highlight'):
+    return {'type': 'string'}
+  if t in ('alert', 'chat'):
+    return {
+      'oneOf': [
+        {'type': 'string'},
+        {'type': 'object', 'additionalProperties': True},
+        {'type': 'array', 'items': {'type': 'object', 'additionalProperties': True}},
+      ]
+    }
+  if t in ('chart', 'map', '3d', 'gallery', 'object'):
+    return {
+      'oneOf': [
+        {'type': 'object', 'additionalProperties': True},
+        {'type': 'array', 'items': {}},
+      ]
+    }
+  return {}
+
+
+def jsee_outputs_to_json_schema(outputs):
+  flat_outputs = _flatten_outputs(outputs)
+  if not flat_outputs:
+    return {'type': 'object', 'additionalProperties': True}
+  properties = {}
+  for output in flat_outputs:
+    properties[output['name']] = jsee_output_to_json_schema(output)
+  return {
+    'type': 'object',
+    'properties': properties,
+    'additionalProperties': True,
+  }
+
+
+def jsee_inputs_to_multipart_json_schema(inputs):
+  schema = jsee_inputs_to_json_schema(inputs)
+  for inp in (inputs or []):
+    if not isinstance(inp, dict) or not inp.get('name'):
+      continue
+    if inp.get('type') == 'file':
+      schema['properties'][inp['name']] = {'type': 'string', 'format': 'binary'}
+  return schema
+
+
+def _has_file_input(inputs):
+  for inp in (inputs or []):
+    if not isinstance(inp, dict):
+      continue
+    if inp.get('type') == 'group' and _has_file_input(inp.get('elements')):
+      return True
+    if inp.get('type') == 'file':
+      return True
+  return False
+
+
+def _openapi_request_examples(examples):
+  if not isinstance(examples, list) or not examples:
+    return None
+  result = {}
+  for index, example in enumerate(examples):
+    value = example.get('inputs') if isinstance(example, dict) and isinstance(example.get('inputs'), dict) else example
+    result['example{}'.format(index + 1)] = {'value': value}
+  return result
+
+
+def _openapi_error_response(description):
+  return {
+    'description': description,
+    'content': {
+      'application/json': {
+        'schema': {
+          'type': 'object',
+          'properties': {
+            'error': {'type': 'string'},
+          },
+          'required': ['error'],
+          'additionalProperties': True,
+        }
+      }
+    }
+  }
+
+
 def generate_openapi_spec(schema):
   """Generate OpenAPI 3.1 spec from JSEE schema."""
   models = schema.get('model', [])
   if isinstance(models, dict):
     models = [models]
   input_schema = jsee_inputs_to_json_schema(schema.get('inputs'))
+  output_schema = jsee_outputs_to_json_schema(schema.get('outputs'))
+  examples = _openapi_request_examples(schema.get('examples'))
   paths = {}
   for m in models:
     name = m.get('name', 'model')
+    json_content = {'schema': input_schema}
+    if examples:
+      json_content['examples'] = examples
+    request_content = {'application/json': json_content}
+    if _has_file_input(schema.get('inputs')):
+      request_content['multipart/form-data'] = {
+        'schema': jsee_inputs_to_multipart_json_schema(schema.get('inputs'))
+      }
+    response_content = {'application/json': {'schema': output_schema}}
+    if m.get('stream'):
+      response_content['text/event-stream'] = {
+        'schema': {'type': 'string'},
+        'description': 'Server-Sent Events stream with data frames and a [DONE] sentinel',
+      }
     paths['/' + name] = {
       'post': {
         'summary': 'Run ' + name,
         'operationId': name,
         'requestBody': {
           'required': True,
-          'content': {'application/json': {'schema': input_schema}}
+          'content': request_content
         },
         'responses': {
           '200': {
             'description': 'Model output',
-            'content': {'application/json': {'schema': {'type': 'object'}}}
-          }
+            'content': response_content
+          },
+          '400': _openapi_error_response('Invalid request'),
+          '404': _openapi_error_response('Unknown model'),
+          '500': _openapi_error_response('Model execution error'),
         }
       }
     }
@@ -412,6 +590,84 @@ def _load_model_func(schema, cwd='.'):
   return funcs
 
 
+def _filter_kwargs(func, data):
+  """Drop undeclared runtime metadata before calling Python model functions."""
+  if not isinstance(data, dict):
+    return data
+  target = getattr(func, '_jsee_target', func)
+  sig = inspect.signature(target)
+  params = sig.parameters
+  accepts_var_kw = any(
+    p.kind == inspect.Parameter.VAR_KEYWORD
+    for p in params.values()
+  )
+  if accepts_var_kw:
+    return {k: v for k, v in data.items() if k != '_jsee'}
+  return {
+    k: v
+    for k, v in data.items()
+    if k in params and k != '_jsee'
+  }
+
+
+def _call_model_func(func, data):
+  result = func(**_filter_kwargs(func, data))
+  if inspect.isawaitable(result):
+    result = asyncio.run(result)
+  return result
+
+
+def _wrap_chat_result(result):
+  if isinstance(result, str):
+    return {'chat': result}
+  return result
+
+
+def _wrap_chat_async_result(result):
+  async def _wrapped():
+    value = await result
+    return _wrap_chat_result(value)
+  return _wrapped()
+
+
+def _resolve_static_file(root, rel):
+  """Resolve a static path under root, denying traversal and private paths."""
+  root_real = os.path.realpath(root or '.')
+  rel = urllib.parse.unquote(rel or '')
+  rel = rel.replace('\\', '/')
+  if os.path.isabs(rel):
+    raise PermissionError('Path outside app root')
+
+  parts = [p for p in rel.split('/') if p]
+  if any(p == '..' for p in parts):
+    raise PermissionError('Path outside app root')
+  if any(p.startswith('.') or p == 'node_modules' for p in parts):
+    raise PermissionError('Static path is not allowed')
+
+  candidate = os.path.realpath(os.path.join(root_real, rel))
+  try:
+    common = os.path.commonpath([root_real, candidate])
+  except ValueError:
+    raise PermissionError('Path outside app root')
+  if common != root_real:
+    raise PermissionError('Path outside app root')
+  if not os.path.isfile(candidate):
+    return None
+  return candidate
+
+
+def _stream_sse_result(result, write_chunk):
+  if inspect.isasyncgen(result):
+    async def _consume():
+      async for chunk in result:
+        write_chunk(chunk)
+    asyncio.run(_consume())
+    return
+
+  for chunk in result:
+    write_chunk(chunk)
+
+
 def _parse_multipart(content_type, body):
   """Parse multipart/form-data using stdlib email parser."""
   from email.parser import BytesParser
@@ -450,11 +706,36 @@ def _to_table_format(data):
   return {'columns': columns, 'rows': rows}
 
 
+def _binary_startswith(data, prefix, offset=0):
+  return len(data) >= offset + len(prefix) and data[offset:offset + len(prefix)] == prefix
+
+
+def _sniff_binary_mime(data):
+  if _binary_startswith(data, b'\x89PNG\r\n\x1a\n'):
+    return 'image/png'
+  if _binary_startswith(data, b'\xff\xd8\xff'):
+    return 'image/jpeg'
+  if _binary_startswith(data, b'GIF87a') or _binary_startswith(data, b'GIF89a'):
+    return 'image/gif'
+  if _binary_startswith(data, b'RIFF') and _binary_startswith(data, b'WEBP', 8):
+    return 'image/webp'
+  if _binary_startswith(data, b'%PDF'):
+    return 'application/pdf'
+  if _binary_startswith(data, b'RIFF') and _binary_startswith(data, b'WAVE', 8):
+    return 'audio/wav'
+  return 'application/octet-stream'
+
+
+def _binary_data_url(value):
+  data = bytes(value)
+  b64 = base64.b64encode(data).decode('ascii')
+  return 'data:{};base64,{}'.format(_sniff_binary_mime(data), b64)
+
+
 def _serialize_value(value):
   """Serialize a single value (may be nested inside a dict result)."""
   if isinstance(value, (bytes, bytearray)):
-    b64 = base64.b64encode(value).decode('ascii')
-    return 'data:image/png;base64,' + b64
+    return _binary_data_url(value)
   if hasattr(value, 'save') and hasattr(value, 'mode'):
     buf = io.BytesIO()
     fmt = 'PNG' if value.mode == 'RGBA' else 'JPEG'
@@ -485,7 +766,7 @@ def _serialize_result(result):
   return {'result': result}
 
 
-def serve(target, host='0.0.0.0', port=5050, **kwargs):
+def serve(target, host='127.0.0.1', port=5050, **kwargs):
   """Start a server with GUI + JSON API.
 
   target can be:
@@ -515,9 +796,10 @@ def serve(target, host='0.0.0.0', port=5050, **kwargs):
       original_fn = target
       def _chat_wrapper(**data):
         result = original_fn(**data)
-        if isinstance(result, str):
-          return {'chat': result}
-        return result
+        if inspect.isawaitable(result):
+          return _wrap_chat_async_result(result)
+        return _wrap_chat_result(result)
+      _chat_wrapper._jsee_target = original_fn
       funcs[target.__name__] = _chat_wrapper
     else:
       funcs[target.__name__] = target
@@ -548,8 +830,9 @@ def serve(target, host='0.0.0.0', port=5050, **kwargs):
   model_name = models[0].get('title') or models[0].get('name', 'JSEE') if models else 'JSEE'
   display_host = 'localhost' if host == '0.0.0.0' else host
   html = TEMPLATE.format(
-    name=model_name,
-    schema_json=json.dumps(schema),
+    name=html_lib.escape(model_name),
+    schema_json=_safe_json_for_script(schema),
+    download_name_json=_safe_json_for_script(model_name),
     address='{}:{}'.format(display_host, port)
   )
   html_bytes = html.encode('utf-8')
@@ -614,8 +897,12 @@ def serve(target, host='0.0.0.0', port=5050, **kwargs):
 
       # Serve static files from schema directory
       rel = pathname.lstrip('/')
-      filepath = os.path.normpath(os.path.join(schema_cwd, rel))
-      if filepath.startswith(os.path.normpath(schema_cwd)) and os.path.isfile(filepath):
+      try:
+        filepath = _resolve_static_file(schema_cwd, rel)
+      except PermissionError:
+        self.send_error(403)
+        return
+      if filepath:
         ext = os.path.splitext(filepath)[1].lower()
         content_type = mime_types.get(ext, 'application/octet-stream')
         with open(filepath, 'rb') as f:
@@ -650,7 +937,7 @@ def serve(target, host='0.0.0.0', port=5050, **kwargs):
         return self._send_error('Invalid request: ' + str(e), 400)
 
       try:
-        result = funcs[model_name](**data)
+        result = _call_model_func(funcs[model_name], data)
         # Generator → SSE streaming response
         if inspect.isgenerator(result) or inspect.isasyncgen(result):
           self.send_response(200)
@@ -659,10 +946,11 @@ def serve(target, host='0.0.0.0', port=5050, **kwargs):
           self.send_header('Access-Control-Allow-Origin', '*')
           self.end_headers()
           try:
-            for chunk in result:
+            def _write_chunk(chunk):
               payload = json.dumps(_serialize_result(chunk))
               self.wfile.write('data: {}\n\n'.format(payload).encode('utf-8'))
               self.wfile.flush()
+            _stream_sse_result(result, _write_chunk)
             self.wfile.write('data: [DONE]\n\n'.encode('utf-8'))
             self.wfile.flush()
           except (BrokenPipeError, ConnectionResetError):
@@ -672,7 +960,7 @@ def serve(target, host='0.0.0.0', port=5050, **kwargs):
       except Exception as e:
         self._send_error(str(e), 500)
 
-  server = HTTPServer((host, port), Handler)
+  server = ThreadingHTTPServer((host, port), Handler)
   print('JSEE server: http://{}:{}'.format(
     'localhost' if host == '0.0.0.0' else host, port))
   print('  GUI: http://localhost:{}/'.format(port))
@@ -705,7 +993,7 @@ def create_app(target, **kwargs):
   """
   funcs = {}
   schema_cwd = '.'
-  host = kwargs.pop('host', '0.0.0.0')
+  host = kwargs.pop('host', '127.0.0.1')
   port = kwargs.pop('port', 5050)
 
   if isinstance(target, str):
@@ -722,9 +1010,10 @@ def create_app(target, **kwargs):
       original_fn = target
       def _chat_wrapper(**data):
         result = original_fn(**data)
-        if isinstance(result, str):
-          return {'chat': result}
-        return result
+        if inspect.isawaitable(result):
+          return _wrap_chat_async_result(result)
+        return _wrap_chat_result(result)
+      _chat_wrapper._jsee_target = original_fn
       funcs[target.__name__] = _chat_wrapper
     else:
       funcs[target.__name__] = target
@@ -752,8 +1041,9 @@ def create_app(target, **kwargs):
   model_name = models[0].get('title') or models[0].get('name', 'JSEE') if models else 'JSEE'
   display_host = 'localhost' if host == '0.0.0.0' else host
   html = TEMPLATE.format(
-    name=model_name,
-    schema_json=json.dumps(schema),
+    name=html_lib.escape(model_name),
+    schema_json=_safe_json_for_script(schema),
+    download_name_json=_safe_json_for_script(model_name),
     address='{}:{}'.format(display_host, port)
   )
   html_bytes = html.encode('utf-8')
@@ -814,8 +1104,12 @@ def create_app(target, **kwargs):
 
       # Static files from schema directory
       rel = path_info.lstrip('/')
-      filepath = os.path.normpath(os.path.join(schema_cwd, rel))
-      if filepath.startswith(os.path.normpath(schema_cwd)) and os.path.isfile(filepath):
+      try:
+        filepath = _resolve_static_file(schema_cwd, rel)
+      except PermissionError:
+        start_response('403 Forbidden', [('Content-Type', 'text/plain')])
+        return [b'Forbidden']
+      if filepath:
         ext = os.path.splitext(filepath)[1].lower()
         content_type = mime_types.get(ext, 'application/octet-stream')
         with open(filepath, 'rb') as f:
@@ -859,7 +1153,7 @@ def create_app(target, **kwargs):
         return [body]
 
       try:
-        result = funcs[model_name_req](**data)
+        result = _call_model_func(funcs[model_name_req], data)
         body = json.dumps(_serialize_result(result)).encode('utf-8')
         start_response('200 OK', [
           ('Content-Type', 'application/json; charset=utf-8'),

@@ -119,7 +119,7 @@ examples:
 )
 parser.add_argument('target', help='Python file with function (e.g. example.py) or schema.json')
 parser.add_argument('function', nargs='?', default=None, help='Function name (required for .py files)')
-parser.add_argument('--host', default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
+parser.add_argument('--host', default='127.0.0.1', help='Host to bind to (default: 127.0.0.1)')
 parser.add_argument('--port', type=int, default=5050, help='Port to listen on (default: 5050)')
 
 args, extra = parser.parse_known_args()

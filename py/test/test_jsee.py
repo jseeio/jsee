@@ -2,6 +2,7 @@
 
 import datetime
 import enum
+import io
 import json
 import os
 import sys
@@ -25,6 +26,7 @@ from jsee.jsee import (
     _return_hint_to_output,
     _serialize_result,
     _to_table_format,
+    create_app,
     serve,
 )
 from jsee.types import (
@@ -261,6 +263,48 @@ class TestGenerateOpenAPISpec:
         schema = {'model': [], 'inputs': []}
         spec = generate_openapi_spec(schema)
         assert spec['info']['title'] == 'JSEE API'
+
+    def test_output_multipart_sse_error_and_example_schemas(self):
+        schema = {
+            'title': 'Analysis API',
+            'model': {'name': 'analyze', 'type': 'post', 'stream': True},
+            'inputs': [
+                {'name': 'x', 'type': 'int'},
+                {'name': 'upload', 'type': 'file'},
+            ],
+            'outputs': [
+                {'name': 'summary', 'type': 'markdown'},
+                {'name': 'score', 'type': 'number'},
+                {'name': 'rows', 'type': 'table'},
+                {
+                    'name': 'assets',
+                    'type': 'group',
+                    'elements': [
+                        {'name': 'report', 'type': 'pdf'},
+                    ],
+                },
+            ],
+            'examples': [{'x': 3}],
+        }
+
+        spec = generate_openapi_spec(schema)
+        operation = spec['paths']['/analyze']['post']
+        request_content = operation['requestBody']['content']
+        response_content = operation['responses']['200']['content']
+        response_schema = response_content['application/json']['schema']
+
+        assert request_content['application/json']['examples']['example1']['value'] == {'x': 3}
+        assert request_content['multipart/form-data']['schema']['properties']['upload'] == {
+            'type': 'string',
+            'format': 'binary',
+        }
+        assert response_schema['properties']['summary'] == {'type': 'string'}
+        assert response_schema['properties']['score'] == {'type': 'number'}
+        assert 'oneOf' in response_schema['properties']['rows']
+        assert 'oneOf' in response_schema['properties']['report']
+        assert 'text/event-stream' in response_content
+        assert operation['responses']['400']['content']['application/json']['schema']['properties']['error'] == {'type': 'string'}
+        assert 'error' in operation['responses']['500']['content']['application/json']['schema']['required']
 
 
 # ---------------------------------------------------------------------------
@@ -503,6 +547,133 @@ class TestServerWithDictReturn:
         result = json.loads(resp.read())
         assert result['sum'] == 7
         assert result['product'] == 12
+
+
+class TestWsgiKwargFiltering:
+    def _post(self, app, path, payload):
+        body = json.dumps(payload).encode()
+        environ = {
+            'REQUEST_METHOD': 'POST',
+            'PATH_INFO': path,
+            'CONTENT_LENGTH': str(len(body)),
+            'CONTENT_TYPE': 'application/json',
+            'wsgi.input': io.BytesIO(body),
+        }
+        captured = {}
+
+        def start_response(status, headers):
+            captured['status'] = status
+            captured['headers'] = headers
+
+        response = b''.join(app(environ, start_response)).decode()
+        return captured['status'], json.loads(response)
+
+    def test_drops_runtime_caller_for_functions_without_kwargs(self):
+        app = create_app(add)
+
+        status, result = self._post(app, '/add', {
+            'x': 2,
+            'y': 3,
+            'caller': 'run'
+        })
+
+        assert status.startswith('200 ')
+        assert result == {'result': 5}
+
+    def test_chat_history_is_preserved_when_declared(self):
+        def chat(message: str, history: list = []) -> str:
+            return '{}:{}'.format(len(history), message)
+
+        app = create_app(chat, chat=True)
+        status, result = self._post(app, '/chat', {
+            'message': 'hello',
+            'history': [{'role': 'user', 'content': 'hi'}],
+            'caller': 'run'
+        })
+
+        assert status.startswith('200 ')
+        assert result == {'chat': '1:hello'}
+
+
+class TestWsgiStaticAndAsync:
+    def _request(self, app, method, path, payload=None):
+        body = json.dumps(payload).encode() if payload is not None else b''
+        environ = {
+            'REQUEST_METHOD': method,
+            'PATH_INFO': path,
+            'CONTENT_LENGTH': str(len(body)),
+            'CONTENT_TYPE': 'application/json',
+            'wsgi.input': io.BytesIO(body),
+        }
+        captured = {}
+
+        def start_response(status, headers):
+            captured['status'] = status
+            captured['headers'] = headers
+
+        response = b''.join(app(environ, start_response))
+        return captured['status'], response
+
+    def _post(self, app, path, payload):
+        status, body = self._request(app, 'POST', path, payload)
+        return status, json.loads(body.decode())
+
+    def test_static_files_are_root_contained(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = os.path.join(tmpdir, 'app')
+            sibling = os.path.join(tmpdir, 'app_evil')
+            os.mkdir(root)
+            os.mkdir(sibling)
+            with open(os.path.join(root, 'schema.json'), 'w') as f:
+                json.dump({'model': [], 'inputs': []}, f)
+            with open(os.path.join(root, 'public.txt'), 'w') as f:
+                f.write('ok')
+            with open(os.path.join(root, '.env'), 'w') as f:
+                f.write('secret')
+            os.mkdir(os.path.join(root, 'node_modules'))
+            with open(os.path.join(root, 'node_modules', 'pkg.js'), 'w') as f:
+                f.write('module')
+            with open(os.path.join(sibling, 'secret.txt'), 'w') as f:
+                f.write('leaked')
+
+            app = create_app(os.path.join(root, 'schema.json'))
+
+            status, body = self._request(app, 'GET', '/public.txt')
+            assert status.startswith('200 ')
+            assert body == b'ok'
+
+            status, _ = self._request(app, 'GET', '/../app_evil/secret.txt')
+            assert status.startswith('403 ')
+
+            status, _ = self._request(app, 'GET', '/.env')
+            assert status.startswith('403 ')
+
+            status, _ = self._request(app, 'GET', '/node_modules/pkg.js')
+            assert status.startswith('403 ')
+
+    def test_async_functions_are_awaited(self):
+        async def add_async(x: int) -> dict:
+            return {'result': x + 1}
+
+        app = create_app(add_async)
+        status, result = self._post(app, '/add_async', {'x': 4})
+
+        assert status.startswith('200 ')
+        assert result == {'result': 5}
+
+    def test_async_chat_strings_are_wrapped(self):
+        async def chat(message: str, history: list = []) -> str:
+            return '{}:{}'.format(len(history), message.upper())
+
+        app = create_app(chat, chat=True)
+        status, result = self._post(app, '/chat', {
+            'message': 'hello',
+            'history': [{'role': 'user', 'content': 'hi'}],
+            'caller': 'run'
+        })
+
+        assert status.startswith('200 ')
+        assert result == {'chat': '1:HELLO'}
 
 
 class TestServerWithSchema:
@@ -773,9 +944,8 @@ class TestReturnHintToOutput:
         out = _return_hint_to_output(list)
         assert out == [{'name': 'result', 'type': 'table'}]
 
-    def test_bytes_returns_image(self):
-        out = _return_hint_to_output(bytes)
-        assert out == [{'name': 'result', 'type': 'image'}]
+    def test_bytes_returns_none_for_runtime_auto_detection(self):
+        assert _return_hint_to_output(bytes) is None
 
     def test_annotated_markdown(self):
         out = _return_hint_to_output(Annotated[str, Markdown()])
@@ -887,10 +1057,23 @@ class TestSerializeResultNested:
         assert serialized['score'] == 42
 
     def test_dict_with_bytes_value(self):
-        result = {'image': b'\x89PNG', 'label': 'cat'}
+        result = {'image': b'\x89PNG\r\n\x1a\n', 'label': 'cat'}
         serialized = _serialize_result(result)
         assert serialized['image'].startswith('data:image/png;base64,')
         assert serialized['label'] == 'cat'
+
+    def test_bytes_mime_sniffing(self):
+        cases = [
+            (b'%PDF-1.4\n', 'data:application/pdf;base64,'),
+            (bytes([0xff, 0xd8, 0xff, 0xe0]), 'data:image/jpeg;base64,'),
+            (b'GIF89a', 'data:image/gif;base64,'),
+            (b'RIFF\x24\x00\x00\x00WEBPVP8 ', 'data:image/webp;base64,'),
+            (b'RIFF\x24\x00\x00\x00WAVEfmt ', 'data:audio/wav;base64,'),
+            (bytes([1, 2, 3]), 'data:application/octet-stream;base64,'),
+        ]
+
+        for value, prefix in cases:
+            assert _serialize_result(value)['result'].startswith(prefix)
 
     def test_bare_list_of_dicts(self):
         result = [{'x': 1}, {'x': 2}]
@@ -1104,4 +1287,35 @@ class TestServerWithGenerator:
         assert chunks[1] == {'count': 1}
         assert chunks[2] == {'count': 2}
         # Last line is [DONE]
+        assert lines[3].strip() == 'data: [DONE]'
+
+
+class TestServerWithAsyncGenerator:
+    """Tests for async generator functions served as SSE."""
+
+    @classmethod
+    def setup_class(cls):
+        async def count_async(n: int = 3):
+            for i in range(n):
+                yield {'count': i}
+        cls.port = 15072
+        cls.thread = _start_server(count_async, cls.port, stream=True)
+        cls.base = 'http://localhost:{}'.format(cls.port)
+
+    def test_async_generator_returns_sse(self):
+        req = Request(
+            self.base + '/count_async',
+            data=json.dumps({'n': 3}).encode(),
+            headers={'Content-Type': 'application/json'}
+        )
+        resp = urlopen(req)
+        assert 'text/event-stream' in resp.headers.get('Content-Type', '')
+        body = resp.read().decode('utf-8')
+        lines = [l for l in body.strip().split('\n') if l.startswith('data:')]
+        assert len(lines) == 4
+        chunks = []
+        for line in lines[:3]:
+            payload = json.loads(line[5:].strip())
+            chunks.append(payload)
+        assert chunks == [{'count': 0}, {'count': 1}, {'count': 2}]
         assert lines[3].strip() == 'data: [DONE]'
