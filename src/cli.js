@@ -6,7 +6,9 @@ const Module = require('module')
 
 const minimist = require('minimist')
 
-const { getModelFuncJS, sanitizeName, isRecordObject, normalizeFileOutputValue, generateOpenAPISpec, serializeResult, parseMultipart, fileExtToOutputType } = require('./utils.js')
+const { getModelFuncJS, sanitizeName, isRecordObject, normalizeFileOutputValue, generateOpenAPISpec, serializeResult, parseMultipart, fileExtToOutputType, normalizePyodideOptions, isNetworkUrl } = require('./utils.js')
+
+const API_BODY_LIMIT = '50mb'
 
 let jsdoc2md
 function getJsdocToMarkdown () {
@@ -32,13 +34,185 @@ function pad (str, len, start=0) {
   return str.split('\n').map((s, i) => i >= start ? ' '.repeat(len) + s : s).join('\n')
 }
 
-function depad (str, len) {
-  return str.split('\n').map(s => s.slice(len)).join('\n')
-}
-
 function toArray (value) {
   if (!value) return []
   return Array.isArray(value) ? value : [value]
+}
+
+function escapeHtml (value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function escapeAttr (value) {
+  return escapeHtml(value)
+}
+
+function safeJsonForScript (value) {
+  const json = typeof value === 'undefined' ? 'null' : JSON.stringify(value)
+  return json
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029')
+}
+
+function escapeScriptContent (value) {
+  return String(value == null ? '' : value).replace(/<\/script/gi, '<\\/script')
+}
+
+function encodeAssetForHtml (value) {
+  return Buffer.from(String(value == null ? '' : value), 'utf8').toString('base64')
+}
+
+function hiddenAssetScript (src, value) {
+  return `<script type="application/json" style="display: none;" data-src="${escapeAttr(src)}" data-encoding="base64">${encodeAssetForHtml(value)}</script>`
+}
+
+function sanitizeUrl (value) {
+  if (!value) return ''
+  const text = String(value).trim()
+  try {
+    const parsed = new URL(text)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'mailto:') {
+      return parsed.href
+    }
+    return ''
+  } catch (error) {
+    if (/^(\/|\.\/|\.\.\/|#)/.test(text)) return text
+    return ''
+  }
+}
+
+function sanitizeGoogleAnalyticsId (value) {
+  const text = String(value == null ? '' : value).trim()
+  return /^[A-Za-z0-9_-]+$/.test(text) ? text : ''
+}
+
+function joinUrl (base, rel) {
+  return new URL(rel, base.endsWith('/') ? base : base + '/').href
+}
+
+function ensureTrailingSlash (value) {
+  return value.endsWith('/') ? value : `${value}/`
+}
+
+function getDisplayHost (host) {
+  return (!host || host === '0.0.0.0' || host === '::' || host === '127.0.0.1')
+    ? 'localhost'
+    : host
+}
+
+function makeHttpError (message, status) {
+  const err = new Error(message)
+  err.status = status
+  return err
+}
+
+function hasDeniedPathSegment (relativePath) {
+  return relativePath
+    .split(path.sep)
+    .filter(Boolean)
+    .some(part => part.startsWith('.') || part === 'node_modules')
+}
+
+function resolveInside (root, requested) {
+  if (!requested || typeof requested !== 'string') {
+    throw makeHttpError('path required', 400)
+  }
+  const realRoot = fs.realpathSync(root)
+  const candidate = path.isAbsolute(requested)
+    ? path.resolve(requested)
+    : path.resolve(realRoot, requested)
+  let realCandidate
+  try {
+    realCandidate = fs.realpathSync(candidate)
+  } catch (error) {
+    throw makeHttpError('path not found', 404)
+  }
+  const relative = path.relative(realRoot, realCandidate)
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw makeHttpError('path outside app root', 403)
+  }
+  if (hasDeniedPathSegment(relative)) {
+    throw makeHttpError('path denied', 403)
+  }
+  return realCandidate
+}
+
+function resolveInsideAny (roots, requested) {
+  let lastError = null
+  for (const root of roots) {
+    try {
+      return resolveInside(root, requested)
+    } catch (error) {
+      lastError = error
+      if (error.status && error.status !== 403) {
+        continue
+      }
+    }
+  }
+  throw lastError || makeHttpError('path not found', 404)
+}
+
+function sendEndpointError (res, error, fallbackStatus=500) {
+  const status = error && error.status ? error.status : fallbackStatus
+  res.status(status).json({ error: error.message || 'request failed' })
+}
+
+function isAsyncIterable (value) {
+  return !!value
+    && typeof value !== 'string'
+    && typeof value.next === 'function'
+    && typeof value[Symbol.asyncIterator] === 'function'
+}
+
+function isIterable (value) {
+  if (!value || typeof value === 'string') return false
+  if (Array.isArray(value)) return false
+  if (Buffer.isBuffer(value)) return false
+  if (typeof ArrayBuffer !== 'undefined' && value instanceof ArrayBuffer) return false
+  if (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView && ArrayBuffer.isView(value)) return false
+  return typeof value.next === 'function' && typeof value[Symbol.iterator] === 'function'
+}
+
+function isStreamResult (value) {
+  return isAsyncIterable(value) || isIterable(value)
+}
+
+function writeSseFrame (res, payload, eventName) {
+  const prefix = eventName ? `event: ${eventName}\n` : ''
+  const frame = `${prefix}data: ${payload}\n\n`
+  return new Promise(resolve => {
+    if (res.write(frame)) {
+      resolve()
+      return
+    }
+    res.once('drain', resolve)
+  })
+}
+
+async function writeSseStream (res, result) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  })
+  try {
+    for await (const chunk of result) {
+      await writeSseFrame(res, JSON.stringify(serializeResult(chunk)))
+    }
+  } catch (error) {
+    await writeSseFrame(res, JSON.stringify({ error: error.message || 'stream failed' }), 'error')
+  }
+  await writeSseFrame(res, '[DONE]')
+  res.end()
 }
 
 // Auto-detect CLI argument type: file path, number, JSON array/object, or string
@@ -281,22 +455,6 @@ function toRuntimeUrl (value) {
   }
 }
 
-function isLocalJsImport (value) {
-  if (typeof value !== 'string') return false
-  const lower = value.toLowerCase()
-  if (!lower.endsWith('.js') && !lower.includes('.js?')) return false
-  if (isHttpUrl(value)) return false
-  return value.startsWith('./') || value.startsWith('../') || value.startsWith('/') || value.startsWith('file://')
-}
-
-function isLocalCssImport (value) {
-  if (typeof value !== 'string') return false
-  const lower = value.toLowerCase()
-  if (!lower.endsWith('.css') && !lower.includes('.css?')) return false
-  if (isHttpUrl(value)) return false
-  return value.startsWith('./') || value.startsWith('../') || value.startsWith('/') || value.startsWith('file://')
-}
-
 function getImportUrlValue (importValue) {
   if (typeof importValue === 'string') return importValue
   if (importValue && typeof importValue === 'object' && typeof importValue.url === 'string') {
@@ -366,6 +524,640 @@ function resolveFetchImport (importValue, modelUrl, cwd) {
     importUrl: toRuntimeUrl(importUrlValue),
     localFilePath: null,
     remoteUrl
+  }
+}
+
+function resolveLocalDirectoryFromBase (baseDir, importUrlValue) {
+  if (!importUrlValue || typeof importUrlValue !== 'string') return null
+  if (isHttpUrl(importUrlValue)) return null
+
+  const cleanUrl = importUrlValue.split('?')[0].split('#')[0]
+  const candidate = cleanUrl.startsWith('/')
+    ? path.resolve(baseDir, cleanUrl.slice(1))
+    : path.resolve(baseDir, cleanUrl)
+  if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) return candidate
+  return null
+}
+
+function resolveLocalDirectoryForBundle (importUrlValue, modelUrl, cwd) {
+  if (!importUrlValue || typeof importUrlValue !== 'string') return null
+  if (isHttpUrl(importUrlValue)) return null
+
+  const cleanUrl = importUrlValue.split('?')[0].split('#')[0]
+  const modelDir = modelUrl && !isHttpUrl(modelUrl) ? path.dirname(modelUrl) : '.'
+  const candidates = []
+
+  if (cleanUrl.startsWith('./') || cleanUrl.startsWith('../')) {
+    candidates.push(path.resolve(cwd, path.join(modelDir, cleanUrl)))
+    candidates.push(path.resolve(cwd, cleanUrl))
+  } else if (cleanUrl.startsWith('/')) {
+    candidates.push(path.resolve(cwd, cleanUrl.slice(1)))
+  } else {
+    candidates.push(path.resolve(cwd, cleanUrl))
+    candidates.push(path.resolve(cwd, path.join(modelDir, cleanUrl)))
+  }
+
+  for (const fp of candidates) {
+    if (fs.existsSync(fp) && fs.statSync(fp).isDirectory()) return fp
+  }
+  return null
+}
+
+function getBundleOutputDirectories (outputs, cwd) {
+  const htmlOutputs = toArray(outputs)
+    .filter(output => typeof output === 'string' && output !== 'stdout' && output.includes('.html'))
+
+  if (!htmlOutputs.length) return [cwd]
+
+  return [...new Set(htmlOutputs.map(output => path.dirname(resolveOutputPath(cwd, output))))]
+}
+
+function resolveBundleMode (fetchValue) {
+  if (!fetchValue) return 'none'
+  if (fetchValue === true || fetchValue === 'true') return 'default'
+  if (fetchValue === 'offline-strict' || fetchValue === 'strict') return 'offline-strict'
+  if (fetchValue === 'hybrid') return 'hybrid'
+  if (fetchValue === 'pyodide') return 'pyodide'
+  if (fetchValue === 'pyodide-single' || fetchValue === 'pyodide-inline' || fetchValue === 'single-pyodide') return 'pyodide-single'
+  return 'default'
+}
+
+function isOfflineStrictBundleMode (bundleMode) {
+  return bundleMode === 'offline-strict'
+}
+
+function isPyodideBundleMode (bundleMode) {
+  return bundleMode === 'pyodide'
+}
+
+function isPyodideSingleFileBundleMode (bundleMode) {
+  return bundleMode === 'pyodide-single'
+}
+
+function normalizeBundleAssetDirName (value) {
+  const text = String(value || '').trim().replace(/[^A-Za-z0-9._-]/g, '-')
+  return text.replace(/^-+|-+$/g, '') || 'pyodide'
+}
+
+function getAssetDirBaseName (source) {
+  if (fs.existsSync(source)) {
+    return path.basename(source) || 'pyodide'
+  }
+  try {
+    const parsed = new URL(source)
+    const parts = parsed.pathname.split('/').filter(Boolean)
+    return parts[parts.length - 1] || 'pyodide'
+  } catch (error) {
+    return path.basename(String(source || '')) || 'pyodide'
+  }
+}
+
+function createPyodideAssetDirResolver () {
+  const sourceToRel = new Map()
+  const relToSource = new Map()
+
+  return function getPyodideAssetDir (source) {
+    const sourceKey = fs.existsSync(source)
+      ? fs.realpathSync(source)
+      : String(source)
+    if (sourceToRel.has(sourceKey)) return sourceToRel.get(sourceKey)
+
+    const baseName = normalizeBundleAssetDirName(getAssetDirBaseName(source))
+    let relDir = `${baseName}/`
+    if (relToSource.has(relDir) && relToSource.get(relDir) !== sourceKey) {
+      const hash = crypto.createHash('sha256').update(sourceKey).digest('hex').slice(0, 8)
+      relDir = `${baseName}-${hash}/`
+    }
+
+    sourceToRel.set(sourceKey, relDir)
+    relToSource.set(relDir, sourceKey)
+    return relDir
+  }
+}
+
+function normalizeBundleRelativePath (value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error('Pyodide asset path should be a relative path')
+  }
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value) || value.startsWith('//')) {
+    throw new Error(`Pyodide asset path should be relative: ${value}`)
+  }
+
+  const clean = value.split('?')[0].split('#')[0]
+  const normalized = path.posix.normalize(clean.replace(/\\/g, '/'))
+  if (!normalized || normalized === '.' || normalized.startsWith('../') || normalized === '..' || normalized.startsWith('/')) {
+    throw new Error(`Unsafe Pyodide asset path: ${value}`)
+  }
+  return normalized
+}
+
+function writeBufferToOutputDirs (outputDirs, relPath, buffer) {
+  const safeRelPath = normalizeBundleRelativePath(relPath)
+  outputDirs.forEach(outputDir => {
+    const target = path.join(outputDir, safeRelPath)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, buffer)
+  })
+}
+
+function copyDirectoryContents (sourceDir, destDir) {
+  const realSource = fs.realpathSync(sourceDir)
+  const resolvedDest = path.resolve(destDir)
+  const destRelativeToSource = path.relative(realSource, resolvedDest)
+
+  if (fs.existsSync(resolvedDest)) {
+    const realDest = fs.realpathSync(resolvedDest)
+    if (realDest === realSource) return
+    const realDestRelativeToSource = path.relative(realSource, realDest)
+    if (realDestRelativeToSource && !realDestRelativeToSource.startsWith('..') && !path.isAbsolute(realDestRelativeToSource)) {
+      throw new Error(`Refusing to copy Pyodide assets into their own source directory: ${destDir}`)
+    }
+  } else if (destRelativeToSource && !destRelativeToSource.startsWith('..') && !path.isAbsolute(destRelativeToSource)) {
+    throw new Error(`Refusing to copy Pyodide assets into their own source directory: ${destDir}`)
+  }
+
+  function copyEntry (src, dst) {
+    const stat = fs.lstatSync(src)
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Refusing to copy symlinked Pyodide asset: ${src}`)
+    }
+    if (stat.isDirectory()) {
+      fs.mkdirSync(dst, { recursive: true })
+      for (const entry of fs.readdirSync(src)) {
+        copyEntry(path.join(src, entry), path.join(dst, entry))
+      }
+      return
+    }
+    if (!stat.isFile()) return
+
+    const realFile = fs.realpathSync(src)
+    const rel = path.relative(realSource, realFile)
+    if (rel.startsWith('..') || path.isAbsolute(rel)) {
+      throw new Error(`Refusing to copy Pyodide asset outside source directory: ${src}`)
+    }
+    fs.mkdirSync(path.dirname(dst), { recursive: true })
+    fs.copyFileSync(src, dst)
+  }
+
+  copyEntry(realSource, destDir)
+}
+
+async function readCachedRemoteBuffer (remoteUrl, options={}) {
+  const cacheDir = path.join(os.homedir(), '.cache', 'jsee')
+  fs.mkdirSync(cacheDir, { recursive: true })
+
+  const hash = crypto.createHash('sha256').update(remoteUrl).digest('hex')
+  const cacheFilePath = path.join(cacheDir, `${hash}.bin`)
+
+  if (fs.existsSync(cacheFilePath)) {
+    const stats = fs.statSync(cacheFilePath)
+    const mtime = new Date(stats.mtime)
+    const now = new Date()
+    const ageInDays = (now - mtime) / (1000 * 60 * 60 * 24)
+
+    if (ageInDays < 1) {
+      return fs.readFileSync(cacheFilePath)
+    }
+  }
+
+  const response = await fetch(remoteUrl)
+  if (!response.ok) {
+    if (options.optional && response.status === 404) return null
+    throw new Error(`Failed to fetch ${remoteUrl}: ${response.statusText}`)
+  }
+  const bytes = Buffer.from(await response.arrayBuffer())
+  fs.writeFileSync(cacheFilePath, bytes)
+  return bytes
+}
+
+async function readRemoteText (remoteUrl, options={}) {
+  const buffer = await readCachedRemoteBuffer(remoteUrl, options)
+  return buffer ? buffer.toString('utf8') : null
+}
+
+function getRemoteRelativePath (baseUrl, assetUrl) {
+  const base = ensureTrailingSlash(baseUrl)
+  const full = new URL(assetUrl, base).href
+  if (!full.startsWith(base)) {
+    throw new Error(`Pyodide asset ${full} is outside indexURL ${base}`)
+  }
+  return normalizeBundleRelativePath(decodeURIComponent(full.slice(base.length)))
+}
+
+function getPyodideCoreAssetNames (loaderRelPath) {
+  const names = [
+    'pyodide.asm.wasm',
+    'python_stdlib.zip',
+    'pyodide-lock.json'
+  ]
+  if (loaderRelPath !== 'pyodide.asm.js') names.push('pyodide.asm.js')
+  if (loaderRelPath !== 'pyodide.asm.mjs') names.push('pyodide.asm.mjs')
+  return names
+}
+
+function isOptionalPyodideCoreAsset (assetName) {
+  return assetName === 'pyodide.asm.js' || assetName === 'pyodide.asm.mjs'
+}
+
+function getPyodideRequestedPackages (model, pyodideOptions) {
+  const packages = new Set()
+  if (Array.isArray(pyodideOptions.packages)) {
+    pyodideOptions.packages.forEach(name => {
+      if (typeof name === 'string' && name.trim()) packages.add(name.trim())
+    })
+  }
+
+  toArray(model.imports).forEach(imp => {
+    const url = getImportUrlValue(imp)
+    if (!url || typeof url !== 'string') return
+    if (isHttpUrl(url) || url.startsWith('./') || url.startsWith('../') || url.startsWith('/')) return
+    if (/\.(js|mjs|css)(\?|#|$)/i.test(url)) return
+    packages.add(url)
+  })
+  return [...packages]
+}
+
+function collectPyodidePackageAssets (lockFile, packageNames) {
+  if (!packageNames.length) return []
+  const packages = lockFile && lockFile.packages
+  if (!isRecordObject(packages)) {
+    throw new Error('Pyodide lock file does not contain packages')
+  }
+
+  const files = []
+  const seenPackages = new Set()
+  const visit = name => {
+    if (seenPackages.has(name)) return
+    seenPackages.add(name)
+
+    const pkg = packages[name]
+    if (!pkg) {
+      throw new Error(`Pyodide lock file does not contain package ${name}`)
+    }
+    if (pkg.file_name) files.push(normalizeBundleRelativePath(pkg.file_name))
+    toArray(pkg.depends).forEach(dep => {
+      if (typeof dep === 'string' && dep) visit(dep)
+    })
+  }
+
+  packageNames.forEach(visit)
+  return [...new Set(files)]
+}
+
+function getEmbeddedPyodideAssetMime (relPath) {
+  const lower = relPath.toLowerCase()
+  if (lower.endsWith('.wasm')) return 'application/wasm'
+  if (lower.endsWith('.js') || lower.endsWith('.mjs')) return 'text/javascript'
+  if (lower.endsWith('.json')) return 'application/json'
+  if (lower.endsWith('.zip')) return 'application/zip'
+  if (lower.endsWith('.whl')) return 'application/octet-stream'
+  return 'application/octet-stream'
+}
+
+function addEmbeddedPyodideAsset (assets, relPath, bytes) {
+  const safeRelPath = normalizeBundleRelativePath(relPath)
+  assets.set(safeRelPath, {
+    mime: getEmbeddedPyodideAssetMime(safeRelPath),
+    base64: Buffer.from(bytes).toString('base64')
+  })
+}
+
+function createEmbeddedPyodideManifest (assetId, assets) {
+  const manifestAssets = {}
+  Array.from(assets.keys()).sort().forEach(relPath => {
+    manifestAssets[relPath] = assets.get(relPath)
+  })
+  return {
+    version: 1,
+    baseURL: `jsee-pyodide://${assetId}/`,
+    assets: manifestAssets
+  }
+}
+
+function readLocalPyodideAssetMap (sourceDir) {
+  const realSource = fs.realpathSync(sourceDir)
+  const assets = new Map()
+
+  function readEntry (src) {
+    const stat = fs.lstatSync(src)
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Refusing to embed symlinked Pyodide asset: ${src}`)
+    }
+    if (stat.isDirectory()) {
+      for (const entry of fs.readdirSync(src)) {
+        readEntry(path.join(src, entry))
+      }
+      return
+    }
+    if (!stat.isFile()) return
+
+    const realFile = fs.realpathSync(src)
+    const rel = path.relative(realSource, realFile)
+    if (rel.startsWith('..') || path.isAbsolute(rel)) {
+      throw new Error(`Refusing to embed Pyodide asset outside source directory: ${src}`)
+    }
+    addEmbeddedPyodideAsset(assets, rel.split(path.sep).join('/'), fs.readFileSync(realFile))
+  }
+
+  readEntry(realSource)
+  return assets
+}
+
+function getEmbeddedPyodideAssetId (source, getPyodideAssetDir) {
+  return normalizeBundleAssetDirName(getPyodideAssetDir(source).replace(/\/+$/g, ''))
+}
+
+async function prepareRemotePyodideAssetsForBundle (model, options, outputDirs, getPyodideAssetDir) {
+  const indexURL = ensureTrailingSlash(options.indexURL)
+  const loaderUrl = new URL(options.rawUrl, indexURL).href
+  const loaderRelPath = getRemoteRelativePath(indexURL, loaderUrl)
+  const destIndexURL = getPyodideAssetDir(indexURL)
+  const destLoaderURL = destIndexURL + loaderRelPath
+
+  const loaderCode = await readRemoteText(loaderUrl)
+  writeBufferToOutputDirs(outputDirs, destLoaderURL, Buffer.from(loaderCode, 'utf8'))
+
+  const coreAssetNames = getPyodideCoreAssetNames(loaderRelPath)
+  const lockUrl = new URL('pyodide-lock.json', indexURL).href
+  let lockText = null
+
+  for (const assetName of coreAssetNames) {
+    const optional = isOptionalPyodideCoreAsset(assetName)
+    const remoteUrl = new URL(assetName, indexURL).href
+    const bytes = await readCachedRemoteBuffer(remoteUrl, { optional })
+    if (!bytes) continue
+    if (assetName === 'pyodide-lock.json') lockText = bytes.toString('utf8')
+    writeBufferToOutputDirs(outputDirs, destIndexURL + assetName, bytes)
+  }
+
+  if (!lockText) {
+    lockText = await readRemoteText(lockUrl)
+  }
+  const requestedPackages = getPyodideRequestedPackages(model, options)
+  const lockFile = requestedPackages.length ? JSON.parse(lockText) : null
+  const packageAssets = lockFile ? collectPyodidePackageAssets(lockFile, requestedPackages) : []
+  for (const packageAsset of packageAssets) {
+    const remoteUrl = new URL(packageAsset, indexURL).href
+    const bytes = await readCachedRemoteBuffer(remoteUrl)
+    writeBufferToOutputDirs(outputDirs, destIndexURL + packageAsset, bytes)
+  }
+
+  const nextConfig = isRecordObject(model.pyodide) ? { ...model.pyodide } : {}
+  nextConfig.url = destLoaderURL
+  nextConfig.indexURL = destIndexURL
+  if (options.packages) nextConfig.packages = options.packages
+  model.pyodide = nextConfig
+
+  return {
+    src: destLoaderURL,
+    code: loaderCode,
+    remote: true,
+    indexURL: destIndexURL
+  }
+}
+
+async function preparePyodideAssetsForBundle (model, cwd, outputDirs, getPyodideAssetDir) {
+  if (!model || model.type !== 'py') return null
+  if (typeof model.pyodide === 'undefined') {
+    throw new Error('--bundle=pyodide requires explicit model.pyodide')
+  }
+
+  const options = normalizePyodideOptions(model)
+  if (!options.indexURL) {
+    throw new Error(`--bundle=pyodide requires Pyodide indexURL for model ${model.name || '(unnamed)'}`)
+  }
+  if (isNetworkUrl(options.indexURL)) {
+    return await prepareRemotePyodideAssetsForBundle(model, options, outputDirs, getPyodideAssetDir)
+  }
+
+  const sourceDir = resolveLocalDirectoryForBundle(options.indexURL, model.url, cwd)
+  if (!sourceDir) {
+    throw new Error(`--bundle=pyodide could not find local Pyodide indexURL directory: ${options.indexURL}`)
+  }
+
+  const loaderPath = resolveLocalImportFile(options.rawUrl, model.url, cwd)
+    || path.join(sourceDir, 'pyodide.js')
+  if (!fs.existsSync(loaderPath) || !fs.statSync(loaderPath).isFile()) {
+    throw new Error(`--bundle=pyodide could not find local Pyodide loader: ${options.rawUrl}`)
+  }
+
+  const realSourceDir = fs.realpathSync(sourceDir)
+  const realLoaderPath = fs.realpathSync(loaderPath)
+  const loaderRelative = path.relative(realSourceDir, realLoaderPath)
+  if (loaderRelative.startsWith('..') || path.isAbsolute(loaderRelative)) {
+    throw new Error('--bundle=pyodide requires the Pyodide loader to be inside the local indexURL directory')
+  }
+
+  const destIndexURL = getPyodideAssetDir(sourceDir)
+  const destLoaderURL = destIndexURL + loaderRelative.split(path.sep).join('/')
+
+  outputDirs.forEach(outputDir => {
+    copyDirectoryContents(sourceDir, path.join(outputDir, destIndexURL))
+  })
+
+  const nextConfig = isRecordObject(model.pyodide) ? { ...model.pyodide } : {}
+  nextConfig.url = destLoaderURL
+  nextConfig.indexURL = destIndexURL
+  model.pyodide = nextConfig
+
+  return {
+    src: destLoaderURL,
+    code: fs.readFileSync(realLoaderPath, 'utf8'),
+    remote: false,
+    indexURL: destIndexURL
+  }
+}
+
+async function readRemotePyodideAssetMap (model, options) {
+  const indexURL = ensureTrailingSlash(options.indexURL)
+  const loaderUrl = new URL(options.rawUrl, indexURL).href
+  const loaderRelPath = getRemoteRelativePath(indexURL, loaderUrl)
+  const loaderCode = await readRemoteText(loaderUrl)
+  const assets = new Map()
+
+  const coreAssetNames = getPyodideCoreAssetNames(loaderRelPath)
+  let lockText = null
+
+  for (const assetName of coreAssetNames) {
+    const optional = isOptionalPyodideCoreAsset(assetName)
+    const remoteUrl = new URL(assetName, indexURL).href
+    const bytes = await readCachedRemoteBuffer(remoteUrl, { optional })
+    if (!bytes) continue
+    if (assetName === 'pyodide-lock.json') lockText = bytes.toString('utf8')
+    addEmbeddedPyodideAsset(assets, assetName, bytes)
+  }
+
+  if (!lockText) {
+    lockText = await readRemoteText(new URL('pyodide-lock.json', indexURL).href)
+    addEmbeddedPyodideAsset(assets, 'pyodide-lock.json', Buffer.from(lockText, 'utf8'))
+  }
+
+  const requestedPackages = getPyodideRequestedPackages(model, options)
+  const lockFile = requestedPackages.length ? JSON.parse(lockText) : null
+  const packageAssets = lockFile ? collectPyodidePackageAssets(lockFile, requestedPackages) : []
+  for (const packageAsset of packageAssets) {
+    const remoteUrl = new URL(packageAsset, indexURL).href
+    const bytes = await readCachedRemoteBuffer(remoteUrl)
+    addEmbeddedPyodideAsset(assets, packageAsset, bytes)
+  }
+
+  return { loaderCode, assets, source: indexURL }
+}
+
+async function preparePyodideSingleFileBundle (model, cwd, getPyodideAssetDir) {
+  if (!model || model.type !== 'py') return null
+  if (typeof model.pyodide === 'undefined') {
+    throw new Error('--bundle=pyodide-single requires explicit model.pyodide')
+  }
+
+  const options = normalizePyodideOptions(model)
+  if (!options.indexURL) {
+    throw new Error(`--bundle=pyodide-single requires Pyodide indexURL for model ${model.name || '(unnamed)'}`)
+  }
+
+  let loaderCode
+  let assets
+  let source
+
+  if (isNetworkUrl(options.indexURL)) {
+    const remote = await readRemotePyodideAssetMap(model, options)
+    loaderCode = remote.loaderCode
+    assets = remote.assets
+    source = remote.source
+  } else {
+    const sourceDir = resolveLocalDirectoryForBundle(options.indexURL, model.url, cwd)
+    if (!sourceDir) {
+      throw new Error(`--bundle=pyodide-single could not find local Pyodide indexURL directory: ${options.indexURL}`)
+    }
+
+    const loaderPath = resolveLocalImportFile(options.rawUrl, model.url, cwd)
+      || path.join(sourceDir, 'pyodide.js')
+    if (!fs.existsSync(loaderPath) || !fs.statSync(loaderPath).isFile()) {
+      throw new Error(`--bundle=pyodide-single could not find local Pyodide loader: ${options.rawUrl}`)
+    }
+
+    const realSourceDir = fs.realpathSync(sourceDir)
+    const realLoaderPath = fs.realpathSync(loaderPath)
+    const loaderRelative = path.relative(realSourceDir, realLoaderPath)
+    if (loaderRelative.startsWith('..') || path.isAbsolute(loaderRelative)) {
+      throw new Error('--bundle=pyodide-single requires the Pyodide loader to be inside the local indexURL directory')
+    }
+
+    loaderCode = fs.readFileSync(realLoaderPath, 'utf8')
+    assets = readLocalPyodideAssetMap(sourceDir)
+    source = sourceDir
+  }
+
+  const assetId = getEmbeddedPyodideAssetId(source, getPyodideAssetDir)
+  const manifestSrc = `jsee:pyodide-assets:${assetId}`
+  const manifest = createEmbeddedPyodideManifest(assetId, assets)
+
+  const nextConfig = isRecordObject(model.pyodide) ? { ...model.pyodide } : {}
+  nextConfig.url = options.rawUrl
+  nextConfig.indexURL = manifest.baseURL
+  nextConfig.assets = {
+    type: 'embedded',
+    manifest: manifestSrc
+  }
+  if (options.packages) nextConfig.packages = options.packages
+  model.pyodide = nextConfig
+
+  return {
+    src: options.rawUrl,
+    code: loaderCode,
+    embedded: true,
+    indexURL: manifest.baseURL,
+    manifestSrc,
+    manifest
+  }
+}
+
+function assertOfflineStrictPyodide (model, cwd, outputDirs=[cwd]) {
+  if (typeof model.pyodide === 'undefined') {
+    throw new Error(`offline-strict bundle cannot include Pyodide model ${model.name || '(unnamed)'}: requires explicit model.pyodide with a bundled loader and local indexURL`)
+  }
+
+  const options = normalizePyodideOptions(model)
+  if (!options.indexURL) {
+    throw new Error(`offline-strict bundle cannot include Pyodide model ${model.name || '(unnamed)'}: model.pyodide.indexURL is required`)
+  }
+  if (isNetworkUrl(options.indexURL)) {
+    throw new Error(`offline-strict bundle cannot include Pyodide model ${model.name || '(unnamed)'}: Pyodide indexURL remains remote (${options.indexURL})`)
+  }
+  const hasOutputRelativeIndexDir = outputDirs.some(outputDir =>
+    resolveLocalDirectoryFromBase(outputDir, options.indexURL)
+  )
+  if (!hasOutputRelativeIndexDir) {
+    throw new Error(`offline-strict bundle cannot include Pyodide model ${model.name || '(unnamed)'}: local Pyodide indexURL directory not found relative to the generated HTML (${options.indexURL})`)
+  }
+}
+
+function assertOfflineStrictModel (model, cwd, outputDirs=[cwd]) {
+  if (!model) return
+  if (model.type === 'get' || model.type === 'post') {
+    throw new Error(`offline-strict bundle cannot include ${model.type} model ${model.name || model.url || '(unnamed)'} because it requires an API request at runtime`)
+  }
+  if (model.url && isHttpUrl(model.url)) {
+    throw new Error(`offline-strict bundle cannot include remote model URL ${model.url}`)
+  }
+  if (model.type === 'py') {
+    assertOfflineStrictPyodide(model, cwd, outputDirs)
+  }
+}
+
+function readCachedRemoteText (remoteUrl) {
+  return (async () => {
+    const cacheDir = path.join(os.homedir(), '.cache', 'jsee')
+    fs.mkdirSync(cacheDir, { recursive: true })
+
+    const hash = crypto.createHash('sha256').update(remoteUrl).digest('hex')
+    const cacheFilePath = path.join(cacheDir, `${hash}.js`)
+
+    if (fs.existsSync(cacheFilePath)) {
+      const stats = fs.statSync(cacheFilePath)
+      const mtime = new Date(stats.mtime)
+      const now = new Date()
+      const ageInDays = (now - mtime) / (1000 * 60 * 60 * 24)
+
+      if (ageInDays < 1) {
+        return fs.readFileSync(cacheFilePath, 'utf8')
+      }
+    }
+
+    const response = await fetch(remoteUrl)
+    if (!response.ok) {
+      throw new Error(`Failed to fetch ${remoteUrl}: ${response.statusText}`)
+    }
+    const code = await response.text()
+    fs.writeFileSync(cacheFilePath, code)
+    return code
+  })()
+}
+
+async function readPyodideRuntimeForBundle (model, cwd) {
+  if (!model || model.type !== 'py' || typeof model.pyodide === 'undefined') {
+    return null
+  }
+  const options = normalizePyodideOptions(model)
+  const localFilePath = resolveLocalImportFile(options.rawUrl, model.url, cwd)
+  if (localFilePath) {
+    return {
+      src: options.rawUrl,
+      code: fs.readFileSync(localFilePath, 'utf8'),
+      remote: false,
+      indexURL: options.indexURL
+    }
+  }
+
+  const remoteUrl = isNetworkUrl(options.rawUrl)
+    ? options.rawUrl
+    : toRuntimeUrl(options.rawUrl)
+  const code = await readCachedRemoteText(remoteUrl, 'Pyodide runtime')
+  return {
+    src: options.rawUrl,
+    code,
+    remote: true,
+    indexURL: options.indexURL
   }
 }
 
@@ -1119,84 +1911,86 @@ function genSchema (jsdocData) {
   return schema
 }
 
-function genHtmlFromSchema(schema) {
-  let htmlDescription = '<br><div class="schema-description">';
+function genHtmlFromSchema (schema) {
+  let htmlDescription = '<br><div class="schema-description">'
 
   // Process the model section
   if (schema.model && schema.model.length > 0) {
     schema.model.forEach(model => {
-      htmlDescription += `<h3><strong>${model.name}</strong></h3>`
+      htmlDescription += `<h3><strong>${escapeHtml(model.name)}</strong></h3>`
       if (model.description) {
-        htmlDescription += `<p>${model.description}</p>`
+        htmlDescription += `<p>${escapeHtml(model.description)}</p>`
       }
     })
   }
 
   // Process the inputs section
   if (schema.inputs && schema.inputs.length > 0) {
-    htmlDescription += '<h4>Inputs</h4><ul>';
+    htmlDescription += '<h4>Inputs</h4><ul>'
     schema.inputs.forEach(input => {
-      htmlDescription += `<li><strong>${input.name}</strong> (${input.type})`
+      htmlDescription += `<li><strong>${escapeHtml(input.name)}</strong> (${escapeHtml(input.type)})`
       if (input.description) {
-        htmlDescription += ` - ${input.description}`
+        htmlDescription += ` - ${escapeHtml(input.description)}`
       }
+      htmlDescription += '</li>'
     })
-    htmlDescription += '</ul>';
+    htmlDescription += '</ul>'
   }
 
   // Process the outputs section
   if (schema.outputs && schema.outputs.length > 0) {
-    htmlDescription += '<h4>Outputs</h4><ul>';
+    htmlDescription += '<h4>Outputs</h4><ul>'
     schema.outputs.forEach(output => {
-      htmlDescription += `<li><strong>${output.name}</strong> (${output.type})`
+      htmlDescription += `<li><strong>${escapeHtml(output.name)}</strong> (${escapeHtml(output.type)})`
       if (output.description) {
-        htmlDescription += ` - ${output.description}`
+        htmlDescription += ` - ${escapeHtml(output.description)}`
       }
+      htmlDescription += '</li>'
     })
-    htmlDescription += '</ul>';
+    htmlDescription += '</ul>'
   }
-  htmlDescription += '</div>';
-  return htmlDescription;
+  htmlDescription += '</div>'
+  return htmlDescription
 }
 
-function genMarkdownFromSchema(schema) {
-  let markdownDescription = '';
+function genMarkdownFromSchema (schema) {
+  let markdownDescription = ''
 
   // Process the model section
   if (schema.model && schema.model.length > 0) {
     schema.model.forEach(model => {
-      markdownDescription += `### **${model.name}**\n`;
+      markdownDescription += `### **${model.name}**\n`
       if (model.description) {
-        markdownDescription += `${model.description}\n\n`;
+        markdownDescription += `${model.description}\n\n`
       }
-    });
+    })
   }
 
   // Process the inputs section
   if (schema.inputs && schema.inputs.length > 0) {
-    markdownDescription += '#### Inputs\n';
+    markdownDescription += '#### Inputs\n'
     schema.inputs.forEach(input => {
-      markdownDescription += `- **${input.name}** (${input.type})`;
+      markdownDescription += `- **${input.name}** (${input.type})`
       if (input.description) {
-        markdownDescription += ` - ${input.description}`;
+        markdownDescription += ` - ${input.description}`
       }
-      markdownDescription += '\n';
-    });
+      markdownDescription += '\n'
+    })
   }
 
   // Process the outputs section
   if (schema.outputs && schema.outputs.length > 0) {
-    markdownDescription += '#### Outputs\n';
+    markdownDescription += '#### Outputs\n'
     schema.outputs.forEach(output => {
-      markdownDescription += `- **${output.name}** (${output.type})`;
+      markdownDescription += `- **${output.name}** (${output.type})`
       if (output.description) {
-        markdownDescription += ` - ${output.description}`;
+        markdownDescription += ` - ${output.description}`
       }
-      markdownDescription += '\n';
-    });
+      markdownDescription += '\n'
+    })
   }
 
-  return markdownDescription;
+  return markdownDescription
 }
 
 function template(schema, blocks) {
@@ -1214,6 +2008,19 @@ function template(schema, blocks) {
       title = schema.model.name
     }
   }
+  const safeTitle = escapeHtml(title)
+  const attrTitle = escapeAttr(title)
+  const safeDescription = escapeAttr(blocks.descriptionTxt)
+  const safeUrl = sanitizeUrl(url)
+  const attrUrl = escapeAttr(safeUrl)
+  const ldJson = safeJsonForScript({
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    headline: title,
+    name: title,
+    url: safeUrl,
+    description: blocks.descriptionTxt
+  })
 
   return `<!DOCTYPE html>
 
@@ -1226,27 +2033,27 @@ function template(schema, blocks) {
   <meta charset="utf-8">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${title}</title>
-  <meta name="description" content="${blocks.descriptionTxt}">
+  <title>${safeTitle}</title>
+  <meta name="description" content="${safeDescription}">
 
   <!-- Open Graph -->
-  <meta property="og:title" content="${title}" />
-  <meta property="og:description" content="${blocks.descriptionTxt}" />
+  <meta property="og:title" content="${attrTitle}" />
+  <meta property="og:description" content="${safeDescription}" />
   <meta property="og:locale" content="en_US" />
-  <meta property="og:url" content="${url}" />
-  <meta property="og:site_name" content="${title}" />
+  <meta property="og:url" content="${attrUrl}" />
+  <meta property="og:site_name" content="${attrTitle}" />
   <meta property="og:type" content="website" />
 
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary" />
-  <meta name="twitter:title" content="${title}" />
-  <meta name="twitter:description" content="${blocks.descriptionTxt}" />
+  <meta name="twitter:title" content="${attrTitle}" />
+  <meta name="twitter:description" content="${safeDescription}" />
 
   <!-- Structured Data -->
-  <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","headline":"${title}","name":"${title}","url":"${url}", "description":"${blocks.descriptionTxt}"}</script>
+  <script type="application/ld+json">${ldJson}</script>
 
   <!-- Canonical Link -->
-  <link rel="canonical" href="${url}" />
+  <link rel="canonical" href="${attrUrl}" />
 
   <!-- Favicon -->
   <link href="data:image/x-icon;base64,AAABAAEAEBAQAAEABAAoAQAAFgAAACgAAAAQAAAAIAAAAAEABAAAAAAAgAAAAAAAAAAAAAAAEAAAAAAAAAD9/f0AAAAAAPj4+AAMDAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEQAAAAAAABERAAAAAAAAEREAAAAAAAAREQABERESABERAAETMzAAEREAARAAAAAREQABEAAAABERAAEQARAAEREAARABEAAREQABEAAAABERAAEQAAAAEREAAREREAAREQABEREQABERAAAAAAAAEREAAAAAAAAREQAAAAAAABHAAwAAwAMAAMADAADAAwAAwAMAAMADAADAAwAAwAMAAMADAADAAwAAwAMAAMADAADAAwAAwAMAAMADAADAAwAA" rel="icon" type="image/x-icon" />
@@ -1377,7 +2184,7 @@ function template(schema, blocks) {
   ${blocks.hiddenElementHtml}
   <header class="site-header">
     <div class="wrapper">
-      <span class="site-title">${title}</span>
+      <span class="site-title">${safeTitle}</span>
       ${blocks.headerRightHtml}
     </div>
   </header>
@@ -1431,7 +2238,7 @@ function template(schema, blocks) {
     }
     var downloadBtn = document.getElementById('download-html-btn')
     if (downloadBtn) {
-      var downloadTitle = ${JSON.stringify(title)}
+      var downloadTitle = ${safeJsonForScript(title)}
       function formatHtmlSize(bytes) {
         if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
         if (bytes >= 1024) return Math.round(bytes / 1024) + ' KB'
@@ -1493,6 +2300,7 @@ async function gen (pargv, returnHtml=false) {
     fetch: false, // bundle runtime, local code and imports into generated output
     inputs: 'schema.json', // default input is schema.json in the current working directory
     port: 3000, // default port for the server
+    host: '127.0.0.1', // bind dev server to localhost by default
     version: 'latest', // default version of JSEE runtime to use
     verbose: false, // verbose mode
     cdn: false,
@@ -1653,9 +2461,11 @@ Options:
   -i, --inputs <file>       Input schema file (default: schema.json)
   -o, --outputs <file>      Output HTML file path
   -d, --description <file>  Markdown description file to include
+      --host <addr>         Dev server host (default: 127.0.0.1)
   -p, --port <number>       Dev server port (default: 3000)
   -v, --version <version>   JSEE runtime version (default: latest)
-  -b, --bundle             Bundle runtime + dependencies into output
+  -b, --bundle[=mode]      Bundle runtime + dependencies into output
+                           modes: default, hybrid, pyodide, pyodide-single, offline-strict
   -f, --fetch               Alias for --bundle
   -s, --serve               Serve explicitly (default when no output is provided)
       --run                 Execute the model once and write pipeable outputs
@@ -1685,6 +2495,7 @@ Examples:
   jsee @statsim/gen --run --dataset Moons --format CSV --nSamples 500
   jsee @statsim/gen --run --dataset Moons --file moons.csv
   jsee -p 8080                      Start dev server on port 8080
+  jsee --host 0.0.0.0 -p 8080       Expose dev server on the local network
   jsee report.pdf                   Serve a PDF file (auto-detected viewer)
   jsee data/                        Serve a folder (file browser with preview)
 
@@ -1743,7 +2554,6 @@ Documentation: https://jsee.org
   let schemaPath
   let descriptionTxt = ''
   let descriptionHtml = ''
-  let jsdocMarkdown = ''
   let modelFuncs = {}
 
   // Determine the inputs and outputs
@@ -1787,10 +2597,6 @@ Documentation: https://jsee.org
     // Generate schema
     let jsdocData = getJsdocToMarkdown().getTemplateDataSync({ files: inputs.map(f => path.join(cwd, f)) })
     schema = genSchema(jsdocData)
-    // jsdocMarkdown = jsdoc2md.renderSync({
-    //   data: jsdocData,
-    //   'param-list-format': 'list',
-    // })
   }
   log('Schema path:', schemaPath)
 
@@ -1905,7 +2711,6 @@ Documentation: https://jsee.org
   // Switch to CDN for model files
   if (argv.cdn) {
     let cdn = ''
-    console.log(argv)
     if (typeof argv.cdn === 'string') {
       cdn = argv.cdn
     } else if (typeof argv.cdn === 'boolean') {
@@ -1928,7 +2733,7 @@ Documentation: https://jsee.org
       if (m.url) {
         // If url is relative, make it absolute
         if (!m.url.startsWith('http')) {
-          m.url = path.join(cdn, m.url)
+          m.url = joinUrl(cdn, m.url)
           log(`Updated ${m.name} model URL to: ${m.url}`)
         }
       }
@@ -1958,17 +2763,32 @@ Documentation: https://jsee.org
   // Generate jsee code
   let jseeHtml = ''
   let hiddenElementHtml = ''
-  const shouldBundle = Boolean(argv.fetch)
+  const bundleMode = resolveBundleMode(argv.fetch)
+  const shouldBundle = bundleMode !== 'none'
+  const offlineStrictBundle = isOfflineStrictBundleMode(bundleMode)
+  const pyodideAssetBundle = isPyodideBundleMode(bundleMode)
+  const pyodideSingleFileBundle = isPyodideSingleFileBundleMode(bundleMode)
   const runtimeMode = resolveRuntimeMode(argv.runtime, shouldBundle, hasOutputs)
   if (shouldBundle) {
+    const bundleOutputDirs = getBundleOutputDirectories(outputs, cwd)
+    const getPyodideAssetDir = createPyodideAssetDirResolver()
     // Fetch jsee code from the CDN or local server
     const jseeCode = await loadRuntimeCode(argv.version, schema)
-    jseeHtml = `<script>${jseeCode}</script>`
+    jseeHtml = `<script>${escapeScriptContent(jseeCode)}</script>`
     // Fetch model files and store them in hidden elements
     hiddenElementHtml += '<div id="hidden-storage" style="display: none;">'
+    const hiddenAssetKeys = new Set()
+    const appendHiddenAsset = (src, value) => {
+      if (!src || hiddenAssetKeys.has(src)) return
+      hiddenAssetKeys.add(src)
+      hiddenElementHtml += hiddenAssetScript(src, value)
+    }
 
     const bundleBlocks = collectFetchBundleBlocks(schema)
     for (let m of bundleBlocks) {
+      if (offlineStrictBundle) {
+        assertOfflineStrictModel(m, cwd, bundleOutputDirs)
+      }
       if (m.type === 'get' || m.type === 'post') {
         continue
       }
@@ -1978,10 +2798,25 @@ Documentation: https://jsee.org
         if (!m.name) m.name = getModelExportName(m)
         const modelSource = fs.readFileSync(modelPath, 'utf8')
         const modelCode = await bundleModelCode(m, modelPath, modelSource)
-        hiddenElementHtml += `<script type="text/plain" style="display: none;" data-src="${m.url}">${modelCode}</script>`
+        appendHiddenAsset(m.url, modelCode)
+      }
+
+      const pyodideRuntime = pyodideSingleFileBundle
+        ? await preparePyodideSingleFileBundle(m, cwd, getPyodideAssetDir)
+        : pyodideAssetBundle
+          ? await preparePyodideAssetsForBundle(m, cwd, bundleOutputDirs, getPyodideAssetDir)
+          : await readPyodideRuntimeForBundle(m, cwd)
+      if (pyodideRuntime) {
+        appendHiddenAsset(pyodideRuntime.src, pyodideRuntime.code)
+        if (pyodideRuntime.manifestSrc) {
+          appendHiddenAsset(pyodideRuntime.manifestSrc, JSON.stringify(pyodideRuntime.manifest))
+        }
+        if (pyodideRuntime.indexURL && isNetworkUrl(pyodideRuntime.indexURL)) {
+          console.error(`Warning: Pyodide indexURL remains remote in bundled output: ${pyodideRuntime.indexURL}`)
+        }
       }
       const imports = toArray(m.imports)
-      if (imports.length) {
+      if (imports.length && m.type !== 'py') {
         m.imports = imports
         for (let [index, i] of imports.entries()) {
           if (typeof i !== 'string') {
@@ -2032,7 +2867,7 @@ Documentation: https://jsee.org
               log('Fetched and stored to cache:', importMeta.importUrl)
             }
           }
-          hiddenElementHtml += `<script type="text/plain" style="display: none;" data-src="${importMeta.importUrl}">${importCode}</script>`
+          appendHiddenAsset(importMeta.importUrl, importCode)
         }
       }
     }
@@ -2040,16 +2875,16 @@ Documentation: https://jsee.org
   } else {
     if (runtimeMode === 'inline') {
       const jseeCode = await loadRuntimeCode(argv.version, schema)
-      jseeHtml = `<script>${jseeCode}</script>`
+      jseeHtml = `<script>${escapeScriptContent(jseeCode)}</script>`
     } else if (runtimeMode === 'cdn') {
       const bundle = getBundleFilename(schema)
-      jseeHtml = `<script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@${argv.version}/dist/${bundle}"></script>`
+      jseeHtml = `<script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@${escapeAttr(argv.version)}/dist/${bundle}"></script>`
     } else if (runtimeMode === 'local') {
       const bundle = getBundleFilename(schema)
-      jseeHtml = `<script src="http://localhost:${argv.port}/dist/${bundle}"></script>`
+      jseeHtml = `<script src="http://${escapeAttr(getDisplayHost(argv.host))}:${argv.port}/dist/${bundle}"></script>`
     } else {
       // Custom path/URL passed via --runtime (e.g. ./node_modules/.../jsee.js)
-      jseeHtml = `<script src="${runtimeMode}"></script>`
+      jseeHtml = `<script src="${escapeAttr(runtimeMode)}"></script>`
     }
   }
 
@@ -2059,51 +2894,56 @@ Documentation: https://jsee.org
 
   if (schema.page) {
     if (schema.page.ga) {
-      gaHtml = `
-        <script id="ga-src" async src="https://www.googletagmanager.com/gtag/js?id=${schema.page.ga}"></script>
+      const gaId = sanitizeGoogleAnalyticsId(schema.page.ga)
+      if (gaId) {
+        gaHtml = `
+        <script id="ga-src" async src="https://www.googletagmanager.com/gtag/js?id=${escapeAttr(gaId)}"></script>
         <script id="ga-body">
-          window['ga-disable-${schema.page.ga}'] = window.doNotTrack === "1" || navigator.doNotTrack === "1" || navigator.doNotTrack === "yes" || navigator.msDoNotTrack === "1";
+          window[${safeJsonForScript(`ga-disable-${gaId}`)}] = window.doNotTrack === "1" || navigator.doNotTrack === "1" || navigator.doNotTrack === "yes" || navigator.msDoNotTrack === "1";
           window.dataLayer = window.dataLayer || [];
           function gtag(){dataLayer.push(arguments);}
           gtag('js', new Date());
-          gtag('config', '${schema.page.ga}');
+          gtag('config', ${safeJsonForScript(gaId)});
         </script>
       `
+      }
     }
 
     // Social media links
     if (schema.page.social) {
       // iterate over dict with k, v pairs
       for (let [name, url] of Object.entries(schema.page.social)) {
+        const safeName = escapeHtml(name)
+        const safeUrl = sanitizeUrl(url)
         switch (name) {
           case 'twitter':
-            socialHtml += `<li><a rel="me" href="https://twitter.com/${url}">Twitter</a></li>`
+            socialHtml += `<li><a rel="me" href="https://twitter.com/${escapeAttr(url)}">Twitter</a></li>`
             break
           case 'github':
-            socialHtml += `<li><a rel="me" href="https://github.com/${url}">GitHub</a></li>`
+            socialHtml += `<li><a rel="me" href="https://github.com/${escapeAttr(url)}">GitHub</a></li>`
             break
           case 'facebook':
-            socialHtml += `<li><a rel="me" href="https://www.facebook.com/${url}">Facebook</a></li>`
+            socialHtml += `<li><a rel="me" href="https://www.facebook.com/${escapeAttr(url)}">Facebook</a></li>`
             break
           case 'linkedin':
-            socialHtml += `<li><a rel="me" href="https://www.linkedin.com/company/${url}">LinkedIn</a></li>`
+            socialHtml += `<li><a rel="me" href="https://www.linkedin.com/company/${escapeAttr(url)}">LinkedIn</a></li>`
             break
           case 'instagram':
-            socialHtml += `<li><a rel="me" href="https://www.instagram.com/${url}">Instagram</a></li>`
+            socialHtml += `<li><a rel="me" href="https://www.instagram.com/${escapeAttr(url)}">Instagram</a></li>`
             break
           case 'youtube':
-            socialHtml += `<li><a rel="me" href="https://www.youtube.com/${url}">YouTube</a></li>`
+            socialHtml += `<li><a rel="me" href="https://www.youtube.com/${escapeAttr(url)}">YouTube</a></li>`
             break
           default:
-            socialHtml += `<li><a rel="me" href="${url}">${name}</a></li>`
+            socialHtml += `<li><a rel="me" href="${escapeAttr(safeUrl)}">${safeName}</a></li>`
         }
       }
     }
 
     if (schema.page.org) {
-      orgHtml = `<div class="footer-org"><h4 class="footer-heading"><a href="${schema.page.org.url}">${schema.page.org.name}</a></h4>`
+      orgHtml = `<div class="footer-org"><h4 class="footer-heading"><a href="${escapeAttr(sanitizeUrl(schema.page.org.url))}">${escapeHtml(schema.page.org.name)}</a></h4>`
       if (schema.page.org.description) {
-        orgHtml += `<p>${schema.page.org.description}</p>`
+        orgHtml += `<p>${escapeHtml(schema.page.org.description)}</p>`
       }
       orgHtml += '</div>'
     }
@@ -2118,16 +2958,16 @@ Documentation: https://jsee.org
     const toggleHtml = shouldExecute
       ? '<label class="jsee-header-toggle"><input type="checkbox" id="exec-toggle">Browser</label>'
       : ''
-    headerRightHtml = `<div class="jsee-header-actions">${toggleHtml}<span class="jsee-header-badge">localhost:${argv.port}</span></div>`
+    headerRightHtml = `<div class="jsee-header-actions">${toggleHtml}<span class="jsee-header-badge">${escapeHtml(getDisplayHost(argv.host))}:${argv.port}</span></div>`
   } else if (shouldBundle) {
     headerRightHtml = '<div class="jsee-header-actions"><button id="download-html-btn" class="jsee-header-button" type="button" title="Download this standalone HTML file">Download HTML</button></div>'
   }
   if (shouldExecute) {
     const clientSchema = JSON.parse(JSON.stringify(schema))
     clientSchema.model = originalModels
-    schemaScript = `var schemaServer = ${JSON.stringify(schema, null, 2)}\n    var schemaClient = ${JSON.stringify(clientSchema, null, 2)}`
+    schemaScript = `var schemaServer = ${safeJsonForScript(schema)}\n    var schemaClient = ${safeJsonForScript(clientSchema)}`
   } else {
-    schemaScript = `var schemaServer = ${JSON.stringify(schema, null, 2)}\n    var schemaClient = null`
+    schemaScript = `var schemaServer = ${safeJsonForScript(schema)}\n    var schemaClient = null`
   }
 
   const html = template(schema, {
@@ -2164,8 +3004,10 @@ Documentation: https://jsee.org
     // Serve the html
     const express = require('express')
     const app = express()
-    app.use(express.json())
-    app.use(express.raw({ type: 'multipart/form-data', limit: '50mb' }))
+    const appRoot = path.resolve(schemaPath ? path.dirname(schemaPath) : cwd)
+    const endpointRoots = [appRoot]
+    if (identityResult && identityResult.serveDir) endpointRoots.push(identityResult.serveDir)
+    if (identityResult && identityResult.serveFile) endpointRoots.push(path.dirname(identityResult.serveFile.resolved))
     // CORS
     app.use((req, res, next) => {
       res.header('Access-Control-Allow-Origin', '*')
@@ -2173,6 +3015,16 @@ Documentation: https://jsee.org
       res.header('Access-Control-Allow-Headers', 'Content-Type')
       if (req.method === 'OPTIONS') return res.sendStatus(204)
       next()
+    })
+    app.use(express.json({ limit: API_BODY_LIMIT }))
+    app.use(express.raw({ type: 'multipart/form-data', limit: API_BODY_LIMIT }))
+    app.use((error, req, res, next) => {
+      if (!error) return next()
+      const status = error.status || error.statusCode || 400
+      if (error.type === 'entity.too.large' || error.type === 'entity.parse.failed' || error instanceof SyntaxError) {
+        return res.status(status).json({ error: error.message || 'invalid request body' })
+      }
+      next(error)
     })
     // API discovery
     app.get('/api', (req, res) => {
@@ -2204,10 +3056,19 @@ Documentation: https://jsee.org
               const data = { ...dataFromGUI, ...dataFromArgv }
               log('Data for model execution:', data)
               const result = await modelFunc(data)
+              if (m.stream === true && isStreamResult(result)) {
+                await writeSseStream(res, result)
+                log(`Model ${m.name} streamed successfully`)
+                return
+              }
               res.json(serializeResult(result))
               log(`Model ${m.name} executed successfully: `, result)
             } catch (error) {
               console.error('Error executing model:', error)
+              if (res.headersSent) {
+                res.end()
+                return
+              }
               res.status(500).json({ error: error.message })
             }
           } else {
@@ -2220,22 +3081,28 @@ Documentation: https://jsee.org
     // Serve folder file listing as JSON
     app.get('/__jsee/folder', (req, res) => {
       const dirPath = req.query.path
-      if (!dirPath) return res.status(400).json({ error: 'path required' })
-      const resolved = path.resolve(schemaPath ? path.dirname(schemaPath) : cwd, dirPath)
-      if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
-        return res.status(404).json({ error: 'directory not found' })
+      try {
+        const resolved = resolveInsideAny(endpointRoots, dirPath)
+        if (!fs.statSync(resolved).isDirectory()) {
+          return res.status(404).json({ error: 'directory not found' })
+        }
+        res.json(readDirListing(resolved, dirPath))
+      } catch (error) {
+        sendEndpointError(res, error)
       }
-      res.json(readDirListing(resolved, dirPath))
     })
     // Serve individual files for viewer output
     app.get('/__jsee/file', (req, res) => {
       const filePath = req.query.path
-      if (!filePath) return res.status(400).json({ error: 'path required' })
-      const resolved = path.resolve(schemaPath ? path.dirname(schemaPath) : cwd, filePath)
-      if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
-        return res.status(404).json({ error: 'file not found' })
+      try {
+        const resolved = resolveInsideAny(endpointRoots, filePath)
+        if (!fs.statSync(resolved).isFile()) {
+          return res.status(404).json({ error: 'file not found' })
+        }
+        res.sendFile(resolved)
+      } catch (error) {
+        sendEndpointError(res, error)
       }
-      res.sendFile(resolved)
     })
     app.get('/', async (req, res) => {
       log('Serving index.html')
@@ -2248,13 +3115,13 @@ Documentation: https://jsee.org
     //   log(`Serving jsee.runtime.js from: ${pathToJSEE}`)
     //   res.sendFile(pathToJSEE)
     // })
-    app.use('/dist', express.static(path.join(__dirname, '..', 'dist'))) // Serve static files from the dist folder
+    app.use('/dist', express.static(path.join(__dirname, '..', 'dist'), { dotfiles: 'deny' })) // Serve static files from the dist folder
     // app.use(express.static(cwd))
     // app.use(express.static(require.main.path)) // Serve static files from the main module path
     // app.use(express.static(path.join(require.main.path, '..'))) // Serve static files from the parent directory of the main module path
-    app.use(express.static(schemaPath ? path.dirname(schemaPath) : cwd)) // Serve static files from the schema path or current working directory
-    app.listen(argv.port, () => {
-      console.log(`JSEE app is running: http://localhost:${argv.port}`)
+    app.use(express.static(appRoot, { dotfiles: 'deny' })) // Serve static files from the app root
+    app.listen(argv.port, argv.host, () => {
+      console.log(`JSEE app is running: http://${getDisplayHost(argv.host)}:${argv.port}`)
     })
   }
 }
@@ -2264,6 +3131,10 @@ module.exports.collectFetchBundleBlocks = collectFetchBundleBlocks
 module.exports.resolveLocalImportFile = resolveLocalImportFile
 module.exports.resolveFetchImport = resolveFetchImport
 module.exports.resolveRuntimeMode = resolveRuntimeMode
+module.exports.resolveBundleMode = resolveBundleMode
+module.exports.isOfflineStrictBundleMode = isOfflineStrictBundleMode
+module.exports.isPyodideBundleMode = isPyodideBundleMode
+module.exports.isPyodideSingleFileBundleMode = isPyodideSingleFileBundleMode
 module.exports.resolveOutputPath = resolveOutputPath
 module.exports.resolveJseePackageInput = resolveJseePackageInput
 module.exports.readJseePackageInput = readJseePackageInput
@@ -2278,3 +3149,18 @@ module.exports.shouldBundleModelCode = shouldBundleModelCode
 module.exports.bundleModelCode = bundleModelCode
 module.exports.runSchemaOnce = runSchemaOnce
 module.exports.emitRunOutputs = emitRunOutputs
+module.exports.escapeHtml = escapeHtml
+module.exports.escapeAttr = escapeAttr
+module.exports.safeJsonForScript = safeJsonForScript
+module.exports.escapeScriptContent = escapeScriptContent
+module.exports.encodeAssetForHtml = encodeAssetForHtml
+module.exports.hiddenAssetScript = hiddenAssetScript
+module.exports.sanitizeUrl = sanitizeUrl
+module.exports.sanitizeGoogleAnalyticsId = sanitizeGoogleAnalyticsId
+module.exports.joinUrl = joinUrl
+module.exports.resolveInside = resolveInside
+module.exports.resolveInsideAny = resolveInsideAny
+module.exports.isAsyncIterable = isAsyncIterable
+module.exports.isIterable = isIterable
+module.exports.isStreamResult = isStreamResult
+module.exports.writeSseStream = writeSseStream

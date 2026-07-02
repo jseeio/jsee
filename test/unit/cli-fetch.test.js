@@ -3,15 +3,21 @@ const os = require('os')
 const path = require('path')
 const vm = require('vm')
 const gen = require('../../src/cli')
-const { collectFetchBundleBlocks, resolveLocalImportFile, resolveFetchImport, resolveRuntimeMode, needsFullBundle, shouldBundleModelCode, resolveJseePackageInput, looksLikeMissingPackageInput, getPackageInputInstallHint, findPackageRoot, runPackage, isPackageSpecifier, bundleModelCode } = gen
+const { collectFetchBundleBlocks, resolveLocalImportFile, resolveFetchImport, resolveRuntimeMode, resolveBundleMode, isPyodideBundleMode, isPyodideSingleFileBundleMode, needsFullBundle, shouldBundleModelCode, resolveJseePackageInput, looksLikeMissingPackageInput, getPackageInputInstallHint, findPackageRoot, runPackage, isPackageSpecifier, bundleModelCode, safeJsonForScript, hiddenAssetScript, resolveInside, joinUrl, sanitizeGoogleAnalyticsId, isStreamResult, writeSseStream } = gen
 
 function extractHiddenCode (html, src) {
   const marker = `data-src="${src}"`
   const markerIndex = html.indexOf(marker)
   if (markerIndex === -1) throw new Error(`Missing hidden block for ${src}`)
+  const tagStart = html.lastIndexOf('<script', markerIndex)
   const openEnd = html.indexOf('>', markerIndex)
   const closeStart = html.indexOf('</script>', openEnd)
-  return html.slice(openEnd + 1, closeStart)
+  const content = html.slice(openEnd + 1, closeStart)
+  const tag = html.slice(tagStart, openEnd)
+  if (tag.includes('data-encoding="base64"')) {
+    return Buffer.from(content, 'base64').toString('utf8')
+  }
+  return content
 }
 
 function runHiddenModel (code, name, input) {
@@ -19,6 +25,11 @@ function runHiddenModel (code, name, input) {
   context.globalThis = context
   vm.runInNewContext(code, context)
   return context[name](input)
+}
+
+function toArrayBuffer (value) {
+  const buffer = Buffer.from(value)
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
 }
 
 async function captureStdout (fn) {
@@ -327,7 +338,7 @@ describe('package input resolution', () => {
     expect(html).toContain("return '<!DOCTYPE html>\\n' + document.documentElement.outerHTML")
     expect(html).toContain('Download HTML')
     expect(html).not.toContain('localhost:3000')
-    expect(html).not.toContain('save-html-btn')
+    expect(html).not.toContain('id="save-html-btn"')
   })
 
   test('shows port status without download button for served html', async () => {
@@ -463,6 +474,604 @@ describe('resolveRuntimeMode', () => {
     expect(resolveRuntimeMode('./dist/jsee.js', false, false)).toBe('./dist/jsee.js')
     expect(resolveRuntimeMode('https://example.com/jsee.js', false, true)).toBe('https://example.com/jsee.js')
     expect(resolveRuntimeMode('./node_modules/@jseeio/jsee/dist/jsee.js', true, true)).toBe('./node_modules/@jseeio/jsee/dist/jsee.js')
+  })
+})
+
+describe('HTML embedding safety', () => {
+  test('safeJsonForScript escapes script-breaking characters', () => {
+    const value = {
+      title: '</script><script>window.bad = true</script>',
+      text: 'a & b'
+    }
+    const json = safeJsonForScript(value)
+
+    expect(json).not.toContain('</script>')
+    expect(json).not.toContain('<script>')
+    expect(json).toContain('\\u003c/script\\u003e')
+    expect(JSON.parse(json)).toEqual(value)
+    expect(safeJsonForScript(undefined)).toBe('null')
+  })
+
+  test('hidden asset scripts store base64 content', () => {
+    const code = `function demo () {
+  return '</script><script>window.bad = true</script>'
+}
+`
+    const html = hiddenAssetScript('model.js', code)
+
+    expect(html).toContain('data-encoding="base64"')
+    expect(html).not.toContain('<script>window.bad = true</script>')
+    expect(extractHiddenCode(html, 'model.js')).toBe(code)
+  })
+
+  test('bundled model and schema title survive script end tags', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-script-safe-'))
+    const originalCwd = process.cwd()
+    process.chdir(tmpDir)
+    try {
+      fs.writeFileSync(path.join(tmpDir, 'model.js'), `function demo () {
+  return { text: '</script><script>window.bad = true</script>' }
+}
+`)
+      fs.writeFileSync(path.join(tmpDir, 'schema.json'), JSON.stringify({
+        title: '</script><script>window.titleBad = true</script>',
+        model: { name: 'demo', url: 'model.js', worker: false },
+        inputs: [],
+        outputs: [{ name: 'text', type: 'code' }]
+      }, null, 2))
+
+      const html = await gen(['schema.json', '--outputs', 'app.html', '--bundle'], true)
+      const code = extractHiddenCode(html, 'model.js')
+
+      expect(code).toContain('window.bad = true')
+      expect(html).not.toContain('<script>window.bad = true</script>')
+      expect(html).not.toContain('<script>window.titleBad = true</script>')
+    } finally {
+      process.chdir(originalCwd)
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('bundles configured local Pyodide loader script', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-pyodide-bundle-'))
+    const originalCwd = process.cwd()
+    process.chdir(tmpDir)
+    try {
+      fs.mkdirSync(path.join(tmpDir, 'pyodide'), { recursive: true })
+      fs.writeFileSync(path.join(tmpDir, 'pyodide', 'pyodide.js'), 'globalThis.loadPyodide = function () {}\n')
+      fs.writeFileSync(path.join(tmpDir, 'schema.json'), JSON.stringify({
+        model: {
+          type: 'py',
+          worker: false,
+          pyodide: {
+            url: 'pyodide/pyodide.js',
+            indexURL: 'pyodide/'
+          },
+          code: '1 + 1'
+        },
+        outputs: [{ name: 'result', type: 'code' }]
+      }, null, 2))
+
+      const html = await gen(['schema.json', '--outputs', 'app.html', '--bundle'], true)
+      expect(extractHiddenCode(html, 'pyodide/pyodide.js')).toBe('globalThis.loadPyodide = function () {}\n')
+      expect(html).toContain('"indexURL":"pyodide/"')
+    } finally {
+      process.chdir(originalCwd)
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('offline-strict bundle mode rejects remote Pyodide runtime dependencies', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-pyodide-strict-'))
+    const originalCwd = process.cwd()
+    process.chdir(tmpDir)
+    try {
+      fs.writeFileSync(path.join(tmpDir, 'schema-default.json'), JSON.stringify({
+        model: {
+          name: 'calc',
+          type: 'py',
+          code: 'result = 1'
+        },
+        outputs: [{ name: 'result', type: 'number' }]
+      }, null, 2))
+      await expect(gen(['--inputs', 'schema-default.json', '--outputs', 'app.html', '--bundle=offline-strict'], true))
+        .rejects.toThrow(/requires explicit model\.pyodide/)
+
+      fs.writeFileSync(path.join(tmpDir, 'schema-remote.json'), JSON.stringify({
+        model: {
+          name: 'calc',
+          type: 'py',
+          pyodide: {
+            url: 'https://cdn.jsdelivr.net/pyodide/v314.0.2/full/pyodide.js',
+            indexURL: 'https://cdn.jsdelivr.net/pyodide/v314.0.2/full/'
+          },
+          code: 'result = 1'
+        },
+        outputs: [{ name: 'result', type: 'number' }]
+      }, null, 2))
+      await expect(gen(['--inputs', 'schema-remote.json', '--outputs', 'app.html', '--bundle=offline-strict'], true))
+        .rejects.toThrow(/Pyodide indexURL remains remote/)
+
+      fs.mkdirSync(path.join(tmpDir, 'pyodide'), { recursive: true })
+      fs.writeFileSync(path.join(tmpDir, 'pyodide', 'pyodide.js'), 'globalThis.loadPyodide = function () {}\n')
+      fs.writeFileSync(path.join(tmpDir, 'schema-local-wrong-output-dir.json'), JSON.stringify({
+        model: {
+          name: 'calc',
+          type: 'py',
+          pyodide: {
+            url: 'pyodide/pyodide.js',
+            indexURL: 'pyodide/'
+          },
+          code: 'result = 1'
+        },
+        outputs: [{ name: 'result', type: 'number' }]
+      }, null, 2))
+      await expect(gen(['--inputs', 'schema-local-wrong-output-dir.json', '--outputs', 'dist/app.html', '--bundle=offline-strict'], true))
+        .rejects.toThrow(/relative to the generated HTML/)
+    } finally {
+      process.chdir(originalCwd)
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('offline-strict bundle mode accepts explicit local Pyodide assets', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-pyodide-strict-local-'))
+    const originalCwd = process.cwd()
+    process.chdir(tmpDir)
+    try {
+      fs.mkdirSync(path.join(tmpDir, 'pyodide'), { recursive: true })
+      fs.writeFileSync(path.join(tmpDir, 'pyodide', 'pyodide.js'), 'globalThis.loadPyodide = function () {}\n')
+      fs.writeFileSync(path.join(tmpDir, 'schema.json'), JSON.stringify({
+        model: {
+          name: 'calc',
+          type: 'py',
+          pyodide: {
+            url: 'pyodide/pyodide.js',
+            indexURL: '../pyodide/'
+          },
+          code: 'result = 1'
+        },
+        outputs: [{ name: 'result', type: 'number' }]
+      }, null, 2))
+
+      const html = await gen(['--inputs', 'schema.json', '--outputs', 'dist/app.html', '--bundle=offline-strict'], true)
+      expect(extractHiddenCode(html, 'pyodide/pyodide.js')).toBe('globalThis.loadPyodide = function () {}\n')
+      expect(html).not.toContain('data-src="https://cdn.jsdelivr.net/pyodide/v0.24.1')
+    } finally {
+      process.chdir(originalCwd)
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('pyodide bundle mode copies local Pyodide assets next to generated HTML', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-pyodide-assets-'))
+    const originalCwd = process.cwd()
+    process.chdir(tmpDir)
+    try {
+      fs.mkdirSync(path.join(tmpDir, 'pyodide', 'packages'), { recursive: true })
+      fs.writeFileSync(path.join(tmpDir, 'pyodide', 'pyodide.js'), 'globalThis.loadPyodide = function () {}\n')
+      fs.writeFileSync(path.join(tmpDir, 'pyodide', 'pyodide.asm.wasm'), 'wasm')
+      fs.writeFileSync(path.join(tmpDir, 'pyodide', 'python_stdlib.zip'), 'stdlib')
+      fs.writeFileSync(path.join(tmpDir, 'pyodide', 'repodata.json'), '{"packages":{}}')
+      fs.writeFileSync(path.join(tmpDir, 'pyodide', 'packages', 'demo.whl'), 'wheel')
+      fs.writeFileSync(path.join(tmpDir, 'schema.json'), JSON.stringify({
+        model: {
+          name: 'calc',
+          type: 'py',
+          pyodide: {
+            url: 'pyodide/pyodide.js',
+            indexURL: 'pyodide/'
+          },
+          code: 'result = 1'
+        },
+        outputs: [{ name: 'result', type: 'number' }]
+      }, null, 2))
+
+      const html = await gen(['--inputs', 'schema.json', '--outputs', 'dist/app.html', '--bundle=pyodide'], true)
+
+      expect(extractHiddenCode(html, 'pyodide/pyodide.js')).toBe('globalThis.loadPyodide = function () {}\n')
+      expect(html).toContain('"url":"pyodide/pyodide.js"')
+      expect(html).toContain('"indexURL":"pyodide/"')
+      expect(fs.readFileSync(path.join(tmpDir, 'dist', 'pyodide', 'pyodide.asm.wasm'), 'utf8')).toBe('wasm')
+      expect(fs.readFileSync(path.join(tmpDir, 'dist', 'pyodide', 'python_stdlib.zip'), 'utf8')).toBe('stdlib')
+      expect(fs.readFileSync(path.join(tmpDir, 'dist', 'pyodide', 'packages', 'demo.whl'), 'utf8')).toBe('wheel')
+
+      const sameDirHtml = await gen(['--inputs', 'schema.json', '--outputs', 'app.html', '--bundle=pyodide'], true)
+      expect(extractHiddenCode(sameDirHtml, 'pyodide/pyodide.js')).toBe('globalThis.loadPyodide = function () {}\n')
+    } finally {
+      process.chdir(originalCwd)
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('pyodide bundle mode fetches remote Pyodide assets and declared packages', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-pyodide-remote-assets-'))
+    const originalCwd = process.cwd()
+    const originalFetch = global.fetch
+    const unique = `https://example.invalid/${Date.now()}-${Math.random().toString(16).slice(2)}/full/`
+    const lockFile = {
+      info: { platform: 'test' },
+      packages: {
+        numpy: {
+          file_name: 'numpy-1.0.0.whl',
+          depends: ['dep']
+        },
+        dep: {
+          file_name: 'packages/dep-1.0.0.whl',
+          depends: []
+        }
+      }
+    }
+    const files = new Map([
+      [`${unique}pyodide.js`, 'globalThis.loadPyodide = function () {}\n'],
+      [`${unique}pyodide.asm.mjs`, 'asm-js'],
+      [`${unique}pyodide.asm.wasm`, 'wasm'],
+      [`${unique}python_stdlib.zip`, 'stdlib'],
+      [`${unique}pyodide-lock.json`, JSON.stringify(lockFile)],
+      [`${unique}numpy-1.0.0.whl`, 'numpy-wheel'],
+      [`${unique}packages/dep-1.0.0.whl`, 'dep-wheel']
+    ])
+
+    process.chdir(tmpDir)
+    global.fetch = async url => {
+      const key = String(url)
+      if (!files.has(key)) {
+        return {
+          ok: false,
+          status: 404,
+          statusText: 'Not Found',
+          arrayBuffer: async () => toArrayBuffer('')
+        }
+      }
+      const body = files.get(key)
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        arrayBuffer: async () => toArrayBuffer(body),
+        text: async () => String(body)
+      }
+    }
+
+    try {
+      fs.writeFileSync(path.join(tmpDir, 'schema.json'), JSON.stringify({
+        model: {
+          name: 'calc',
+          type: 'py',
+          pyodide: {
+            url: `${unique}pyodide.js`,
+            indexURL: unique,
+            packages: ['numpy']
+          },
+          imports: ['numpy'],
+          code: 'import numpy\nresult = 1'
+        },
+        outputs: [{ name: 'result', type: 'number' }]
+      }, null, 2))
+
+      const html = await gen(['--inputs', 'schema.json', '--outputs', 'dist/app.html', '--bundle=pyodide'], true)
+
+      expect(extractHiddenCode(html, 'full/pyodide.js')).toBe('globalThis.loadPyodide = function () {}\n')
+      expect(html).toContain('"url":"full/pyodide.js"')
+      expect(html).toContain('"indexURL":"full/"')
+      expect(html).toContain('"packages":["numpy"]')
+      expect(fs.readFileSync(path.join(tmpDir, 'dist', 'full', 'pyodide.asm.mjs'), 'utf8')).toBe('asm-js')
+      expect(fs.readFileSync(path.join(tmpDir, 'dist', 'full', 'pyodide.asm.wasm'), 'utf8')).toBe('wasm')
+      expect(fs.readFileSync(path.join(tmpDir, 'dist', 'full', 'python_stdlib.zip'), 'utf8')).toBe('stdlib')
+      expect(fs.readFileSync(path.join(tmpDir, 'dist', 'full', 'pyodide-lock.json'), 'utf8')).toBe(JSON.stringify(lockFile))
+      expect(fs.readFileSync(path.join(tmpDir, 'dist', 'full', 'numpy-1.0.0.whl'), 'utf8')).toBe('numpy-wheel')
+      expect(fs.readFileSync(path.join(tmpDir, 'dist', 'full', 'packages', 'dep-1.0.0.whl'), 'utf8')).toBe('dep-wheel')
+    } finally {
+      global.fetch = originalFetch
+      process.chdir(originalCwd)
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('pyodide single-file mode embeds remote Pyodide assets in hidden manifest', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-pyodide-single-'))
+    const originalCwd = process.cwd()
+    const originalFetch = global.fetch
+    const unique = `https://pyodide.example.test/full-${Date.now()}/`
+    const lockFile = {
+      info: { platform: 'probe' },
+      packages: {
+        numpy: {
+          file_name: 'numpy-1.0.0.whl',
+          depends: ['dep']
+        },
+        dep: {
+          file_name: 'packages/dep-1.0.0.whl',
+          depends: []
+        }
+      }
+    }
+    const files = new Map([
+      [`${unique}pyodide.js`, 'globalThis.loadPyodide = function () {}\n'],
+      [`${unique}pyodide.asm.mjs`, 'asm-js'],
+      [`${unique}pyodide.asm.wasm`, 'wasm'],
+      [`${unique}python_stdlib.zip`, 'stdlib'],
+      [`${unique}pyodide-lock.json`, JSON.stringify(lockFile)],
+      [`${unique}numpy-1.0.0.whl`, 'numpy-wheel'],
+      [`${unique}packages/dep-1.0.0.whl`, 'dep-wheel']
+    ])
+
+    process.chdir(tmpDir)
+    global.fetch = async url => {
+      const key = String(url)
+      if (!files.has(key)) {
+        return {
+          ok: false,
+          status: 404,
+          statusText: 'Not Found',
+          arrayBuffer: async () => toArrayBuffer('')
+        }
+      }
+      const body = files.get(key)
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        arrayBuffer: async () => toArrayBuffer(body),
+        text: async () => String(body)
+      }
+    }
+
+    try {
+      fs.writeFileSync(path.join(tmpDir, 'schema.json'), JSON.stringify({
+        model: {
+          name: 'calc',
+          type: 'py',
+          pyodide: {
+            url: `${unique}pyodide.js`,
+            indexURL: unique,
+            packages: ['numpy']
+          },
+          imports: ['numpy'],
+          code: 'import numpy\nresult = 1'
+        },
+        outputs: [{ name: 'result', type: 'number' }]
+      }, null, 2))
+
+      const html = await gen(['--inputs', 'schema.json', '--outputs', 'dist/app.html', '--bundle=pyodide-single'], true)
+      const manifestMatch = html.match(/data-src="(jsee:pyodide-assets:[^"]+)"/)
+      expect(manifestMatch).toBeTruthy()
+      const manifest = JSON.parse(extractHiddenCode(html, manifestMatch[1]))
+
+      expect(extractHiddenCode(html, `${unique}pyodide.js`)).toBe('globalThis.loadPyodide = function () {}\n')
+      expect(html).toContain('"indexURL":"jsee-pyodide://')
+      expect(html).toContain('"assets":{"type":"embedded","manifest":"')
+      expect(manifest.baseURL).toMatch(/^jsee-pyodide:\/\/full-/)
+      expect(Buffer.from(manifest.assets['pyodide.asm.wasm'].base64, 'base64').toString('utf8')).toBe('wasm')
+      expect(Buffer.from(manifest.assets['python_stdlib.zip'].base64, 'base64').toString('utf8')).toBe('stdlib')
+      expect(Buffer.from(manifest.assets['pyodide-lock.json'].base64, 'base64').toString('utf8')).toBe(JSON.stringify(lockFile))
+      expect(Buffer.from(manifest.assets['numpy-1.0.0.whl'].base64, 'base64').toString('utf8')).toBe('numpy-wheel')
+      expect(Buffer.from(manifest.assets['packages/dep-1.0.0.whl'].base64, 'base64').toString('utf8')).toBe('dep-wheel')
+      expect(fs.existsSync(path.join(tmpDir, 'dist', 'full', 'pyodide.asm.wasm'))).toBe(false)
+    } finally {
+      global.fetch = originalFetch
+      process.chdir(originalCwd)
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('pyodide single-file mode embeds local Pyodide directory', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-pyodide-single-local-'))
+    const originalCwd = process.cwd()
+    process.chdir(tmpDir)
+    try {
+      fs.mkdirSync(path.join(tmpDir, 'pyodide', 'packages'), { recursive: true })
+      fs.writeFileSync(path.join(tmpDir, 'pyodide', 'pyodide.js'), 'globalThis.loadPyodide = function () {}\n')
+      fs.writeFileSync(path.join(tmpDir, 'pyodide', 'pyodide.asm.js'), 'globalThis._createPyodideModule = function () {}\n')
+      fs.writeFileSync(path.join(tmpDir, 'pyodide', 'pyodide.asm.wasm'), 'wasm')
+      fs.writeFileSync(path.join(tmpDir, 'pyodide', 'python_stdlib.zip'), 'stdlib')
+      fs.writeFileSync(path.join(tmpDir, 'pyodide', 'pyodide-lock.json'), JSON.stringify({
+        info: { platform: 'probe' },
+        packages: {
+          demo: {
+            file_name: 'packages/demo.whl',
+            depends: []
+          }
+        }
+      }))
+      fs.writeFileSync(path.join(tmpDir, 'pyodide', 'packages', 'demo.whl'), 'wheel')
+      fs.writeFileSync(path.join(tmpDir, 'schema.json'), JSON.stringify({
+        model: {
+          name: 'calc',
+          type: 'py',
+          pyodide: {
+            url: 'pyodide/pyodide.js',
+            indexURL: 'pyodide/',
+            packages: ['demo']
+          },
+          imports: ['demo'],
+          code: 'import demo\nresult = 1'
+        },
+        outputs: [{ name: 'result', type: 'number' }]
+      }, null, 2))
+
+      const html = await gen(['--inputs', 'schema.json', '--outputs', 'dist/app.html', '--bundle=pyodide-single'], true)
+      const manifestMatch = html.match(/data-src="(jsee:pyodide-assets:[^"]+)"/)
+      expect(manifestMatch).toBeTruthy()
+      const manifest = JSON.parse(extractHiddenCode(html, manifestMatch[1]))
+
+      expect(extractHiddenCode(html, 'pyodide/pyodide.js')).toBe('globalThis.loadPyodide = function () {}\n')
+      expect(Buffer.from(manifest.assets['pyodide.asm.js'].base64, 'base64').toString('utf8')).toBe('globalThis._createPyodideModule = function () {}\n')
+      expect(Buffer.from(manifest.assets['packages/demo.whl'].base64, 'base64').toString('utf8')).toBe('wheel')
+      expect(html).toContain('"indexURL":"jsee-pyodide://pyodide/"')
+      expect(fs.existsSync(path.join(tmpDir, 'dist', 'pyodide', 'pyodide.asm.wasm'))).toBe(false)
+    } finally {
+      process.chdir(originalCwd)
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('pyodide bundle mode requires explicit Pyodide assets', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-pyodide-assets-required-'))
+    const originalCwd = process.cwd()
+    process.chdir(tmpDir)
+    try {
+      fs.writeFileSync(path.join(tmpDir, 'schema-default.json'), JSON.stringify({
+        model: {
+          name: 'calc',
+          type: 'py',
+          code: 'result = 1'
+        },
+        outputs: [{ name: 'result', type: 'number' }]
+      }, null, 2))
+      await expect(gen(['--inputs', 'schema-default.json', '--outputs', 'app.html', '--bundle=pyodide'], true))
+        .rejects.toThrow(/requires explicit model\.pyodide/)
+    } finally {
+      process.chdir(originalCwd)
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('resolves bundle modes without changing legacy bundle flags', () => {
+    expect(resolveBundleMode(false)).toBe('none')
+    expect(resolveBundleMode(true)).toBe('default')
+    expect(resolveBundleMode('hybrid')).toBe('hybrid')
+    expect(resolveBundleMode('pyodide')).toBe('pyodide')
+    expect(resolveBundleMode('pyodide-single')).toBe('pyodide-single')
+    expect(resolveBundleMode('offline-strict')).toBe('offline-strict')
+    expect(resolveBundleMode('strict')).toBe('offline-strict')
+    expect(resolveBundleMode('unexpected')).toBe('default')
+    expect(isPyodideBundleMode('pyodide')).toBe(true)
+    expect(isPyodideBundleMode('default')).toBe(false)
+    expect(isPyodideSingleFileBundleMode('pyodide-single')).toBe(true)
+    expect(isPyodideSingleFileBundleMode('pyodide')).toBe(false)
+  })
+
+  test('sanitizes Google Analytics IDs in generated metadata', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-ga-safe-'))
+    const originalCwd = process.cwd()
+    process.chdir(tmpDir)
+    try {
+      fs.writeFileSync(path.join(tmpDir, 'schema.json'), JSON.stringify({
+        page: { ga: 'G-ABC_123' },
+        model: { code: 'function demo () { return { y: 1 } }', worker: false },
+        inputs: [],
+        outputs: [{ name: 'y', type: 'number' }]
+      }, null, 2))
+      fs.writeFileSync(path.join(tmpDir, 'unsafe.json'), JSON.stringify({
+        page: { ga: 'G-OK</script><script>window.bad=true</script>' },
+        model: { code: 'function demo () { return { y: 1 } }', worker: false },
+        inputs: [],
+        outputs: [{ name: 'y', type: 'number' }]
+      }, null, 2))
+
+      const html = await gen(['--inputs', 'schema.json', '--outputs', path.join(tmpDir, 'ga.html')], true)
+      const unsafeHtml = await gen(['--inputs', 'unsafe.json', '--outputs', path.join(tmpDir, 'unsafe-ga.html')], true)
+
+      expect(sanitizeGoogleAnalyticsId('G-ABC_123')).toBe('G-ABC_123')
+      expect(sanitizeGoogleAnalyticsId('G-ABC</script>')).toBe('')
+      expect(html).toContain('googletagmanager.com')
+      expect(html).toContain('G-ABC_123')
+      expect(unsafeHtml).not.toContain('<script>window.bad=true</script>')
+      expect(unsafeHtml).not.toContain('googletagmanager.com')
+    } finally {
+      process.chdir(originalCwd)
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('Node server streaming helpers', () => {
+  test('detects generators without treating normal arrays as streams', () => {
+    function * syncGenerator () {
+      yield { count: 1 }
+    }
+
+    expect(isStreamResult(syncGenerator())).toBe(true)
+    expect(isStreamResult((async function * () { yield 1 })())).toBe(true)
+    expect(isStreamResult([{ count: 1 }])).toBe(false)
+    expect(isStreamResult('abc')).toBe(false)
+    expect(isStreamResult(Buffer.from('abc'))).toBe(false)
+    expect(isStreamResult(new Uint8Array([1, 2]))).toBe(false)
+    expect(isStreamResult(new Set([1, 2]))).toBe(false)
+  })
+
+  test('writes SSE frames with serialized result chunks', async () => {
+    async function * chunks () {
+      yield { count: 1 }
+      yield 2
+    }
+    const res = {
+      chunks: [],
+      headers: null,
+      statusCode: null,
+      ended: false,
+      writeHead (statusCode, headers) {
+        this.statusCode = statusCode
+        this.headers = headers
+      },
+      write (chunk) {
+        this.chunks.push(chunk)
+        return true
+      },
+      once () {},
+      end () {
+        this.ended = true
+      }
+    }
+
+    await writeSseStream(res, chunks())
+    const body = res.chunks.join('')
+
+    expect(res.statusCode).toBe(200)
+    expect(res.headers['Content-Type']).toContain('text/event-stream')
+    expect(body).toContain('data: {"count":1}')
+    expect(body).toContain('data: {"result":2}')
+    expect(body).toContain('data: [DONE]')
+    expect(res.ended).toBe(true)
+  })
+})
+
+describe('path containment', () => {
+  let tmpDir
+  let root
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-path-safe-'))
+    root = path.join(tmpDir, 'app')
+    fs.mkdirSync(root)
+    fs.writeFileSync(path.join(root, 'inside.txt'), 'inside')
+    fs.writeFileSync(path.join(root, '.env'), 'secret')
+    fs.writeFileSync(path.join(tmpDir, 'outside.txt'), 'outside')
+    try {
+      fs.symlinkSync(path.join(tmpDir, 'outside.txt'), path.join(root, 'outside-link.txt'))
+    } catch (error) {
+      // Symlink support is platform-dependent.
+    }
+  })
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  test('resolves files inside the app root', () => {
+    expect(resolveInside(root, 'inside.txt')).toBe(path.join(root, 'inside.txt'))
+  })
+
+  test('denies traversal outside the app root', () => {
+    expect(() => resolveInside(root, '../outside.txt')).toThrow(/outside app root/)
+    expect(() => resolveInside(root, path.join(tmpDir, 'outside.txt'))).toThrow(/outside app root/)
+  })
+
+  test('denies dotfiles and symlinks escaping the root', () => {
+    expect(() => resolveInside(root, '.env')).toThrow(/denied/)
+    if (fs.existsSync(path.join(root, 'outside-link.txt'))) {
+      expect(() => resolveInside(root, 'outside-link.txt')).toThrow(/outside app root/)
+    }
+  })
+})
+
+describe('URL helpers', () => {
+  test('joins CDN URLs with URL semantics', () => {
+    expect(joinUrl('https://cdn.example.com/pkg', 'models/model.js'))
+      .toBe('https://cdn.example.com/pkg/models/model.js')
+    expect(joinUrl('https://cdn.example.com/pkg/', './models/model.js'))
+      .toBe('https://cdn.example.com/pkg/models/model.js')
   })
 })
 
