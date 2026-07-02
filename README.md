@@ -140,7 +140,7 @@ JSEE turns a JSON schema into a working web app. Instead of writing HTML, event 
            └─────────┼─────────────────┼─────────┘
                      |                 |
               ┌──────▼──┐       ┌──────▼──────┐ ◄~ pyodide
- USER  ◄-►   │   GUI   │ ◄--►  │  Pipeline   │ ◄~ tf.js
+ USER  ◄-►   │   GUI   │ ◄--►  │  Pipeline   │ ◄~ libs
               │  Vue 3  │       │  Model(s)   │ ◄~ wasm
               └─────────┘       └─────────────┘
                                   WebWorker*
@@ -153,7 +153,7 @@ JSEE turns a JSON schema into a working web app. Instead of writing HTML, event 
 1. **Schema** is loaded from a URL, DOM element, function, or JS object
 2. **Validation** checks schema structure and logs warnings for issues
 3. **Imports** are resolved — JS scripts are loaded in sequence, CSS files are injected as `<link>` tags. In the browser, relative paths resolve against the page URL. In `--bundle` mode, the CLI checks the local filesystem first
-4. **Models** initialize — code is loaded from `url`, `code`, or a hidden DOM cache (`data-src` elements used by `--bundle` output and `download()`)
+4. **Models** initialize — code is loaded from `url`, `code`, or a hidden DOM cache (`data-src` elements used by `--bundle` output and `download()`; generated bundles store cached assets as base64 so model/import source cannot break out of the page script structure)
 5. **GUI** is created — a Vue 3 app with reactive inputs, output cards, run/stop buttons and progress bar
 6. **URL params** are applied — query string values (`?name=value`) set matching inputs, including `alias` matches. File URL params auto-load on init
 
@@ -167,7 +167,7 @@ JSEE turns a JSON schema into a working web app. Instead of writing HTML, event 
 
 ### Offline & bundling
 
-- **`jsee --bundle`** bundles everything into a single HTML file: the JSEE runtime, model/view/render code, and all imports are stored in hidden `<script data-src="...">` elements. The result works with no network
+- **`jsee --bundle`** bundles everything into a single HTML file: the JSEE runtime, model/view/render code, and all imports are stored in hidden `<script data-src="..." data-encoding="base64">` elements. The result works with no network
 - **`jsee.download(title)`** does the same at runtime — exports the current app as a self-contained HTML file
 
 ## Schema blocks
@@ -186,7 +186,7 @@ Extra blocks can be provided for further customization:
 
   ```json
   "imports": [
-    "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs",
+    "https://cdn.jsdelivr.net/npm/lodash@4/lodash.min.js",
     "dist/my-lib.js",
     "styles/app.css"
   ]
@@ -294,16 +294,21 @@ Use `columns` on inputs/outputs for dashboard-style layouts:
 
 - `model` — Contains main parameters of the model/script
   - `url` (string) — URL of a JS/Python script or POST/GET API
-  - `code` (function) — It's possible to pass code directly to JSEE instead of using an URL
+  - `code` (function or string) — It's possible to pass code directly to JSEE instead of using an URL
   - `name` (string) — Name of the executed object. Default value is taken from `url` or `code`
   - `type` (string, default — `function`) — What kind of script is loaded. Influences how the code is initialized. Possible values:
     - `function`
     - `class`
+    - `module` — Load an ES module URL with native dynamic import and call `model.export`, `model.name`, `default`, or `model`. Module models default to `worker: false`; set `worker: true` to run the module in JSEE's Web Worker. This is the JavaScript path intended for `security.allowEval: false`
     - `async-function`
     - `async-init`
-    - `py`
-    - `tf`
+    - `py` — Run browser Python through Pyodide. Browser Pyodide models receive Python globals `inputs` and `ctx`. Use `inputs['name']` for input values and `ctx.get('caller')` for runtime metadata. Legacy `from js import name` still works for non-colliding names, but JSEE no longer overwrites existing JavaScript globals such as `location`, `history`, `name`, `top`, or `parent`
+    - `get` / `post` — Call an HTTP API model instead of local JavaScript/Python code. Use `model.stream: true` for SSE responses
     - Inference note: when `code` is present (including code loaded from a `.js` URL), JSEE treats the model as `function` unless `type` is explicitly set
+    - TensorFlow.js is not a dedicated model type. Load it through `imports` and call it from a normal JavaScript `function` or `class` model
+  - `entry` (string) — For `type: "py"` browser/Pyodide models only, names the Python function to call after loading the module once. The function can declare individual input parameters, `inputs`, and/or `ctx`
+  - `export` (string) — For `type: "module"` models, names the ES module export to call. If omitted, JSEE tries `default` and then `model`
+  - `pyodide` (string or object) — For `type: "py"` browser/Pyodide models only, overrides the Pyodide loader. By default JSEE keeps the existing pinned runtime URL for compatibility. Set a URL string, or `{ "url": ".../pyodide.js", "indexURL": ".../" }`, to opt into another version or a local Pyodide asset directory. Add `packages: ["numpy"]` to preload packages and let `--bundle=pyodide` or `--bundle=pyodide-single` fetch those package wheels from `pyodide-lock.json`. Example: `{ "url": "https://cdn.jsdelivr.net/pyodide/v314.0.2/full/pyodide.js", "indexURL": "https://cdn.jsdelivr.net/pyodide/v314.0.2/full/" }`
   - `method` (string) — If `type` is `class`, `method` defines the name of the class method to call during evaluation
   - `container` (string) — How input values are passed to the function/method:
     - `object` (default) — Pass inputs wrapped in an object, i.e. `{'x': 1, 'y': 2}`
@@ -352,12 +357,12 @@ Use `columns` on inputs/outputs for dashboard-style layouts:
     - `folder` — Directory input. Shows a file listing with optional selection. In the browser, uses `<input webkitdirectory>` or drag-drop. On the server, reads from a directory path. Returns array of `{name, path, size, type, selected}` objects. Props:
       - `select` (boolean) — Show checkboxes for file selection (default: all files passed)
       - `reactive` (boolean) — Trigger model run on selection change
-    - `action` or `button` — Button (its `name` will be passed as a `caller` to the model)
+    - `action` or `button` — Button (its `name` will be passed as a `caller` to the model). Works as a top-level input or inside input groups
   - `default` — Default value
   - `alias` (string or array of strings) — Alternative names for URL parameter matching. E.g. `"alias": ["f", "file"]` allows `?f=value` or `?file=value` to set this input
   - `display` (string) — Filtrex expression to conditionally show/hide this input. Evaluated against current input values. E.g. `"display": "mode == 'advanced'"` shows the input only when `mode` is `"advanced"`. Supports `len()` for string length
   - `reactive` (boolean) — Trigger a model run when this input changes (see **Execution triggers** below)
-  - `disabled` (boolean) — Disables the input in the UI. When combined with `reactive: true`, triggers an initial model run on page load (useful for server-populated values)
+  - `disabled` (boolean) — Disables the input in the UI. Built-in input controls, selectors, folder selection checkboxes, and action buttons honor this flag. When combined with `reactive: true`, triggers an initial model run on page load (useful for server-populated values)
   - `enter` (boolean) — If `true` on a `string` input, pressing Enter triggers a model run (useful for chat or search inputs)
   - `raw` (boolean, file input only) — If `true`, pass the raw source to the model instead of reading text in the UI (`File` object for disk files or `{ kind: 'url', url: '...' }` for URL input)
   - `stream` (boolean, file input only) — If `true`, pass an async iterable `ChunkedReader` to the model instead of raw source handles. Supports `for await (const chunk of reader)`, `await reader.text()`, `await reader.bytes()`, and `for await (const line of reader.lines())`. Works in both main-thread and worker execution. Reader metadata (`reader.name`, `reader.size`, `reader.type`) is preserved and remains available in downstream pipeline models
@@ -366,7 +371,7 @@ Use `columns` on inputs/outputs for dashboard-style layouts:
   - `error` (string) — Custom error message for `validate` or `required` failures (default: `"Invalid value"` / `"Required"`)
   - `columns` (number, 1-12) — Grid column span for this input. When any input has `columns`, the inputs section switches to a 12-column CSS grid. E.g. `"columns": 6` makes the input take half width
   - URL params for file inputs (e.g. `?file=https://...`) auto-load on init, so bookmarkable links run without an extra Load click
-- `outputs` — Outputs definition. Outputs also support `alias` (string) for matching model result keys by alternative names. Per-output `columns` (number, 1-12) sets grid column span, same as inputs
+- `outputs` — Outputs definition. Outputs also support `alias` (string or array of strings) for matching model result keys by alternative names. Per-output `columns` (number, 1-12) sets grid column span, same as inputs
   - `name`* — Name of the output
   - `type`* — Type. Possible types:
     - `file` — Download-only file output. With a static schema filename, return the file body under the output name:
@@ -413,7 +418,7 @@ Use `columns` on inputs/outputs for dashboard-style layouts:
 - **Execution triggers** — by default the model only runs when the user clicks Run. Three schema-level options change this:
   - `autorun` (boolean, default: `false`) — run the model once on first load, then wait for manual Run clicks
   - `reactive` (boolean, default: `false`) — re-run the model on **any** input change (debounced 300ms). Useful for lightweight models where instant feedback is desired
-  - `interval` (number, default: `0`) — repeat execution every N milliseconds. `0` means no repetition
+  - `interval` (number, default: `0`) — after an autorun or manual Run, repeat execution every N milliseconds until Stop is clicked. `0` means no repetition. The first run keeps its original `caller` value (`autorun` or `run`); scheduled repeats use `caller: "interval"`
   - Per-input `reactive` — set `reactive: true` on an **individual input** to trigger a model run only when that specific input changes (fires immediately, not debounced). Other inputs still require a manual Run click. Useful when one input is interactive (e.g. a slider) but others are expensive to recompute
 
   | Option | Scope | When it runs | Debounced |
@@ -421,7 +426,7 @@ Use `columns` on inputs/outputs for dashboard-style layouts:
   | `autorun: true` | schema | once on load | no |
   | `reactive: true` | schema | every input change | yes (300ms) |
   | `reactive: true` | input | that input changes | no |
-  | `interval: N` | schema | every N ms | no |
+  | `interval: N` | schema | after autorun or Run, then every N ms | no |
 - **Chat mode** — declare an output with `"type": "chat"` to enable conversational UI. The runtime manages state:
   1. User types a message in a text input and presses Run (or Enter if the input has `"enter": true`)
   2. The runtime injects `history` (array of `{role, content}` dicts) into the model payload alongside the user's `message`
@@ -431,9 +436,38 @@ Use `columns` on inputs/outputs for dashboard-style layouts:
 
   Works with both Workers (postMessage) and server POST — no special execution mode needed. Python shorthand: `jsee.serve(fn, chat=True)` auto-generates the schema from `fn(message, history) -> str`
 
-- **Input persistence** — by default, JSEE saves input values to `localStorage` and restores them on page refresh. Priority: URL params > localStorage > schema defaults. Set `persist: false` in the schema to disable. Clicking Reset clears saved values
+- **Input persistence** — by default, JSEE saves input values to `localStorage` and restores them on page refresh. Values are namespaced by app/container/input shape, include grouped inputs, skip file/folder/action/button/disabled inputs, and are validated against type/options/min/max before restore. Priority: URL params > localStorage > schema defaults. Set `persist: false` in the schema to disable. Clicking Reset clears saved values
 - **Notifications** — set `notify: true` in the schema to show a browser notification when a run completes while the tab is hidden. JSEE requests permission on first load and fires `new Notification()` after successful runs only
-- **Streaming outputs (SSE)** — set `model.stream: true` to enable Server-Sent Events streaming. The POST handler reads `text/event-stream` responses and calls `output()` on each `data:` line for progressive results. Python generators are auto-detected:
+- **Security mode** — set `security.mode: "secure"` or `security.trusted: false` to opt into stricter trust settings. Secure mode defaults `allowEval`, `allowNetwork`, `allowRawHtml`, `allowNotifications`, and `allowFileViewer` to `false`; explicit booleans such as `security.allowNetwork: true` can override individual defaults. `allowEval: false` blocks inline JavaScript/Python model code, cached hidden JavaScript assets, Blob-script worker execution, worker class lookup, and Pyodide source execution; use `type: "module"` with a module URL for the no-eval JavaScript path. Module models default to the main thread and can opt into `worker: true`. `allowNetwork: false` blocks API model requests plus network model/import/Pyodide runtime loads when JSEE can evaluate the schema before the request; same-origin relative model/import URLs are checked as relative schema URLs even when JSEE later resolves them for browser or worker loading. `allowRawHtml: false` sanitizes `html`, `svg`, `markdown`, and `chat` outputs, disables raw HTML inside Markdown, removes event handlers/scripts/unsafe URLs, and preserves ordinary Markdown formatting. `allowNotifications: false` skips browser Notification permission requests and completion notifications. `allowFileViewer: false` disables built-in file/folder input controls and replaces file/media outputs (`image`, `audio`, `video`, `pdf`, `gallery`, `viewer`, `file`) with a blocked placeholder. Loading the schema URL itself happens before schema security can be known
+- **CSP deployment matrix** — for strict CSP/no-eval deployments, prefer `security.mode: "secure"` plus `type: "module"`. The current browser bundle injects built-in CSS at runtime, so built-in UI styles require `style-src 'unsafe-inline'`. Worker-backed models use JSEE's current Blob worker bootstrap, so they require `worker-src blob:` even when the user model itself is an ES module
+
+  Baseline same-origin module policy:
+
+  ```http
+  Content-Security-Policy:
+    default-src 'self';
+    script-src 'self';
+    style-src 'self' 'unsafe-inline';
+    img-src 'self' data: blob:;
+    font-src 'self' data:;
+    connect-src 'self';
+    worker-src 'none';
+    object-src 'none';
+    base-uri 'none';
+    form-action 'none'
+  ```
+
+  Use `worker-src blob:` instead of `worker-src 'none'` for `worker: true` module models. If the runtime, module URL, imports, images, API endpoints, or Pyodide assets come from another origin, add those origins to the matching CSP directive and keep `security.allowNetwork` aligned with that choice.
+
+  | Schema path | Required CSP additions | No `unsafe-eval` | Notes |
+  | --- | --- | --- | --- |
+  | `type: "module", worker: false` | `script-src` must allow the module URL | yes | Verified with `security.mode: "secure"` and `worker-src 'none'` |
+  | `type: "module", worker: true` | `worker-src blob:` and `script-src` must allow the module URL | yes for user model code | Current JSEE worker bootstrap is Blob-backed |
+  | Main-thread JavaScript `model.code` string | `script-src 'unsafe-eval'` | no | Blocked by `security.allowEval: false` |
+  | Worker JavaScript `model.code` string | `worker-src blob:` plus `script-src blob:` | no | Blocked by `security.allowEval: false`; class lookup also uses `eval` |
+  | Hidden bundled JavaScript model/import code | Same as inline code | no | Intentionally blocked when `security.allowEval` is false |
+  | Remote API/model/import/Pyodide URLs | Matching `connect-src`, `script-src`, or worker/runtime directives | depends on model type | Blocked by `security.allowNetwork: false` unless explicitly allowed |
+- **Streaming outputs (SSE)** — set `model.stream: true` to enable Server-Sent Events streaming. The POST handler reads `text/event-stream` responses and calls `output()` on each `data:` line for progressive results. Node server-side execution streams sync/async generator results from local JavaScript models, and Python generators are auto-detected:
   ```python
   def stream_count(n: int = 5):
       for i in range(n):
@@ -457,11 +491,12 @@ Use `columns` on inputs/outputs for dashboard-style layouts:
   }
   ```
 - Schema validation — JSEE validates schema structure during initialization and logs warnings for non-critical issues (e.g. unknown input types, malformed aliases)
-- `jsee.download(title)` — Downloads a self-contained HTML file that works offline. All external scripts are inlined and the schema/model/imports are cached. `title` defaults to `'output'`
+- Input inference warnings — when `schema.inputs` is omitted and JSEE infers inputs from JavaScript function parameters, inferred inputs default to `string` for compatibility. JSEE logs warnings for inferred string inputs, numeric defaults, JSDoc numeric hints, and unsupported destructured parameters so authors know when to declare `schema.inputs` explicitly. Set top-level `inferInputTypes: true` to opt into inferred `number` controls from numeric defaults or numeric JSDoc and `checkbox` controls from boolean defaults or JSDoc
+- `jsee.download(title)` — Downloads a self-contained HTML file that works offline. All external scripts are inlined and the schema/model/imports are cached in the same safe hidden-asset format used by `--bundle`. `title` defaults to `'output'`
 - `page` (CLI only) — Page metadata for generated HTML:
   - `title` (string) — Page title
   - `url` (string) — Page URL
-  - `ga` (string) — Google Analytics measurement ID (e.g. `"G-XXXXXXXXXX"`)
+  - `ga` (string) — Google Analytics measurement ID (e.g. `"G-XXXXXXXXXX"`). Invalid IDs are omitted from generated HTML
   - `social` (object) — Social media links: `twitter`, `github`, `facebook`, `linkedin`, `instagram`, `youtube` (values are usernames/handles)
   - `org` (object) — Organization footer: `name`, `url`, `description`
 
@@ -492,17 +527,19 @@ When outputs are not explicitly defined in the schema, or when a model returns k
 
 After creating an instance with `new JSEE({schema, container})`, these methods are available:
 
+Multiple JSEE instances can run on the same page; progress and overlay DOM nodes are scoped per instance.
+
 | Method | Description |
 |---|---|
-| `jsee.run(caller)` | Execute the model pipeline. `caller` can be `'run'`, `'autorun'`, `'reactive'`, or a custom button name |
+| `jsee.run(caller)` | Execute the model pipeline. `caller` can be `'run'`, `'autorun'`, `'reactive'`, `'interval'`, or a custom button name |
 | `jsee.output(result)` | Process and render results to output cards |
 | `jsee.cancelCurrentRun()` | Stop the active run. Rejects the current run promise, sets cancellation state, and signals/terminates workers |
 | `jsee.isCancelled()` | Returns `true` if cancellation was requested |
-| `jsee.progress(value)` | Set progress bar: `0`-`100` for determinate, `null` for indeterminate |
+| `jsee.progress(value)` | Set this instance's progress bar: `0`-`100` for determinate, `null` for indeterminate |
 | `jsee.download(title)` | Export current app as a self-contained offline HTML file |
 | `jsee.destroy()` | Cleanup: cancel runs, terminate workers, unmount Vue app, revoke blob URLs |
 | `jsee.notify(text)` | Show a success toast notification |
-| `jsee.log(...args)` | Log to browser console and optional `#log` DOM element |
+| `jsee.log(...args)` | Log to browser console and optional `#log` DOM element as plain text |
 
 JSEE is part of the [StatSim](https://statsim.com) ecosystem. The schema/runtime contract is the public surface; lower-level packaging and renderer internals may continue to evolve.
 
@@ -530,7 +567,8 @@ jsee init --html            # single index.html with CDN script
 Start a dev server or generate a static HTML file from a local schema or a JSEE app package. Package inputs resolve the package `jsee` field, for example `{ "jsee": "schema.json" }`, and use the package directory as the app root. If the app package is not installed locally, let npm provide both packages with `npx -p @jseeio/jsee -p <package> jsee <package> --serve`.
 
 ```bash
-jsee schema.json                       # dev server on port 3000
+jsee schema.json                       # dev server on localhost:3000
+jsee schema.json --host 0.0.0.0        # expose dev server on the local network
 jsee @statsim/gen --serve              # serve a resolvable JSEE app package
 jsee schema.json -o app.html           # generate static HTML
 jsee @statsim/gen -o app.html --bundle # bundled HTML from package app
@@ -550,9 +588,10 @@ Use `--run` for one-shot CLI execution. With no output target, JSEE writes a pip
 | `-i, --inputs <file>` | Input schema JSON file (default: `schema.json`) |
 | `-o, --outputs <file>` | Output file path(s), comma-separated (HTML, JSON) |
 | `-d, --description <file>` | Markdown file to include as app description |
+| `--host <addr>` | Dev server host (default: `127.0.0.1`; use `0.0.0.0` to expose on the local network) |
 | `-p, --port <number>` | Dev server port (default: `3000`) |
 | `-v, --version <version>` | JSEE runtime version (`latest`, `dev`, or semver) |
-| `-b, --bundle` | Bundle runtime + all deps into a single offline HTML |
+| `-b, --bundle[=mode]` | Bundle runtime + all deps into a single offline HTML (`default`, `hybrid`, `pyodide`, `pyodide-single`, or `offline-strict`) |
 | `-f, --fetch` | Backward-compatible alias for `--bundle` |
 | `-s, --serve` | Serve explicitly (default when no output is provided) |
 | `--run` | Execute the model once from the CLI and write pipeable outputs |
@@ -565,9 +604,19 @@ Use `--run` for one-shot CLI execution. With no output target, JSEE writes a pip
 
 #### `--bundle`
 
-Bundles everything into a single offline HTML: the JSEE runtime, model/view/render code, and all imports are stored in hidden `<script data-src="...">` elements. Local files are detected by checking the filesystem (so bare paths like `dist/core.js` work alongside `./relative.js`); anything not found locally is fetched from CDN.
+Bundles everything into a single offline HTML: the JSEE runtime, model/view/render code, and all imports are stored in hidden base64 `<script data-src="..." data-encoding="base64">` elements. Local files are detected by checking the filesystem (so bare paths like `dist/core.js` work alongside `./relative.js`); anything not found locally is fetched from CDN.
+
+When `security.allowEval` is false, hidden bundled JavaScript model/import code is intentionally blocked at runtime. Use a separate `type: "module"` model URL for the no-eval JavaScript path; set `worker: true` if that module should run in JSEE's Web Worker.
 
 Model dependencies and schema `imports` are separate mechanisms: local model files that use `require()` or static `import`/`export` are bundled with optional `esbuild` during `--bundle`, so npm dependencies can become part of the generated HTML; schema `imports` remain explicit browser assets loaded before the model, such as CDN globals, local helper scripts, CSS files, Plot/Three/Leaflet, or other side-effect libraries.
+
+For browser Python, `--bundle` caches a configured `model.pyodide.url` loader script when `model.pyodide` is explicit. Pyodide's WASM, stdlib zip, and package wheels are still loaded from `model.pyodide.indexURL`, so strict no-network Pyodide bundles require those Pyodide release assets. Use `--bundle=pyodide` to copy a local Pyodide asset directory, or fetch an explicit remote Pyodide `indexURL`, beside the generated HTML and rewrite the generated schema to the copied relative path. Use `--bundle=pyodide-single` to embed Pyodide core assets and declared package wheels into the HTML itself. Declare package wheels to fetch with `model.pyodide.packages` or Python-model `imports`; auto-detected Python imports are not bundled.
+
+Bundle modes:
+- `--bundle` or `--bundle=hybrid` keeps the compatibility behavior: JSEE inlines what it can and warns when configured Pyodide assets still point at a remote `indexURL`
+- `--bundle=pyodide` requires explicit `model.pyodide` assets, copies a local `indexURL` directory or fetches a remote `indexURL` core asset set beside each generated HTML output, fetches declared package wheels from `pyodide-lock.json`, and caches the copied `pyodide.js` loader in hidden storage
+- `--bundle=pyodide-single` requires explicit `model.pyodide` assets, embeds Pyodide core assets (`pyodide.asm.wasm`, stdlib zip, lock file, asm JS/module when present) plus declared package wheels into a hidden manifest, and rewrites generated Pyodide URLs to an in-page `jsee-pyodide://` asset shim
+- `--bundle=offline-strict` fails generation if the bundle would still need runtime network for API models, remote model URLs, implicit default Pyodide, remote Pyodide `indexURL`, or a missing local Pyodide asset directory relative to the generated HTML file
 
 #### `--runtime`
 
@@ -628,11 +677,13 @@ jsee data/                        # serve folder with file browser
 
 For single files, JSEE auto-detects the output type from the file extension (image, pdf, audio, video, table, markdown, code). For folders, JSEE creates a file browser with selection checkboxes, stats summary, and a preview of the selected file.
 
+The dev server file endpoints are app-root contained. `/__jsee/file` and `/__jsee/folder` only serve files under the schema/package root, or under the explicit file/folder path passed to identity serving (`jsee data/`, `jsee report.pdf`). Python schema static files are also contained to the schema root. Path traversal, symlinks that resolve outside the allowed root, dotfiles, and `node_modules` paths are denied.
+
 Output type auto-detection also works for model results — if a model returns a string ending in `.png`, it renders as an image automatically.
 
 ### Serve bar
 
-When serving, a top bar appears with the server address, a Save HTML button, and (when server-side execution is active) a Browser/Server toggle to switch execution mode. Input values are preserved across the switch via localStorage. The serve bar is not included in generated output files or saved bundles.
+When serving, a top bar appears with the server address and, when server-side execution is active, a Browser/Server toggle to switch execution mode. Python-served pages also include a Save HTML button. Bundled generated output files show a Download HTML button instead of the serve bar.
 
 ## CLI — Python
 
@@ -673,7 +724,7 @@ jsee schema.json
 
 | Flag | Description |
 |---|---|
-| `--host <addr>` | Host to bind to (default: `0.0.0.0`) |
+| `--host <addr>` | Host to bind to (default: `127.0.0.1`; use `0.0.0.0` to expose on the local network) |
 | `--port <number>` | Port to listen on (default: `5050`) |
 
 ### Data inputs
@@ -697,7 +748,9 @@ Every server (both Node.js with `--execute` and Python) exposes these endpoints:
 | `/api/openapi.json` | GET | Auto-generated OpenAPI 3.1 spec |
 | `/{modelName}` | POST | Execute model with JSON or multipart input |
 
-Both servers support `application/json` and `multipart/form-data` POST bodies, CORS (`Access-Control-Allow-Origin: *`), and return consistent JSON errors for 404/400/500.
+Both servers support `application/json` and `multipart/form-data` POST bodies, CORS (`Access-Control-Allow-Origin: *`), and return consistent JSON errors for 400/404/500. The Node dev server accepts JSON and multipart request bodies up to 50 MB and returns JSON body-parser errors for malformed or too-large requests instead of Express HTML error pages. Python `serve()` runs with a threaded dev server, awaits async model functions, and streams sync or async generator functions as SSE when `stream=True`.
+
+The OpenAPI spec is generated from the same schema contract: request bodies include JSON inputs and multipart file uploads, responses include declared output properties (including outputs nested in groups), streaming models advertise `text/event-stream`, `schema.examples` become request examples, and standard JSON error responses are documented. This is descriptive only; the runtime response payload remains backward-compatible.
 
 ```bash
 # Run the model via API (JSON)
@@ -723,7 +776,7 @@ Both servers normalize model return values consistently:
 | Object/dict | returned as-is |
 | Primitive (number, string, bool) | `{"result": value}` |
 | Tuple/list (Python) | `{"result": [a, b]}` |
-| Buffer/bytes | `{"result": "data:image/png;base64,..."}` |
+| Buffer/bytes | MIME-sniffed data URL, e.g. `{"result": "data:application/pdf;base64,..."}` |
 | PIL Image (Python) | `{"result": "data:image/png;base64,..."}` |
 | list[dict] (Python) | `{"result": {"columns": [...], "rows": [...]}}` |
 
@@ -776,7 +829,7 @@ Deploy with gunicorn, uWSGI, or any WSGI server:
 gunicorn app:app
 ```
 
-`create_app()` accepts the same arguments as `serve()` — functions, dicts, or schema.json paths. Note: SSE streaming is not supported in basic WSGI.
+`create_app()` accepts the same arguments as `serve()` — functions, dicts, or schema.json paths. Async functions are awaited before JSON serialization. Note: SSE streaming is not supported in basic WSGI.
 
 ## Changelog
 

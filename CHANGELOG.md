@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased
+
+### Fixes:
+- Clear worker execution timeouts after successful runs and rebuild worker-backed pipelines after Stop so later runs use live workers.
+- Preserve declared falsy output values (`0`, `false`, `''`, `null`) and route declared outputs before input updates when names overlap.
+- Run `autorun + interval` schemas on a non-recursive interval loop, report scheduled repeats with `caller: 'interval'`, and stop the loop cleanly when Stop is clicked.
+- Store bundled/generated hidden assets as base64 and escape schema/page metadata so `</script>` in models, imports, or titles cannot corrupt generated HTML.
+- Harden Node dev-server file endpoints with app-root containment, symlink escape checks, dotfile denial, and `node_modules` denial.
+- Filter undeclared runtime metadata such as `caller` from Python server function calls while preserving declared chat `history`.
+- Contain Python server static file serving to the schema root, denying traversal, dotfiles, and `node_modules` paths.
+- Await Python async model functions before response serialization and stream async generator functions as SSE from `serve()`.
+- Scope runtime progress and overlay DOM nodes per JSEE instance so destroying one embedded app does not remove another app's UI state.
+- Replace built-in Vue component `$parent` reach-through with an injected JSEE context so nested group action buttons call the correct root runner.
+- Namespace input persistence by app/container/input shape, recurse into groups, skip disabled/file/folder/action inputs, and validate restored values before applying them.
+- Stream sync/async generator results from Node server-side execution when `model.stream: true`.
+- Sanitize Google Analytics measurement IDs in generated page metadata and make script-safe JSON robust for optional metadata.
+- Honor `disabled: true` across built-in string/color/text/checkbox/toggle/select/radio/multi-select/folder/action input controls.
+- Serialize raw JS/Python bytes with MIME-sniffed data URLs for PNG, JPEG, GIF, WEBP, PDF, WAV, and unknown binary data instead of assuming PNG.
+- Let Python `bytes` return annotations use runtime output auto-detection instead of forcing an image output.
+- Generate richer OpenAPI specs from declared outputs, multipart file inputs, streaming models, request examples, and standard JSON error responses without changing runtime response payloads.
+- Sanitize `html`, `svg`, `markdown`, and `chat` output rendering when opt-in secure mode disables raw HTML.
+- Warn when JavaScript function inputs are auto-inferred as strings, including numeric defaults, JSDoc numeric hints, and unsupported destructured parameters.
+- Avoid browser Pyodide input/global collisions by exposing Python `inputs` and `ctx` globals while only preserving legacy JS globals for non-colliding input names.
+- Add opt-in browser Pyodide `model.entry` execution that loads Python source once, calls the named function on each run, and converts Python dict/list results back to plain JavaScript values.
+- Add opt-in browser Pyodide `model.pyodide` runtime configuration for custom loader URLs/index URLs, including bundled hidden-loader support when `--bundle` is used.
+- Add opt-in `--bundle=offline-strict` generation checks that fail when API models, remote model URLs, implicit Pyodide defaults, remote Pyodide `indexURL`, or missing local Pyodide asset directories would keep a bundle network-dependent at runtime.
+- Add opt-in `--bundle=pyodide` generation mode that copies an explicit local Pyodide `indexURL` directory, or fetches an explicit remote Pyodide `indexURL` core asset set plus declared package wheels, beside generated HTML outputs and rewrites the generated schema to those copied assets.
+- Add opt-in `--bundle=pyodide-single` generation mode that embeds explicit Pyodide core assets plus declared package wheels in the HTML and serves them at runtime through an in-page `jsee-pyodide://` asset shim.
+- Enforce opt-in secure-mode `allowNetwork`, `allowNotifications`, and `allowFileViewer` at runtime for API requests, remote model/import/Pyodide loads, browser notifications, file/folder controls, and file/media outputs.
+- Enforce opt-in secure-mode `allowEval` at runtime for inline JavaScript/Python model code, cached hidden JavaScript assets, Blob-script worker execution, worker class lookup, and Pyodide source execution; add `type: 'module'` as the no-eval JavaScript model path for main-thread ES module URLs.
+- Support explicit `worker: true` for `type: 'module'` JavaScript models by loading ES module exports inside the JSEE worker without inline code evaluation.
+- Document and test the current browser CSP matrix for module models, Blob-backed workers, inline JavaScript code, and hidden bundled JavaScript assets.
+- Add opt-in `inferInputTypes: true` for JavaScript input inference so numeric defaults/JSDoc infer `number` controls and boolean defaults/JSDoc infer `checkbox` controls while default inference remains string-compatible.
+- Do not apply worker execution timeout while initializing URL/module-backed worker models, resolve relative worker script URLs before Blob-worker loading, and surface worker initialization errors instead of hanging.
+- Treat optional `#log` DOM output from `jsee.log(...args)` as plain text so logged HTML cannot create DOM nodes or execute event handlers.
+- Check secure-mode import network policy against the raw schema URL before resolving loader URLs, so same-origin relative imports still work while network imports remain blocked when `allowNetwork: false`.
+- Harden the Node/fallback HTML sanitizer against entity- and whitespace-obfuscated unsafe URLs when no browser DOM parser is available.
+- Accept Node API JSON request bodies up to the same 50 MB limit as multipart requests and return JSON body-parser errors instead of Express HTML error pages.
+- Refresh README model/API docs so runtime-supported `get`/`post`, function-or-string `model.code`, and output alias arrays are documented.
+- Update optional `esbuild` to `^0.28.1` so production installs have zero `npm audit --omit=dev` advisories.
+- Update the development build/audit tree by moving `sass-loader` to v17, removing the `node-sass` chain, raising `@babel/core` to the patched Babel 7 line, and pinning audited transitive `minimatch`/`js-yaml` versions through npm overrides.
+
+### Changes:
+- Node and Python dev servers now bind to `127.0.0.1` by default. Use `--host 0.0.0.0` to expose a dev server on the local network.
+- Python `serve()` now uses `ThreadingHTTPServer`, so long model runs or open SSE streams do not block unrelated requests.
+- Remove the incomplete `type: 'tf'` model path from the supported schema contract. Load TensorFlow.js through schema `imports` and use a normal JavaScript function/class model instead.
+- Add opt-in `schema.security` scaffolding for secure/trusted mode defaults and warnings.
+
 ## 0.8.8 - 2026-05-25
 
 - Applied app package `browser` field aliases during CLI dependency bundling so installed JSEE app packages can bundle legacy browser dependencies reliably.

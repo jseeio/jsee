@@ -129,12 +129,12 @@ jsee.serve(report, outputs={'summary': jsee.Markdown(), 'data': jsee.Table()})
 
 Auto-detected output types:
 - `-> list` → `table` (list-of-dicts auto-converted to `{columns, rows}` format)
-- `-> bytes` → `image` (base64-encoded)
+- `-> bytes` → runtime auto-detection from a MIME-sniffed data URL
 - `-> dict` → runtime auto-detects per key (no explicit outputs needed)
 
 ## API
 
-### `jsee.serve(target, host='0.0.0.0', port=5050, **kwargs)`
+### `jsee.serve(target, host='127.0.0.1', port=5050, **kwargs)`
 
 Start a server with GUI and JSON API.
 
@@ -150,6 +150,7 @@ Keyword arguments (when target is a function):
 - `reactive` — `True` to auto-run on input change (no submit button)
 - `outputs` — dict or list of output type declarations
 - `chat` — `True` for chat mode (see below)
+- `stream` — `True` to serve sync or async generator results as SSE
 
 ```python
 from typing import Literal
@@ -187,6 +188,7 @@ How it works:
 - Each Run sends `{message, history}` to the server
 - `history` is a list of `{role: 'user'|'assistant', content: str}` dicts
 - String return is auto-wrapped as `{chat: response}`
+- Async chat functions are awaited before the response is wrapped
 - The `chat` output type renders messages with Markdown support
 - Press Enter in the message field to send
 
@@ -220,6 +222,10 @@ Every JSEE server exposes:
 | `/api/openapi.json` | GET | Auto-generated OpenAPI 3.1 spec |
 | `/{model_name}` | POST | Execute model with JSON body |
 
+`serve()` uses a threaded dev server, so long model calls and open SSE streams do not block `/api` or static asset requests. Async functions are awaited before JSON serialization. Sync and async generator functions stream `text/event-stream` responses when `stream=True`.
+
+The OpenAPI spec is generated from the same schema contract: request bodies include JSON inputs and multipart file uploads, responses include declared output properties (including outputs nested in groups), streaming models advertise `text/event-stream`, `schema.examples` become request examples, and standard JSON error responses are documented. This is descriptive only; the runtime response payload remains backward-compatible.
+
 ```bash
 # Execute with JSON
 curl -X POST http://localhost:5050/sum \
@@ -245,11 +251,11 @@ curl http://localhost:5050/api/openapi.json
 | `dict` | returned as-is (each value serialized individually) |
 | `int`, `float`, `str` | wrapped: `{"result": value}` |
 | `tuple` | converted to list: `{"result": [a, b]}` |
-| `bytes` | base64 image: `{"result": "data:image/png;base64,..."}` |
+| `bytes` | MIME-sniffed data URL, e.g. `{"result": "data:application/pdf;base64,..."}` |
 | PIL `Image` | base64 image (auto-detected) |
 | `list[dict]` | table format: `{"result": {"columns": [...], "rows": [...]}}` |
 
-Nested serialization: when returning a dict, each value is serialized individually. A dict value that is `bytes` becomes a base64 data URL, a `list[dict]` value becomes `{columns, rows}` table format, etc.
+Nested serialization: when returning a dict, each value is serialized individually. A dict value that is `bytes` becomes a MIME-sniffed base64 data URL, a `list[dict]` value becomes `{columns, rows}` table format, etc.
 
 ## Gradio comparison
 
