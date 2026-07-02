@@ -21,6 +21,7 @@ module.exports = {
   },
   globals: {
     VERSION: 'readonly',
+    EXTENDED: 'readonly',
     importScripts: 'readonly',
     JSEE: 'readonly',
     loadPyodide: 'readonly',

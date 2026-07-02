@@ -8,7 +8,6 @@ page.setDefaultTimeout(10000)
 const port = 8484
 const urlSchema = (name) => `http://localhost:${port}/load/?s=/test/${name}.schema.json`
 const urlHTML = (name) => `http://localhost:${port}/test/${name}.html`
-const urlQuery = (schema) => `http://localhost:${port}/load/?s=${JSON.stringify(schema)}`
 const urlQueryEscaped = (schema) => `http://localhost:${port}/load/?s=${encodeURIComponent(JSON.stringify(schema))}`
 const uploadFixture = path.resolve(__dirname, 'fixtures', 'upload-sample.csv')
 

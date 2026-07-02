@@ -5,9 +5,7 @@ page.setDefaultTimeout(30000)
 // Server on port 8484 is auto-started by jest-puppeteer (see jest-puppeteer.config.js)
 
 const port = 8484
-const urlSchema = (name) => `http://localhost:${port}/load/?s=/test/${name}.schema.json`
 const urlHTML = (name) => `http://localhost:${port}/test/${name}.html`
-const urlQuery = (schema) => `http://localhost:${port}/load/?s=${JSON.stringify(schema)}`
 
 describe('Python', () => {
   test('Window', async () => {
