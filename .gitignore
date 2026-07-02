@@ -13,3 +13,6 @@ playwright-report/
 references/
 py/references/
 py/jsee/static/
+*.md
+!README.md
+!**/README.md
