@@ -26,14 +26,5 @@ module.exports = {
     JSEE: 'readonly',
     loadPyodide: 'readonly',
   },
-  overrides: [
-    {
-      // Puppeteer tests use global `page` from jest-puppeteer
-      files: ['test/**/*.test.js'],
-      globals: {
-        page: 'readonly',
-      },
-    },
-  ],
   ignorePatterns: ['dist/', 'node_modules/', 'apps/', 'tmp/', 'load/', 'test/fixtures/real-apps/'],
 }
