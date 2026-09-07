@@ -44,6 +44,14 @@ This starts a server at `http://localhost:5050` with:
 
 JSEE introspects your function's type hints and default values to generate a schema describing inputs and their types. The schema drives both the GUI (rendered by the JSEE runtime in the browser) and the API endpoints.
 
+`**kwargs` does not create a required input field. Extra request fields can reach functions accepting `**kwargs`; legacy `_jsee` metadata is removed unless the function explicitly declares an `_jsee` parameter. Explicit parameters, including `caller` and `history`, retain their supplied values.
+
+Both the stdlib server and WSGI app validate declared types, options, numeric bounds/steps, and required input presence before invoking a model. Invalid input returns HTTP 400. Explicit defaults are applied without changing the submitted dictionary; `Optional[X]` generates `nullable: true`, and a `None` default remains valid. Named input groups produce nested objects; unnamed layout groups flatten into their parent. Caller-provided schema dictionaries are copied before server normalization.
+
+`serve()` and `create_app()` also share model loading and request decoding. Schema-file model and static paths resolve from the descriptor directory, including CLI calls from another directory. CLI `--name=value` and positional overrides set and lock input defaults.
+
+Request bodies default to a 50 MiB limit. Set a positive `max_body_bytes` in either Python entry point, or use `jsee schema.json --max-body-bytes 10485760` for 10 MiB. Malformed lengths and invalid inputs return 400; oversized declarations return 413 before reading the body. This is a body-size policy, not an execution sandbox or request deadline.
+
 ```
 Python function          JSEE schema             Server
   def sum(               {                       GET  /          → GUI
@@ -224,6 +232,10 @@ Every JSEE server exposes:
 
 `serve()` uses a threaded dev server, so long model calls and open SSE streams do not block `/api` or static asset requests. Async functions are awaited before JSON serialization. Sync and async generator functions stream `text/event-stream` responses when `stream=True`.
 
+Once SSE headers have been sent, generator failures are reported as an `event: error` frame with JSON `{"error": "..."}`, followed by `[DONE]`. Both `serve()` and `create_app()` use the same framing. Response write failures, or a WSGI host closing the response iterable, close suspended generators so their `finally` cleanup runs. WSGI pulls one chunk at a time; async generators retain one task and context across reads and cleanup. A producer blocked inside computation still needs cooperative cancellation.
+
+Stages from the same Python file share one module instance within an application. Separate applications load separate instances. Explicit model names must identify callables; duplicate endpoint names are rejected before imports. An unnamed model selects a public callable defined in its source file and exposes it at `/model`. Existing endpoints execute individual stages; the browser orchestrates the pipeline.
+
 The OpenAPI spec is generated from the same schema contract: request bodies include JSON inputs and multipart file uploads, responses include declared output properties (including outputs nested in groups), streaming models advertise `text/event-stream`, `schema.examples` become request examples, and standard JSON error responses are documented. This is descriptive only; the runtime response payload remains backward-compatible.
 
 ```bash
@@ -257,27 +269,20 @@ curl http://localhost:5050/api/openapi.json
 
 Nested serialization: when returning a dict, each value is serialized individually. A dict value that is `bytes` becomes a MIME-sniffed base64 data URL, a `list[dict]` value becomes `{columns, rows}` table format, etc.
 
-## Gradio comparison
-
-JSEE serves the same purpose as Gradio for simple use cases — zero-setup function-to-GUI — but with zero dependencies and full offline support.
-
-| | JSEE | Gradio |
-|---|---|---|
-| Dependencies | 0 (stdlib only) | 30+ packages |
-| Install size | ~300 KB | ~150 MB |
-| Offline | Yes (bundled runtime) | Requires CDN/network |
-| GPU/ML serving | Yes (your function, your stack) | Yes (same) |
-| Input widgets | text, number, slider, select, radio, checkbox, date, file, color | 30+ component types |
-| Output types | text, image, table, JSON, HTML, markdown, SVG, code, file | 20+ component types |
-| Layout control | Schema-driven (sidebar, tabs, accordion) | Imperative Python API |
-| Streaming | Not yet | Yes (yield) |
-| Chat UI | Yes (`chat=True`) | Yes (ChatInterface) |
-
-JSEE is not a Gradio replacement for complex apps. It's a lightweight alternative when you want instant GUI + API from a function with minimal overhead.
-
 ## Offline
 
-The JSEE runtime (`jsee.core.js` / `jsee.full.js`) is bundled with the package. The server auto-selects the right bundle based on output types. No CDN or internet access required. The server works fully offline.
+The JSEE runtime (`jsee.core.js` / `jsee.full.js`) is bundled with the package. The server auto-selects the bundle based on output types, so the built-in GUI needs no CDN. Your model, imports, and data may still require network access; provide those assets locally for an offline application.
+
+The package also includes the descriptor authoring JSON Schema (draft-07), accessible without loading model code:
+
+```python
+import json
+from importlib.resources import files
+
+descriptor_schema = json.loads(files('jsee').joinpath('static/schema.json').read_text())
+```
+
+Use it with a JSON Schema validator of your choice. It describes known fields while allowing extension metadata; runtime capability and invocation-value checks remain separate.
 
 ## Development
 
@@ -289,3 +294,9 @@ npm run build-dev && npm run copy-runtime-py
 cd py && pip install -e .
 python -m pytest test/ -v
 ```
+
+For distributable packages, run `npm run build:python` from the repository root. The production build prepares both browser bundles and the descriptor schema before building the wheel and source distribution. Python package builds fail when any required asset is missing. Installing a prepared package requires no Node.js.
+
+Run `npm run test:python-native` at the repository root to check native behavior and rebuild/install a wheel from its source distribution outside the checkout. These development checks require `pytest`, `build`, and `wheel`.
+
+Schemas accept an optional numeric `schemaVersion: 1`. An absent version keeps the same behavior; unsupported versions fail before importing model code. Descriptor format versions are separate from package versions.

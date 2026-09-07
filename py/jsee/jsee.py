@@ -2,14 +2,18 @@
 
 import base64
 import asyncio
+import copy
+from contextlib import closing
 import datetime
 import enum
 import html as html_lib
 import inspect
+import math
 import io
 import json
 import os
 import typing
+import types
 import importlib
 from inspect import signature, _empty
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -22,6 +26,7 @@ from .types import (
 
 
 FULL_BUNDLE_TYPES = {'chart', '3d', 'map'}
+DEFAULT_MAX_BODY_BYTES = 50 * 1024 * 1024
 
 
 def _needs_full_bundle(schema):
@@ -136,10 +141,12 @@ def _type_hint_to_jsee(hint):
     return base_type, extra
 
   # Optional[X] = Union[X, None] — unwrap
-  if origin is typing.Union:
+  if origin in (typing.Union, getattr(types, 'UnionType', typing.Union)):
     non_none = [a for a in args if a is not type(None)]
     if len(non_none) == 1:
-      return _type_hint_to_jsee(non_none[0])
+      base_type, extra = _type_hint_to_jsee(non_none[0])
+      extra['nullable'] = True
+      return base_type, extra
 
   # Literal["a", "b"] → select with options
   if origin is typing.Literal:
@@ -216,6 +223,17 @@ def _build_outputs(kwargs_outputs):
   return outputs
 
 
+def _apply_input_defaults(inputs, defaults, positional):
+  for i, inp in enumerate(inputs):
+    name = inp.get('name', '')
+    if name in defaults:
+      inp['default'] = defaults[name]
+      inp['disabled'] = True
+    elif i < len(positional):
+      inp['default'] = positional[i]
+      inp['disabled'] = True
+
+
 def generate_schema(target, host='0.0.0.0', port=5050, **kwargs):
   """Introspect a Python function and generate a JSEE schema.
 
@@ -233,6 +251,8 @@ def generate_schema(target, host='0.0.0.0', port=5050, **kwargs):
   sig = signature(target)
   inputs = []
   for name, param in sig.parameters.items():
+    if param.kind == inspect.Parameter.VAR_KEYWORD:
+      continue
     jsee_type = 'string'
     extra = {}
     if name in hints:
@@ -248,16 +268,7 @@ def generate_schema(target, host='0.0.0.0', port=5050, **kwargs):
     inputs.append(inp)
 
   # Apply CLI data defaults (--key=value or positional args)
-  cli_defaults = kwargs.get('defaults', {})
-  cli_positional = kwargs.get('extra_positional', [])
-  for i, inp in enumerate(inputs):
-    name = inp.get('name', '')
-    if name in cli_defaults:
-      inp['default'] = cli_defaults[name]
-      inp['disabled'] = True
-    elif i < len(cli_positional):
-      inp['default'] = cli_positional[i]
-      inp['disabled'] = True
+  _apply_input_defaults(inputs, kwargs.get('defaults', {}), kwargs.get('extra_positional', []))
 
   title = kwargs.get('title') or target.__name__
   description = kwargs.get('description')
@@ -304,25 +315,81 @@ def generate_schema(target, host='0.0.0.0', port=5050, **kwargs):
   return schema
 
 
+def _option_value(option):
+  if isinstance(option, dict):
+    for key in ('value', 'name', 'label'):
+      if key in option:
+        return option[key]
+  return option
+
+
+def _option_schema(options):
+  values = [_option_value(option) for option in options]
+  types = []
+  for value in values:
+    if value is None:
+      kind = 'null'
+    elif isinstance(value, bool):
+      kind = 'boolean'
+    elif isinstance(value, (int, float)):
+      kind = 'integer' if value == int(value) else 'number'
+    elif isinstance(value, list):
+      kind = 'array'
+    elif isinstance(value, dict):
+      kind = 'object'
+    else:
+      kind = 'string'
+    if kind not in types:
+      types.append(kind)
+  return {'type': types[0] if len(types) == 1 else types, 'enum': values}
+
+
 def jsee_inputs_to_json_schema(inputs):
   """Convert JSEE inputs to JSON Schema (mirrors JS version)."""
+  if inputs is not None and not isinstance(inputs, list):
+    raise ValueError('inputs/elements should be an array')
   properties = {}
   required = []
+  def add(name, prop):
+    if not isinstance(name, str) or not name:
+      raise ValueError('Input name should be a nonempty string')
+    if name in properties:
+      raise ValueError('Duplicate input name: ' + name)
+    properties[name] = prop
   for inp in (inputs or []):
+    if not isinstance(inp, dict):
+      raise ValueError('Input should be an object')
+    if inp.get('type') in ('button', 'action'):
+      continue
+    if inp.get('type') == 'group' and not inp.get('name'):
+      nested = jsee_inputs_to_json_schema(inp.get('elements'))
+      for name, prop in nested['properties'].items():
+        add(name, prop)
+      required.extend(nested['required'])
+      continue
     prop = {}
     if inp.get('description'):
       prop['description'] = inp['description']
     t = inp.get('type', 'string')
-    if t == 'int':
+    if t == 'group':
+      prop.update(jsee_inputs_to_json_schema(inp.get('elements')))
+    elif t == 'file':
+      prop['type'] = 'string'
+      if inp.get('raw') or inp.get('stream'):
+        prop['type'] = ['string', 'object']
+        prop['properties'] = {'kind': {'type': 'string', 'enum': ['url']}, 'url': {'type': 'string'}}
+        prop['required'] = ['kind', 'url']
+    elif t == 'folder':
+      prop['type'] = 'array'
+      prop['items'] = {'type': 'object'}
+    elif t == 'int':
       prop['type'] = 'integer'
     elif t in ('float', 'number'):
       prop['type'] = 'number'
     elif t in ('bool', 'checkbox', 'toggle'):
       prop['type'] = 'boolean'
     elif t in ('select', 'categorical', 'radio'):
-      prop['type'] = 'string'
-      if inp.get('options'):
-        prop['enum'] = inp['options']
+      prop.update(_option_schema(inp['options']) if inp.get('options') else {'type': 'string'})
     elif t == 'slider':
       prop['type'] = 'number'
       if 'min' in inp:
@@ -338,17 +405,127 @@ def jsee_inputs_to_json_schema(inputs):
       prop['maxItems'] = 2
     elif t == 'multi-select':
       prop['type'] = 'array'
-      prop['items'] = {'type': 'string'}
-      if inp.get('options'):
-        prop['items']['enum'] = inp['options']
+      prop['items'] = _option_schema(inp['options']) if inp.get('options') else {'type': 'string'}
     else:
       prop['type'] = 'string'
+    if inp.get('arrayBuffer') is True:
+      prop['type'] = 'array'
+      prop['items'] = {'type': 'number'}
+    if prop.get('type') in ('integer', 'number'):
+      if 'min' in inp:
+        prop['minimum'] = inp['min']
+      if 'max' in inp:
+        prop['maximum'] = inp['max']
+      if 'step' in inp:
+        prop['multipleOf'] = inp['step']
     if 'default' in inp:
       prop['default'] = inp['default']
-    properties[inp['name']] = prop
-    if 'default' not in inp:
+    if inp.get('nullable') is True or ('default' in inp and inp['default'] is None):
+      kinds = prop['type'] if isinstance(prop['type'], list) else [prop['type']]
+      prop['type'] = list(dict.fromkeys(kinds + ['null']))
+      if 'enum' in prop and None not in prop['enum']:
+        prop['enum'].append(None)
+    add(inp.get('name'), prop)
+    if inp.get('required') is True or (inp.get('required') is not False and 'default' not in inp):
       required.append(inp['name'])
   return {'type': 'object', 'properties': properties, 'required': required}
+
+
+def _prepare_inputs(inputs, data):
+  """Apply declared defaults and validate the contract shared by HTTP and WSGI."""
+  errors = []
+  def matches(value, kind):
+    if kind in ('integer', 'number'):
+      numeric = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+      return numeric and (kind != 'integer' or value == int(value))
+    if kind == 'boolean':
+      return isinstance(value, bool)
+    if kind == 'null':
+      return value is None
+    return isinstance(value, {'string': str, 'array': list, 'object': dict}.get(kind, type(None)))
+
+  def equal(a, b):
+    if isinstance(a, bool) or isinstance(b, bool):
+      return type(a) is type(b) and a == b
+    if isinstance(a, list) and isinstance(b, list):
+      return len(a) == len(b) and all(equal(x, y) for x, y in zip(a, b))
+    if isinstance(a, dict) and isinstance(b, dict):
+      return a.keys() == b.keys() and all(equal(a[key], b[key]) for key in a)
+    return a == b
+
+  def check(value, prop, path):
+    kind = prop.get('type')
+    kinds = kind if isinstance(kind, list) else [kind]
+    if kind and not any(matches(value, entry) for entry in kinds):
+      errors.append('{}: expected {}'.format(path, ' or '.join(kinds)))
+      return
+    if 'enum' in prop and not any(equal(value, option) for option in prop['enum']):
+      errors.append(path + ': value is not in options')
+    if value is None:
+      return
+    if 'minimum' in prop and value < prop['minimum']:
+      errors.append('{}: minimum is {}'.format(path, prop['minimum']))
+    if 'maximum' in prop and value > prop['maximum']:
+      errors.append('{}: maximum is {}'.format(path, prop['maximum']))
+    if prop.get('multipleOf', 0) > 0:
+      ratio = value / prop['multipleOf']
+      if abs(ratio - round(ratio)) > 1e-9:
+        errors.append('{}: expected a multiple of {}'.format(path, prop['multipleOf']))
+    if isinstance(value, list):
+      if 'minItems' in prop and len(value) < prop['minItems']:
+        errors.append(path + ': too few items')
+      if 'maxItems' in prop and len(value) > prop['maxItems']:
+        errors.append(path + ': too many items')
+      if 'items' in prop:
+        for index, item in enumerate(value):
+          check(item, prop['items'], '{}[{}]'.format(path, index))
+    if isinstance(value, dict) and 'properties' in prop:
+      for name in prop.get('required', []):
+        if name not in value:
+          errors.append(path + '.' + name + ': required')
+      for name, field in prop['properties'].items():
+        if name in value:
+          check(value[name], field, path + '.' + name)
+
+  def visit(fields, target, prefix=''):
+    for inp in fields or []:
+      if inp.get('type') in ('button', 'action'):
+        continue
+      if inp.get('type') == 'group' and not inp.get('name'):
+        visit(inp.get('elements'), target, prefix)
+        continue
+      name = inp['name']
+      path = prefix + name
+      if name not in target:
+        if inp.get('required') is True:
+          errors.append(path + ': required')
+        elif 'default' in inp:
+          target[name] = copy.deepcopy(inp['default'])
+        elif inp.get('required') is not False:
+          errors.append(path + ': required')
+        if name not in target:
+          continue
+      value = target[name]
+      if value is None and (inp.get('nullable') is True or ('default' in inp and inp['default'] is None)):
+        continue
+      if inp.get('type') == 'group':
+        if not isinstance(value, dict):
+          errors.append(path + ': expected object')
+        else:
+          target[name] = dict(value)
+          visit(inp.get('elements'), target[name], path + '.')
+      elif inp.get('type') == 'file' and isinstance(value, (bytes, bytearray, memoryview)):
+        continue
+      else:
+        check(value, jsee_inputs_to_json_schema([inp])['properties'][name], path)
+  result = dict(data) if isinstance(data, dict) else {}
+  if not isinstance(data, dict):
+    errors.append('inputs: expected object')
+  else:
+    visit(inputs, result)
+  if errors:
+    raise ValueError('; '.join(errors))
+  return result
 
 
 def _flatten_outputs(outputs, flat=None):
@@ -562,31 +739,51 @@ def generate_openapi_spec(schema):
   }
 
 
+def _validate_schema_version(schema):
+  if 'schemaVersion' in schema:
+    version = schema['schemaVersion']
+    if isinstance(version, bool) or not isinstance(version, (int, float)) or version != 1:
+      raise ValueError('Unsupported schemaVersion: expected 1 or an absent version')
+
+
 def _load_model_func(schema, cwd='.'):
-  """Load Python model function from schema. Returns (func, model_name)."""
+  """Load schema models into a mapping from endpoint names to callables."""
+  _validate_schema_version(schema)
   models = schema.get('model', [])
   if isinstance(models, dict):
     models = [models]
+  names = set()
+  for model in models:
+    name = model.get('name', 'model')
+    if name in names:
+      raise ValueError('Duplicate model name: {}'.format(name))
+    names.add(name)
+  modules = {}
   funcs = {}
   for m in models:
     url = m.get('url', '')
     name = m.get('name', 'model')
     # Load from .py file
     if url.endswith('.py'):
-      filepath = os.path.join(cwd, url)
-      spec = importlib.util.spec_from_file_location(name, filepath)
-      mod = importlib.util.module_from_spec(spec)
-      spec.loader.exec_module(mod)
+      filepath = os.path.realpath(os.path.join(cwd, url))
+      # Stages from one file share initialization/state within this app, not globally.
+      if filepath not in modules:
+        spec = importlib.util.spec_from_file_location(name, filepath)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        modules[filepath] = mod
+      mod = modules[filepath]
       func = getattr(mod, name, None)
-      if func is None:
-        # Try first callable in module
+      if func is None and 'name' not in m:
+        # Retain unnamed-model inference without selecting imported helper classes/functions.
         for attr_name in dir(mod):
           attr = getattr(mod, attr_name)
-          if callable(attr) and not attr_name.startswith('_'):
+          if callable(attr) and not attr_name.startswith('_') and getattr(attr, '__module__', None) == mod.__name__:
             func = attr
             break
-      if func:
-        funcs[name] = func
+      if not callable(func):
+        raise ValueError('Model {} is not a callable in {}'.format(name, filepath))
+      funcs[name] = func
   return funcs
 
 
@@ -602,11 +799,11 @@ def _filter_kwargs(func, data):
     for p in params.values()
   )
   if accepts_var_kw:
-    return {k: v for k, v in data.items() if k != '_jsee'}
+    return {k: v for k, v in data.items() if k != '_jsee' or k in params}
   return {
     k: v
     for k, v in data.items()
-    if k in params and k != '_jsee'
+    if k in params
   }
 
 
@@ -656,16 +853,69 @@ def _resolve_static_file(root, rel):
   return candidate
 
 
-def _stream_sse_result(result, write_chunk):
-  if inspect.isasyncgen(result):
-    async def _consume():
-      async for chunk in result:
-        write_chunk(chunk)
-    asyncio.run(_consume())
+def _iter_model_result(result):
+  if not inspect.isasyncgen(result):
+    try:
+      yield from result
+    finally:
+      result.close()
     return
 
-  for chunk in result:
-    write_chunk(chunk)
+  loop = asyncio.new_event_loop()
+  ready = loop.create_future()
+  resume = None
+
+  async def produce():
+    nonlocal resume
+    try:
+      async for chunk in result:
+        resume = loop.create_future()
+        ready.set_result(chunk)
+        await resume
+    except BaseException as error:
+      if not ready.done():
+        ready.set_exception(error)
+    finally:
+      await result.aclose()
+      if not ready.done():
+        ready.set_exception(StopAsyncIteration())
+
+  # One producer task preserves ContextVar tokens and async cleanup across WSGI reads.
+  # The next chunk is requested only when the synchronous consumer resumes iteration.
+  task = loop.create_task(produce())
+  try:
+    while True:
+      try:
+        chunk = loop.run_until_complete(ready)
+      except StopAsyncIteration:
+        break
+      yield chunk
+      ready = loop.create_future()
+      resume.set_result(None)
+  finally:
+    if not task.done():
+      task.cancel()
+    try:
+      loop.run_until_complete(task)
+      loop.run_until_complete(loop.shutdown_asyncgens())
+    finally:
+      loop.close()
+
+
+def _stream_sse_result(result, write_chunk):
+  with closing(_iter_model_result(result)) as chunks:
+    for chunk in chunks:
+      write_chunk(chunk)
+
+
+def _sse_frames(result):
+  try:
+    with closing(_iter_model_result(result)) as chunks:
+      for chunk in chunks:
+        yield 'data: {}\n\n'.format(json.dumps(_serialize_result(chunk))).encode('utf-8')
+  except Exception as error:
+    yield 'event: error\ndata: {}\n\n'.format(json.dumps({'error': str(error)})).encode('utf-8')
+  yield b'data: [DONE]\n\n'
 
 
 def _parse_multipart(content_type, body):
@@ -692,6 +942,39 @@ def _parse_multipart(content_type, body):
         pass
       data[name] = value
   return data
+
+
+class _RequestError(ValueError):
+  def __init__(self, message, status=400):
+    super().__init__(message)
+    self.status = status
+
+
+def _check_body_limit(limit):
+  if type(limit) is not int or limit <= 0:
+    raise ValueError('max_body_bytes must be a positive integer')
+  return limit
+
+
+def _read_request_inputs(inputs, stream, content_type, content_length, limit):
+  length_text = str(content_length or '0').strip()
+  if not length_text.isascii() or not length_text.isdigit():
+    raise _RequestError('Content-Length must be a nonnegative integer')
+  # Reject excessive declarations before asking either transport to read the body.
+  digits = length_text.lstrip('0') or '0'
+  if len(digits) > len(str(limit)):
+    raise _RequestError('Body exceeds {} bytes'.format(limit), 413)
+  length = int(digits)
+  if length > limit:
+    raise _RequestError('Body exceeds {} bytes'.format(limit), 413)
+  body = stream.read(length) if length else b''
+  if len(body) != length:
+    raise _RequestError('Body is shorter than Content-Length')
+  try:
+    data = _parse_multipart(content_type, body) if 'multipart/form-data' in content_type else json.loads(body or b'{}')
+    return _prepare_inputs(inputs, data)
+  except ValueError as error:
+    raise _RequestError(str(error)) from error
 
 
 def _to_table_format(data):
@@ -766,17 +1049,8 @@ def _serialize_result(result):
   return {'result': result}
 
 
-def serve(target, host='127.0.0.1', port=5050, **kwargs):
-  """Start a server with GUI + JSON API.
-
-  target can be:
-    - A Python function (schema auto-generated from type hints)
-    - A dict (pre-built JSEE schema)
-    - A string path to schema.json
-
-  Keyword args (passed to generate_schema when target is callable):
-    title, description, examples, reactive, chat
-  """
+def _prepare_app(target, host, port, options):
+  """Own model loading and descriptor normalization for HTTP and WSGI."""
   funcs = {}
   schema_cwd = '.'
 
@@ -787,11 +1061,11 @@ def serve(target, host='127.0.0.1', port=5050, **kwargs):
       schema = json.load(f)
     funcs = _load_model_func(schema, schema_cwd)
   elif isinstance(target, dict):
-    schema = target
+    schema = copy.deepcopy(target)
     funcs = _load_model_func(schema, schema_cwd)
   elif callable(target):
-    schema = generate_schema(target, host, port, **kwargs)
-    if kwargs.get('chat'):
+    schema = generate_schema(target, host, port, **options)
+    if options.get('chat'):
       # Wrap function to return {chat: result} for string returns
       original_fn = target
       def _chat_wrapper(**data):
@@ -806,6 +1080,10 @@ def serve(target, host='127.0.0.1', port=5050, **kwargs):
   else:
     raise ValueError('target must be a function, dict, or path to schema.json')
 
+  if not callable(target):
+    _apply_input_defaults(schema.get('inputs', []), options.get('defaults', {}),
+                         options.get('extra_positional', []))
+
   # Normalize model to list for internal iteration, keep original for client
   models = schema.get('model', {})
   if isinstance(models, dict):
@@ -816,9 +1094,29 @@ def serve(target, host='127.0.0.1', port=5050, **kwargs):
   # Update model URLs to point to local server endpoints
   for m in models:
     name = m.get('name', 'model')
+    m['name'] = name
     m['type'] = 'post'
     m['url'] = '/{}'.format(name)
     m['worker'] = False
+
+  return schema, funcs, models, schema_cwd
+
+
+def serve(target, host='127.0.0.1', port=5050, max_body_bytes=DEFAULT_MAX_BODY_BYTES, **kwargs):
+  """Start a server with GUI + JSON API.
+
+  target can be:
+    - A Python function (schema auto-generated from type hints)
+    - A dict (pre-built JSEE schema)
+    - A string path to schema.json
+
+  Keyword args (passed to generate_schema when target is callable):
+    title, description, examples, reactive, chat
+
+  max_body_bytes limits JSON and multipart request bodies (default: 50 MiB).
+  """
+  max_body_bytes = _check_body_limit(max_body_bytes)
+  schema, funcs, models, schema_cwd = _prepare_app(target, host, port, kwargs)
 
   runtime_path = _find_runtime(schema)
   runtime_code = None
@@ -924,17 +1222,13 @@ def serve(target, host='127.0.0.1', port=5050, **kwargs):
       if model_name not in funcs:
         return self._send_error('Unknown model: ' + model_name, 404)
 
-      content_length = int(self.headers.get('Content-Length', 0))
-      body = self.rfile.read(content_length) if content_length else b'{}'
-      content_type = self.headers.get('Content-Type', '')
-
       try:
-        if 'multipart/form-data' in content_type:
-          data = _parse_multipart(content_type, body)
-        else:
-          data = json.loads(body)
-      except (json.JSONDecodeError, ValueError) as e:
-        return self._send_error('Invalid request: ' + str(e), 400)
+        data = _read_request_inputs(schema.get('inputs'), self.rfile,
+                                    self.headers.get('Content-Type', ''),
+                                    self.headers.get('Content-Length'), max_body_bytes)
+      except _RequestError as e:
+        self.close_connection = True
+        return self._send_error('Invalid request: ' + str(e), e.status)
 
       try:
         result = _call_model_func(funcs[model_name], data)
@@ -946,13 +1240,10 @@ def serve(target, host='127.0.0.1', port=5050, **kwargs):
           self.send_header('Access-Control-Allow-Origin', '*')
           self.end_headers()
           try:
-            def _write_chunk(chunk):
-              payload = json.dumps(_serialize_result(chunk))
-              self.wfile.write('data: {}\n\n'.format(payload).encode('utf-8'))
+            def _write_frame(frame):
+              self.wfile.write(frame)
               self.wfile.flush()
-            _stream_sse_result(result, _write_chunk)
-            self.wfile.write('data: [DONE]\n\n'.encode('utf-8'))
-            self.wfile.flush()
+            _stream_sse_result(_sse_frames(result), _write_frame)
           except (BrokenPipeError, ConnectionResetError):
             pass
         else:
@@ -982,7 +1273,9 @@ def create_app(target, **kwargs):
 
   Returns a WSGI callable ``app(environ, start_response)``.
 
-  Note: SSE streaming is not supported in basic WSGI.
+  max_body_bytes limits JSON and multipart request bodies (default: 50 MiB).
+
+  Generator results stream as SSE; the WSGI host must close the iterable on disconnect.
 
   Example::
 
@@ -991,46 +1284,10 @@ def create_app(target, **kwargs):
       app = jsee.create_app(lambda x=5: {'result': x * 2})
       # gunicorn app:app
   """
-  funcs = {}
-  schema_cwd = '.'
   host = kwargs.pop('host', '127.0.0.1')
   port = kwargs.pop('port', 5050)
-
-  if isinstance(target, str):
-    schema_cwd = os.path.dirname(os.path.abspath(target))
-    with open(target, 'r') as f:
-      schema = json.load(f)
-    funcs = _load_model_func(schema, schema_cwd)
-  elif isinstance(target, dict):
-    schema = target
-    funcs = _load_model_func(schema, schema_cwd)
-  elif callable(target):
-    schema = generate_schema(target, host, port, **kwargs)
-    if kwargs.get('chat'):
-      original_fn = target
-      def _chat_wrapper(**data):
-        result = original_fn(**data)
-        if inspect.isawaitable(result):
-          return _wrap_chat_async_result(result)
-        return _wrap_chat_result(result)
-      _chat_wrapper._jsee_target = original_fn
-      funcs[target.__name__] = _chat_wrapper
-    else:
-      funcs[target.__name__] = target
-  else:
-    raise ValueError('target must be a function, dict, or path to schema.json')
-
-  models = schema.get('model', {})
-  if isinstance(models, dict):
-    models = [models]
-  elif not models:
-    models = []
-
-  for m in models:
-    name = m.get('name', 'model')
-    m['type'] = 'post'
-    m['url'] = '/{}'.format(name)
-    m['worker'] = False
+  max_body_bytes = _check_body_limit(kwargs.pop('max_body_bytes', DEFAULT_MAX_BODY_BYTES))
+  schema, funcs, models, schema_cwd = _prepare_app(target, host, port, kwargs)
 
   runtime_path = _find_runtime(schema)
   runtime_code = None
@@ -1134,18 +1391,14 @@ def create_app(target, **kwargs):
         ])
         return [body]
 
-      content_length = int(environ.get('CONTENT_LENGTH', 0) or 0)
-      raw_body = environ['wsgi.input'].read(content_length) if content_length else b'{}'
-      content_type = environ.get('CONTENT_TYPE', '')
-
       try:
-        if 'multipart/form-data' in content_type:
-          data = _parse_multipart(content_type, raw_body)
-        else:
-          data = json.loads(raw_body)
-      except (json.JSONDecodeError, ValueError) as e:
+        data = _read_request_inputs(schema.get('inputs'), environ['wsgi.input'],
+                                    environ.get('CONTENT_TYPE', ''),
+                                    environ.get('CONTENT_LENGTH'), max_body_bytes)
+      except _RequestError as e:
         body = json.dumps({'error': 'Invalid request: ' + str(e)}).encode('utf-8')
-        start_response('400 Bad Request', [
+        status = '413 Payload Too Large' if e.status == 413 else '400 Bad Request'
+        start_response(status, [
           ('Content-Type', 'application/json; charset=utf-8'),
           ('Content-Length', str(len(body))),
           ('Access-Control-Allow-Origin', '*'),
@@ -1154,6 +1407,13 @@ def create_app(target, **kwargs):
 
       try:
         result = _call_model_func(funcs[model_name_req], data)
+        if inspect.isgenerator(result) or inspect.isasyncgen(result):
+          start_response('200 OK', [
+            ('Content-Type', 'text/event-stream; charset=utf-8'),
+            ('Cache-Control', 'no-cache'),
+            ('Access-Control-Allow-Origin', '*'),
+          ])
+          return _sse_frames(result)
         body = json.dumps(_serialize_result(result)).encode('utf-8')
         start_response('200 OK', [
           ('Content-Type', 'application/json; charset=utf-8'),

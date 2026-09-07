@@ -8,6 +8,7 @@ import os
 import sys
 
 import jsee
+from jsee.jsee import DEFAULT_MAX_BODY_BYTES
 
 
 # ── jsee init <template> ────────────────────────────────────────────
@@ -121,6 +122,8 @@ parser.add_argument('target', help='Python file with function (e.g. example.py) 
 parser.add_argument('function', nargs='?', default=None, help='Function name (required for .py files)')
 parser.add_argument('--host', default='127.0.0.1', help='Host to bind to (default: 127.0.0.1)')
 parser.add_argument('--port', type=int, default=5050, help='Port to listen on (default: 5050)')
+parser.add_argument('--max-body-bytes', type=int, default=DEFAULT_MAX_BODY_BYTES,
+                    help='Maximum request body size in bytes (default: 52428800)')
 
 args, extra = parser.parse_known_args()
 
@@ -140,19 +143,11 @@ for arg in extra:
 sys.path.insert(1, os.getcwd())
 
 if args.target.endswith('.json'):
-  # Schema mode — apply defaults to schema inputs
-  with open(args.target, 'r') as f:
-    schema = json.load(f)
-  if schema.get('inputs') and (defaults or extra_positional):
-    for i, inp in enumerate(schema['inputs']):
-      name = inp.get('name', '')
-      if name in defaults:
-        inp['default'] = defaults[name]
-        inp['disabled'] = True
-      elif i < len(extra_positional):
-        inp['default'] = extra_positional[i]
-        inp['disabled'] = True
-  jsee.serve(schema, args.host, args.port)
+  if args.function is not None:
+    extra_positional.insert(0, detect_arg_value(args.function))
+  # Keep the descriptor path so model and static URLs retain their app root.
+  jsee.serve(args.target, args.host, args.port, defaults=defaults,
+             extra_positional=extra_positional, max_body_bytes=args.max_body_bytes)
 elif args.target.endswith('.py'):
   # Function mode
   if not args.function:
@@ -165,14 +160,14 @@ elif args.target.endswith('.py'):
   spec.loader.exec_module(module)
   target = getattr(module, args.function)
   jsee.serve(target, args.host, args.port, defaults=defaults,
-             extra_positional=extra_positional)
+             extra_positional=extra_positional, max_body_bytes=args.max_body_bytes)
 else:
   # Try as module name (legacy compat)
   module = importlib.import_module(args.target.split('.')[0])
   if args.function:
     target = getattr(module, args.function)
     jsee.serve(target, args.host, args.port, defaults=defaults,
-               extra_positional=extra_positional)
+               extra_positional=extra_positional, max_body_bytes=args.max_body_bytes)
   else:
     print('Error: function name required', file=sys.stderr)
     sys.exit(1)

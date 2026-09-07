@@ -1,6 +1,7 @@
 """Tests for jsee Python package — schema generation, API, and server."""
 
 import datetime
+import asyncio
 import enum
 import io
 import json
@@ -18,8 +19,10 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from jsee.jsee import (
+    _stream_sse_result,
     generate_schema,
     jsee_inputs_to_json_schema,
+    _prepare_inputs,
     generate_openapi_spec,
     _find_runtime,
     _type_hint_to_jsee,
@@ -131,7 +134,7 @@ class TestTypeHintToJsee:
     def test_optional_unwrap(self):
         t, extra = _type_hint_to_jsee(Optional[int])
         assert t == 'int'
-        assert extra == {}
+        assert extra == {'nullable': True}
 
     def test_annotated_slider(self):
         t, extra = _type_hint_to_jsee(Annotated[float, Slider(0, 1, 0.01)])
@@ -172,6 +175,24 @@ class TestTypeHintToJsee:
 # ---------------------------------------------------------------------------
 
 class TestJseeInputsToJsonSchema:
+    @pytest.mark.parametrize('case', json.load(open(os.path.join(
+        os.path.dirname(__file__), '../../test/fixtures/input-validation.json'
+    ))), ids=lambda case: case['name'])
+    def test_shared_input_validation(self, case):
+        original = json.dumps(case['data'])
+        if 'error' in case:
+            with pytest.raises(ValueError, match=case['error']):
+                _prepare_inputs(case['inputs'], case['data'])
+        else:
+            assert _prepare_inputs(case['inputs'], case['data']) == case['expected']
+        assert json.dumps(case['data']) == original
+
+    @pytest.mark.parametrize('case', json.load(open(os.path.join(
+        os.path.dirname(__file__), '../../test/fixtures/input-contracts.json'
+    ))), ids=lambda case: case['name'])
+    def test_shared_input_contracts(self, case):
+        assert jsee_inputs_to_json_schema(case['inputs']) == case['expected']
+
     def test_basic(self):
         inputs = [
             {'name': 'x', 'type': 'int'},
@@ -506,7 +527,7 @@ class TestServerWithFunction:
         except HTTPError as e:
             assert e.code == 400
 
-    def test_post_wrong_args_500(self):
+    def test_post_wrong_args_400(self):
         req = Request(
             self.base + '/add',
             data=json.dumps({'wrong': 1}).encode(),
@@ -516,7 +537,8 @@ class TestServerWithFunction:
             urlopen(req)
             assert False, 'Should have raised'
         except HTTPError as e:
-            assert e.code == 500
+            assert e.code == 400
+            assert 'x: required' in json.loads(e.read())['error']
 
     def test_cors_headers(self):
         resp = urlopen(self.base + '/api')
@@ -568,6 +590,28 @@ class TestWsgiKwargFiltering:
         response = b''.join(app(environ, start_response)).decode()
         return captured['status'], json.loads(response)
 
+    @pytest.mark.parametrize('with_kwargs', [False, True])
+    def test_explicit_metadata_parameter_is_preserved(self, with_kwargs):
+        def echo(_jsee: str):
+            return {'value': _jsee}
+
+        def echo_extra(_jsee: str, **kwargs):
+            return {'value': _jsee}
+
+        func = echo_extra if with_kwargs else echo
+        app = create_app(func)
+        status, result = self._post(app, '/' + func.__name__, {'_jsee': 'business'})
+        assert status.startswith('200 '), result
+        assert result == {'value': 'business'}
+
+    def test_undeclared_envelope_metadata_is_not_forwarded_to_kwargs(self):
+        def echo(**kwargs):
+            return kwargs
+
+        status, result = self._post(create_app(echo), '/echo', {'_jsee': 'run', 'value': 42})
+        assert status.startswith('200 '), result
+        assert result == {'value': 42}
+
     def test_drops_runtime_caller_for_functions_without_kwargs(self):
         app = create_app(add)
 
@@ -596,6 +640,109 @@ class TestWsgiKwargFiltering:
 
 
 class TestWsgiStaticAndAsync:
+    def test_stages_share_a_module_within_one_app_but_not_across_apps(self, tmp_path):
+        model = tmp_path / 'stages.py'
+        model.write_text('''state = []
+def prepare(x=3):
+    state.append(x)
+    return {'y': x * 2}
+def finish(y=0):
+    return {'result': y + len(state)}
+''')
+        schema = {'model': [{'name': 'prepare', 'url': str(model)},
+                            {'name': 'finish', 'url': str(tmp_path) + '/./stages.py'}],
+                  'inputs': [{'name': 'x', 'type': 'int', 'default': 3}]}
+        app = create_app(schema)
+        first_status, first = self._request(app, 'POST', '/prepare', {'x': 3})
+        assert first_status == '200 OK'
+        # The existing browser pipeline merges each response into the prior input record.
+        merged = {'x': 3, **json.loads(first)}
+        status, body = self._request(app, 'POST', '/finish', merged)
+        assert status == '200 OK'
+        assert json.loads(body) == {'result': 7}
+        other = create_app(schema)
+        _, body = self._request(other, 'POST', '/finish', {'y': 6})
+        assert json.loads(body) == {'result': 6}
+
+    def test_missing_explicit_model_name_does_not_run_an_unrelated_callable(self, tmp_path):
+        model = tmp_path / 'model.py'
+        model.write_text('def another():\n    return 42\n')
+        with pytest.raises(ValueError, match='missing'):
+            create_app({'model': {'name': 'missing', 'url': str(model)}, 'inputs': []})
+
+    def test_duplicate_endpoint_names_fail_before_importing_models(self, tmp_path):
+        model = tmp_path / 'model.py'
+        model.write_text('raise RuntimeError("model was imported")\n')
+        with pytest.raises(ValueError, match='Duplicate model name'):
+            create_app({'model': [{'name': 'same', 'url': str(model)},
+                                 {'name': 'same', 'url': str(model)}], 'inputs': []})
+
+    def test_unnamed_model_infers_a_local_callable_and_advertises_its_endpoint(self, tmp_path):
+        model = tmp_path / 'model.py'
+        model.write_text('from pathlib import Path\ndef compute():\n    return 42\n')
+        app = create_app({'model': {'url': str(model)}, 'inputs': []})
+        status, body = self._request(app, 'POST', '/model', {})
+        assert status == '200 OK'
+        assert json.loads(body) == {'result': 42}
+        status, body = self._request(app, 'GET', '/api')
+        assert status == '200 OK'
+        assert json.loads(body)['models'] == [{'name': 'model', 'endpoint': '/model', 'method': 'POST'}]
+
+    @pytest.mark.parametrize('n', [99, 'abc', '2', None, 1.5])
+    def test_request_validation_matches_advertised_bounds(self, n, tmp_path):
+        model = tmp_path / 'bounded.py'
+        model.write_text('def bounded(n):\n    return n * 2\n')
+        app = create_app({
+            'model': {'name': 'bounded', 'url': str(model)},
+            'inputs': [{'name': 'n', 'type': 'int', 'min': 1, 'max': 3}],
+        })
+        body = json.dumps({'n': n}).encode()
+        statuses = []
+        environ = {'REQUEST_METHOD': 'POST', 'PATH_INFO': '/bounded',
+                   'CONTENT_LENGTH': str(len(body)), 'CONTENT_TYPE': 'application/json',
+                   'wsgi.input': io.BytesIO(body)}
+        response = b''.join(app(environ, lambda status, headers: statuses.append(status)))
+        assert statuses == ['400 Bad Request'], response
+        assert 'n' in json.loads(response)['error']
+
+    def test_app_creation_does_not_mutate_the_callers_schema(self, tmp_path):
+        model = tmp_path / 'model.py'
+        model.write_text('def model(x=3):\n    return x * 2\n')
+        schema = {'model': {'name': 'model', 'url': str(model)},
+                  'inputs': [{'name': 'x', 'type': 'int', 'default': 3}]}
+        original = json.dumps(schema)
+        create_app(schema)
+        assert json.dumps(schema) == original
+        create_app(schema)
+        assert json.dumps(schema) == original
+
+    @pytest.mark.parametrize('schema_version', [None, 0, 2, '1', True, {}, 1.5])
+    def test_rejects_schema_version_before_import(self, schema_version, tmp_path):
+        model_path = tmp_path / 'model.py'
+        model_path.write_text('raise RuntimeError("model was imported")\n')
+        schema = {
+            'schemaVersion': schema_version,
+            'model': {'name': 'model', 'url': str(model_path)},
+            'inputs': [],
+        }
+        with pytest.raises(ValueError, match='schemaVersion'):
+            create_app(schema)
+
+    def test_optional_python_input_accepts_omitted_or_explicit_null(self):
+        def optional_limit(limit: Optional[int] = None):
+            return {'limit': limit}
+        app = create_app(optional_limit)
+        for data in ({}, {'limit': None}, {'limit': 4}):
+            status, body = self._request(app, 'POST', '/optional_limit', data)
+            assert status.startswith('200'), body
+            assert json.loads(body) == {'limit': data.get('limit')}
+        assert generate_schema(optional_limit)['inputs'][0]['nullable'] is True
+
+    def test_schema_version_one_and_absent_are_equivalent(self):
+        for schema in ({'inputs': []}, {'schemaVersion': 1, 'inputs': []}, {'schemaVersion': 1.0, 'inputs': []}):
+            app = create_app(schema)
+            assert callable(app)
+
     def _request(self, app, method, path, payload=None):
         body = json.dumps(payload).encode() if payload is not None else b''
         environ = {
@@ -1257,6 +1404,9 @@ class TestServerWithGenerator:
         def count_up(n: int = 3):
             for i in range(n):
                 yield {'count': i}
+            if n < 0:
+                yield {'count': 0}
+                raise RuntimeError('generator failed')
         cls.port = 15071
         cls.thread = _start_server(count_up, cls.port, stream=True)
         cls.base = 'http://localhost:{}'.format(cls.port)
@@ -1289,6 +1439,16 @@ class TestServerWithGenerator:
         # Last line is [DONE]
         assert lines[3].strip() == 'data: [DONE]'
 
+    def test_generator_failure_keeps_one_http_response(self):
+        req = Request(self.base + '/count_up', data=b'{"n":-1}',
+                      headers={'Content-Type': 'application/json'})
+        resp = urlopen(req)
+        body = resp.read().decode('utf-8')
+        assert resp.status == 200
+        assert body == ('data: {"count": 0}\n\n'
+                        'event: error\ndata: {"error": "generator failed"}\n\n'
+                        'data: [DONE]\n\n')
+
 
 class TestServerWithAsyncGenerator:
     """Tests for async generator functions served as SSE."""
@@ -1319,3 +1479,31 @@ class TestServerWithAsyncGenerator:
             chunks.append(payload)
         assert chunks == [{'count': 0}, {'count': 1}, {'count': 2}]
         assert lines[3].strip() == 'data: [DONE]'
+
+
+@pytest.mark.parametrize('asynchronous', [False, True])
+def test_stream_generator_is_closed_when_writing_fails(asynchronous):
+    finalized = []
+
+    def chunks():
+        try:
+            yield 1
+            pytest.fail('advanced after disconnect')
+        finally:
+            finalized.append(True)
+
+    async def async_chunks():
+        try:
+            await asyncio.sleep(0)
+            yield 1
+            pytest.fail('advanced after disconnect')
+        finally:
+            finalized.append(True)
+
+    def disconnected(chunk):
+        raise BrokenPipeError('client disconnected')
+
+    result = async_chunks() if asynchronous else chunks()
+    with pytest.raises(BrokenPipeError, match='client disconnected'):
+        _stream_sse_result(result, disconnected)
+    assert finalized == [True]
