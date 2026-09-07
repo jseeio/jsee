@@ -1,0 +1,21 @@
+[
+  {
+    "csv": "x,y\n1,2\n3,4\n5,6\n",
+    "summary": {
+      "x": {"count": 3, "mean": 3, "std": 2, "min": 1, "25%": 2, "50%": 3, "75%": 4, "max": 5},
+      "y": {"count": 3, "mean": 4, "std": 2, "min": 2, "25%": 3, "50%": 4, "75%": 5, "max": 6}
+    }
+  },
+  {
+    "csv": "amount\n-2\n0\n2\n",
+    "summary": {
+      "amount": {"count": 3, "mean": 0, "std": 2, "min": -2, "25%": -1, "50%": 0, "75%": 1, "max": 2}
+    }
+  },
+  {
+    "csv": "amount\n3\n",
+    "summary": {
+      "amount": {"count": 1, "mean": 3, "std": null, "min": 3, "25%": 3, "50%": 3, "75%": 3, "max": 3}
+    }
+  }
+]

@@ -40,6 +40,7 @@ class Cam {
             this.video.srcObject = stream
         }
       case 'run':
+      case 'interval':
         ctx.drawImage(this.video, 0, 0, 320, 240)
         await new Promise(resolve => setTimeout(resolve, 1000))
         const img = ctx.getImageData(0, 0, 320, 240)

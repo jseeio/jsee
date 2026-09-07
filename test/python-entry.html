@@ -2,13 +2,17 @@
   <div id="jsee-container">
   <script src="/dist/jsee.core.js"></script>
   <script>
-    new JSEE({
+    window.app = new JSEE({
       schema: {
         "model": {
           "type": "py",
           "description": "Testing pyodide entry function",
           "entry": "calculate",
           "worker": true,
+          "pyodide": {
+            "url": "/tmp/test-assets/pyodide-0.24.1/pyodide.js",
+            "indexURL": "/tmp/test-assets/pyodide-0.24.1/"
+          },
           "autorun": false,
           "code": [
             "module_loads = globals().get('module_loads', 0) + 1",

@@ -103,7 +103,8 @@ const component = {
   mounted () {
     if (this.input.type === 'text' && this.input.value) {
       this.$nextTick(() => {
-        const el = this.$el.querySelector('textarea')
+        // The input component has a fragment root; $el can be a text anchor.
+        const el = this.$refs.textarea
         if (el) {
           el.style.height = 'auto'
           el.style.height = el.scrollHeight + 'px'

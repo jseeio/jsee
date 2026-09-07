@@ -51,34 +51,65 @@
     "id": "detect",
     "files": {
       "schema.json": "17a68c0b03c64b1341f7430e5dd608997844f0263cde8a5039e4b811892d752e",
-      "cam.js": "d5823d7346b3ebcf5093cf7e07709ec03d253ed3b85cff173ceb94140724d106",
-      "clip.js": "e794735c7c583e4742bcc3557e507fd8598103d9220cd8a5b09ee53093b328dc",
-      "view.js": "1b716fcf1c5243010f61ca76cab556880f66594994d203e8acf806546905468c"
+      "cam.js": "0f7ad031a9ef04d6ffeb9c61403e3b5b3e438aa4198abd30c1565967db76053a",
+      "clip.js": "e8d05ccc5114120fd30bd891dba9ffb3b1286a6e8d76c3ec5c822cc6da37d4c3",
+      "view.js": "6d6365d81d3585f0ec00ba723d5ab4ea9d208a20b78886ed9afc98fb3099c4a9"
     },
     "origin": "git@github.com:jseeio/detect.git",
     "revision": "3a68bcfae87f95a8b808d0f9e6f5af3fda04e676",
-    "worktree_status": ""
+    "worktree_status": "",
+    "repairs": [
+      {
+        "file": "cam.js",
+        "original_sha256": "d5823d7346b3ebcf5093cf7e07709ec03d253ed3b85cff173ceb94140724d106",
+        "reason": "Accept interval calls as repeated predictions; render category labels as text in View."
+      },
+      {
+        "file": "clip.js",
+        "original_sha256": "e794735c7c583e4742bcc3557e507fd8598103d9220cd8a5b09ee53093b328dc",
+        "reason": "Accept interval calls as repeated predictions and release all transient inference tensors after reading logits."
+      },
+      {
+        "file": "view.js",
+        "original_sha256": "1b716fcf1c5243010f61ca76cab556880f66594994d203e8acf806546905468c",
+        "reason": "Accept interval calls as repeated predictions; render category labels as text in View."
+      }
+    ]
   },
   {
     "id": "gpt2",
     "files": {
       "schema.json": "ed52dc705aa9d0f539582efdb94b77fac594887daf2b6ec37d54317208f85959",
-      "src/gpt2.js": "0fe555e158a63b77d435f441d6f9397d72efd708875962d265b408c3a9e5de07",
+      "src/gpt2.js": "7f4dadbca8d2ea1b3e80b2e53afe6ef899c1b584dc867f4b821541a05569b11e",
       "package.json": "4d08b98e105487804ea91dc1f598748dec41b4caeb305e3550cd5f188ec4e7d8",
       "package-lock.json": "7f46437dab2ebfee83dd8121fd9d020369737eed71411d6b628825e5a055b47b"
     },
     "origin": "git@github.com:jseeio/gpt2-tfjs.git",
     "revision": "4179f1eb5b54f529e9c742e0f65874ee26ea7c88",
-    "worktree_status": "M schema.json"
+    "worktree_status": "M schema.json",
+    "repairs": [
+      {
+        "file": "src/gpt2.js",
+        "original_sha256": "0fe555e158a63b77d435f441d6f9397d72efd708875962d265b408c3a9e5de07",
+        "reason": "Resolve the declared gpt-tfjs 0.0.3 package, supply explicit model dimensions, and use its positional generation API rather than the unpublished developer API."
+      }
+    ]
   },
   {
     "id": "pytest",
     "files": {
       "schema.json": "49818ef1195c5f6b3c4a166b5b2a58d3b4d4f308f08dc9694c6916bfbbe538cf",
-      "pytest.py": "cada7b00df31a5f277d70d9d19243a06047df0e1c2eb8deda89ebb219714a72f"
+      "pytest.py": "cbe4992d386ead44b28388a3e789187c6e163bceb012447cb92497674b2c9625"
     },
     "origin": "local apps/pytest",
-    "revision": null
+    "revision": null,
+    "repairs": [
+      {
+        "file": "pytest.py",
+        "original_sha256": "cada7b00df31a5f277d70d9d19243a06047df0e1c2eb8deda89ebb219714a72f",
+        "reason": "Use the Python inputs dictionary: legacy from-js names a/b collide with form element IDs on the main thread."
+      }
+    ]
   },
   {
     "id": "pysummary",

@@ -2,7 +2,7 @@
   <div id="jsee-container">
   <script src="/dist/jsee.core.js"></script>
   <script>
-    new JSEE({
+    window.app = new JSEE({
       schema: {
         "model": {
           "name": "pytest",
@@ -18,6 +18,10 @@
           `.replace(/^\s+/gm, ''),
           "autorun": false,
           "worker": true,
+          "pyodide": {
+            "url": "/tmp/test-assets/pyodide-0.24.1/pyodide.js",
+            "indexURL": "/tmp/test-assets/pyodide-0.24.1/"
+          },
           "imports": [
             "numpy"
           ]

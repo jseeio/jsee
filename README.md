@@ -28,13 +28,17 @@ Smallest browser example:
 
 ## Installation
 
+This checkout targets **0.9.0 for JavaScript and Python**. These repository changes are awaiting publication; registry installs may contain earlier behavior. The two packages share a major/minor compatibility line, with independent compatible patch releases. `schemaVersion` versions the descriptor format separately.
+
+To use the current checkout, run `npm install && npm run build`, then `node bin/jsee --help`. Install the maintained Python package with `python -m pip install ./py` after that build.
+
 **Browser CDN:**
 
 ```html
 <script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@latest/dist/jsee.core.js"></script>
 ```
 
-Pin a version for production, for example `@jseeio/jsee@0.8.8`.
+Pin a reviewed published version for production.
 
 **npm CLI/dev server:**
 
@@ -69,6 +73,8 @@ The core bundle can still render `chart`, `3d`, and `map` if the app loads the r
 ## Quick start
 
 Scaffold a project:
+
+Use the CLI's maintained `jsee init` templates. The separate `create-jsee` placeholder has no implementation.
 
 ```bash
 npx @jseeio/jsee init            # minimal: schema.json + model.js + README.md
@@ -323,7 +329,7 @@ Use `columns` on inputs/outputs for dashboard-style layouts:
     - `get` / `post` — Call an HTTP API model instead of local JavaScript/Python code. Use `model.stream: true` for SSE responses
     - Inference note: when `code` is present (including code loaded from a `.js` URL), JSEE treats the model as `function` unless `type` is explicitly set
     - TensorFlow.js is not a dedicated model type. Load it through `imports` and call it from a normal JavaScript `function` or `class` model
-  - `entry` (string) — For `type: "py"` browser/Pyodide models only, names the Python function to call after loading the module once. The function can declare individual input parameters, `inputs`, and/or `ctx`
+  - `entry` (string) — For Python models, selects the callable independently of the endpoint `name`. Modules load once per application. Pyodide functions can declare individual input parameters, `inputs`, and/or `ctx`; native Python passes the declared request arguments.
   - `export` (string) — For `type: "module"` models, names the ES module export to call. If omitted, JSEE tries `default` and then `model`
   - `pyodide` (string or object) — For `type: "py"` browser/Pyodide models only, overrides the Pyodide loader. By default JSEE keeps the existing pinned runtime URL for compatibility. Set a URL string, or `{ "url": ".../pyodide.js", "indexURL": ".../" }`, to opt into another version or a local Pyodide asset directory. Add `packages: ["numpy"]` to preload packages and let `--bundle=pyodide` or `--bundle=pyodide-single` fetch those package wheels from `pyodide-lock.json`. Example: `{ "url": "https://cdn.jsdelivr.net/pyodide/v314.0.2/full/pyodide.js", "indexURL": "https://cdn.jsdelivr.net/pyodide/v314.0.2/full/" }`
   - `method` (string) — If `type` is `class`, `method` defines the name of the class method to call during evaluation
@@ -812,8 +818,10 @@ Both servers normalize model return values consistently:
 
 JSEE also ships a Python package (`py/`) that turns Python functions into web apps with the same GUI and API. Zero dependencies beyond Python stdlib.
 
+After building the browser assets from the repository root:
+
 ```bash
-cd py && pip install -e .
+python -m pip install -e ./py
 jsee example.py sum
 ```
 
@@ -860,6 +868,34 @@ gunicorn app:app
 `create_app()` accepts the same arguments as `serve()` — functions, dicts, or schema.json paths. Async functions are awaited before JSON serialization. Sync and async generators stream SSE using the same framing and error handling as `serve()`. The WSGI host pulls one chunk at a time and must close the response iterable on disconnect so suspended generators can finish cleanup. Async generators retain one task and context through iteration and cleanup.
 
 Python stages from the same source file share one module instance within an application; separate applications load separate instances. Explicit model names must identify callables, and duplicate endpoint names fail before model code is imported. Unnamed models infer a public callable defined in that file and expose it at `/model`.
+
+## Repository verification
+
+`npm run build` builds browser assets, copies them into the maintained Python package, and runs types, unit tests, and the standard Playwright suite. `npm run test:python-native` checks the native runtime and builds/installs packages outside the checkout.
+
+The additional app suites exercise real computation:
+
+| Command | Coverage |
+|---|---|
+| `npm run test:python` | Pinned Pyodide/NumPy, repeated entry calls, addition and CSV summary on the main thread and in workers |
+| `python -m pip install -r test/python/requirements.txt` then `npm run test:python-apps-native` | Native pandas summary against the same CSV/result fixtures as Pyodide |
+| `npm run test:ml` | GPT-2 text generation and camera → CLIP worker → view, with pinned weights and dependencies |
+
+The app suites verify assets against `test/fixtures/runtime-assets.json`, downloading missing files into ignored `tmp/test-assets/`. Python assets use about 55 MB; ML assets use about 1.12 GB. These are download sizes, not runtime memory requirements. Browser requests use local assets; ML tests redirect the original apps' known external URLs to the pinned copies and block other external requests. GPT-2 is rebuilt from its reviewed source and lockfile with dependency installation scripts disabled. The tests use genuine model inference and a deterministic simulated camera frame.
+
+`test/fixtures/real-apps/manifest.json` records source hashes, origins, and intentional repairs to historical examples. Generated bundles, model weights, and dependency trees are excluded from Git and package contents. The default unit suite requires neither those dependencies nor model downloads. Pyodide remains pinned to 0.24.1 for compatibility; this coverage does not establish support for every newer Pyodide release.
+
+Shared version numbers identify tested contracts, with these runtime differences:
+
+| Contract | Browser | Node | Native Python |
+|---|---|---|---|
+| Groups, defaults, options, numeric constraints | Shared fixtures | Shared fixtures | Shared fixtures |
+| Custom input expressions and nonempty controls | UI validation | Not evaluated | Not evaluated |
+| Pipeline execution | Browser orchestrates stages | CLI `--run` executes JS pipelines; HTTP exposes stages | HTTP/WSGI expose stages; browser orchestrates |
+| Python callable selection | Pyodide `entry` | Not a native Python runtime | `entry`, with a separate endpoint `name` |
+| Interruption | Worker termination; cooperative main-thread and fetch cancellation | No OS containment | Stream cleanup; no forced interruption of arbitrary model code |
+
+The proposed whole-pipeline server operation and MCP adapter remain future work. Existing security flags gate JSEE-managed operations and do not provide an OS sandbox.
 
 ## Changelog
 

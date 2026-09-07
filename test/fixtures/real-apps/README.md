@@ -1,0 +1,10 @@
+These are reviewed local copies of historical applications. `manifest.json` records their origin, revision where available, original file hashes for repairs, and current fixture hashes. The source repositories and deployed sites are separate from this corpus.
+
+`test/test-execution.pw.js` exercises hashing, keys, the prime spiral, detector view rendering, and offline hash HTML. The explicit Python/ML suites add actual model execution:
+
+- `pytest` uses the Python `inputs` dictionary because `from js import a, b` collides with form element IDs on the main thread.
+- The unchanged `pysummary` snapshot documents the original broken script. `examples/python-summary` supplies its repaired callable; native Python and both Pyodide execution modes share CSV/statistics fixtures.
+- GPT-2 is rebuilt from the checked-in source and lockfile. The repaired source uses the published `gpt-tfjs` 0.0.3 API and explicit architecture dimensions. Its old developer-relative import, presets and callback API cannot reproduce a build from npm alone. Coverage uses GPT-2 base and greedy generation; larger models and model switching are not covered. The old dependency tree is test-only and its native installation scripts are disabled.
+- Detector coverage uses a deterministic simulated camera frame and real CLIP image/text inference. Reviewed repairs preserve ImageData through JSEE, accept repeated interval calls, render category labels as text, and release transient inference tensors. Model weights remain resident for repeated predictions; the test does not claim complete model or camera lifecycle management.
+
+`../runtime-assets.json` pins remote assets and weights by exact URL, SHA256 and size. `test/prepare-assets.js` verifies cached files, downloads missing ones and rebuilds GPT-2 with the repository webpack. Large assets and dependency trees stay outside version control. Run `npm run test:python` and `npm run test:ml` from the repository root; use `test/python/requirements.txt` for the native example suite.

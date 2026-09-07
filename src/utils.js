@@ -20,7 +20,8 @@ function isBinaryLike (value) {
 }
 
 function isRecordObject (item) {
-  return isObject(item) && !isBinaryLike(item)
+  // Built-in values (ImageData, Date, Map, binary data) are atomic pipeline values.
+  return isObject(item) && Object.prototype.toString.call(item) === '[object Object]'
 }
 
 function normalizeFileOutputValue (output, value) {
@@ -96,6 +97,9 @@ function shouldPreserveWorkerValue (value) {
   if ((typeof Blob !== 'undefined') && (value instanceof Blob)) {
     return true
   }
+  if ((typeof ImageData !== 'undefined') && (value instanceof ImageData)) {
+    return true
+  }
   if ((typeof ArrayBuffer !== 'undefined') && (value instanceof ArrayBuffer)) {
     return true
   }
@@ -128,6 +132,9 @@ function containsBinaryPayload (value, seen=new WeakSet()) {
     return true
   }
   if ((typeof Blob !== 'undefined') && (value instanceof Blob)) {
+    return true
+  }
+  if ((typeof ImageData !== 'undefined') && (value instanceof ImageData)) {
     return true
   }
   if ((typeof ArrayBuffer !== 'undefined') && (value instanceof ArrayBuffer)) {
@@ -955,7 +962,9 @@ function normalizePyodideOptions (model={}, options={}) {
       : undefined
   }
 
-  const url = options.resolveUrl ? resolveUrlLike(rawUrl) : rawUrl
+  // Workers inherit the host's resolved URL; their blob URL cannot resolve app-relative paths.
+  const sourceUrl = internal && internal.url ? internal.url : rawUrl
+  const url = options.resolveUrl ? resolveUrlLike(sourceUrl) : sourceUrl
   const resolvedIndexURL = typeof indexURL === 'string'
     ? (options.resolveUrl ? resolveUrlLike(indexURL) : indexURL)
     : inferPyodideIndexURL(url)

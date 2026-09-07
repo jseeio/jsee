@@ -1,6 +1,6 @@
 const tf = require('@tensorflow/tfjs')
 const { encode, decode } = require('gpt-tokenizer')
-const { GPT, generate } = require('../../../../../gpt-tfjs').model
+const { GPT, generate } = require('gpt-tfjs').model
 const Stats = require('stats.js')
 
 import h5wasm from 'h5wasm'
@@ -131,6 +131,13 @@ const totalParams = {
     'gpt2-large': 774650112,
 }
 
+// gpt-tfjs 0.0.3 requires dimensions; modelType presets only existed in the developer checkout.
+const modelConfigs = {
+    'gpt2': { nLayer: 12, nHead: 12, nEmbd: 768, vocabSize: 50257, blockSize: 1024 },
+    'gpt2-medium': { nLayer: 24, nHead: 16, nEmbd: 1024, vocabSize: 50257, blockSize: 1024 },
+    'gpt2-large': { nLayer: 36, nHead: 20, nEmbd: 1280, vocabSize: 50257, blockSize: 1024 },
+}
+
 async function gpt2(params) {
     // Some visualization helpers
     let panel
@@ -183,7 +190,7 @@ async function gpt2(params) {
         iterate(f) // A little helper for key iteration
 
         // Create GPT model
-        model = GPT({ modelType: params.model })
+        model = GPT(modelConfigs[params.model])
         window.gpt2model = model
 
         let nParams = 0
@@ -220,18 +227,8 @@ async function gpt2(params) {
     }
 
     const tokens = encode(params.input)
-    let outputs = await generate(
-        model,
-        tokens, 
-        { 'maxLength': params.maxLength, 'temperature': params.temperature, 'doSample': params.temperature < 1.0 },
-        async (g) => {
-            const i = await g.idxNext.array()
-            const t = decode(i[0])
-            log(`Token: ${t} (${i}), time: ${g.timePerToken}`)
-            stats.mst.panel.update(g.timePerToken, 500)
-            await new Promise(r => setTimeout(r, 30))
-        }
-    )
+    let outputs = await generate(model, tokens, params.maxLength,
+        params.temperature, params.temperature < 1.0)
     outputs = await outputs.array()
     return decode(outputs[0])
 }

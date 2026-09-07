@@ -30,7 +30,7 @@ with open('README.md', 'r', encoding='utf-8') as fh:
 
 setup(
     name='jsee',
-    version='0.6.0',
+    version='0.9.0',
     packages=['jsee'],
     package_data={'jsee': ['static/*']},
     cmdclass={'build_py': BuildWithRuntime, 'sdist': SdistWithRuntime},

@@ -715,6 +715,16 @@ describe('bindPyodideInputs', () => {
 })
 
 describe('Pyodide entry helpers', () => {
+  test('retains the host-resolved Pyodide URL when entering a worker', () => {
+    const resolved = normalizePyodideOptions({ _pyodide: {
+      rawUrl: '/assets/pyodide.js',
+      url: 'http://localhost:8484/assets/pyodide.js',
+      indexURL: 'http://localhost:8484/assets/'
+    } }, { resolveUrl: true })
+    expect(resolved.url).toBe('http://localhost:8484/assets/pyodide.js')
+    expect(resolved.rawUrl).toBe('/assets/pyodide.js')
+  })
+
   test('normalizes default and custom Pyodide runtime options', () => {
     expect(normalizePyodideOptions({}).url).toBe('https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js')
 

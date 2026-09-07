@@ -62,6 +62,15 @@ def returns_dict(a: int, b: int) -> dict:
 # Schema generation
 # ---------------------------------------------------------------------------
 
+@pytest.mark.parametrize('value', [float('nan'), float('inf'), -float('inf')])
+def test_nonfinite_results_are_valid_json_at_every_depth(value):
+    result = _serialize_result({'score': value, 'nested': {'values': [1, value]}})
+    encoded = json.dumps(result, allow_nan=False)
+    assert json.loads(encoded) == {'score': None, 'nested': {'values': [1, None]}}
+
+    encoded = json.dumps(_serialize_result(value), allow_nan=False)
+    assert json.loads(encoded) == {'result': None}
+
 class TestGenerateSchema:
     def test_basic_function(self):
         schema = generate_schema(add)
@@ -640,6 +649,22 @@ class TestWsgiKwargFiltering:
 
 
 class TestWsgiStaticAndAsync:
+    def test_entry_selects_callable_independently_of_endpoint_name(self, tmp_path):
+        model = tmp_path / 'model.py'
+        model.write_text('def compute(x):\n    return {"result": x * 2}\n')
+        app = create_app({'model': {'name': 'double', 'entry': ' compute ', 'url': str(model)},
+                          'inputs': [{'name': 'x', 'type': 'int'}]})
+        status, body = self._request(app, 'POST', '/double', {'x': 3})
+        assert status == '200 OK'
+        assert json.loads(body) == {'result': 6}
+
+    @pytest.mark.parametrize('entry', [42, ' ', 'obj.fn', 'bad-name'])
+    def test_invalid_entry_fails_before_import(self, tmp_path, entry):
+        model = tmp_path / 'model.py'
+        model.write_text('raise RuntimeError("model was imported")\n')
+        with pytest.raises(ValueError, match='entry'):
+            create_app({'model': {'entry': entry, 'url': str(model)}, 'inputs': []})
+
     def test_stages_share_a_module_within_one_app_but_not_across_apps(self, tmp_path):
         model = tmp_path / 'stages.py'
         model.write_text('''state = []

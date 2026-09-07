@@ -763,6 +763,13 @@ def _load_model_func(schema, cwd='.'):
   for m in models:
     url = m.get('url', '')
     name = m.get('name', 'model')
+    entry = m.get('entry')
+    if entry is not None and entry != '':
+      if not isinstance(entry, str) or not entry.strip().isascii() or not entry.strip().isidentifier():
+        raise ValueError('model.entry should be a valid Python function name')
+      entry = entry.strip()
+    else:
+      entry = None
     # Load from .py file
     if url.endswith('.py'):
       filepath = os.path.realpath(os.path.join(cwd, url))
@@ -773,8 +780,10 @@ def _load_model_func(schema, cwd='.'):
         spec.loader.exec_module(mod)
         modules[filepath] = mod
       mod = modules[filepath]
-      func = getattr(mod, name, None)
-      if func is None and 'name' not in m:
+      # Endpoint identity and callable identity are independent, as in Pyodide.
+      callable_name = entry or name
+      func = getattr(mod, callable_name, None)
+      if func is None and not entry and 'name' not in m:
         # Retain unnamed-model inference without selecting imported helper classes/functions.
         for attr_name in dir(mod):
           attr = getattr(mod, attr_name)
@@ -782,7 +791,7 @@ def _load_model_func(schema, cwd='.'):
             func = attr
             break
       if not callable(func):
-        raise ValueError('Model {} is not a callable in {}'.format(name, filepath))
+        raise ValueError('Model {} is not a callable in {}'.format(callable_name, filepath))
       funcs[name] = func
   return funcs
 
@@ -1031,6 +1040,17 @@ def _serialize_value(value):
   return value
 
 
+def _finite_json_numbers(value):
+  # Match JSON.stringify without changing the existing table/output shape conversions.
+  if isinstance(value, float) and not math.isfinite(value):
+    return None
+  if isinstance(value, dict):
+    return {key: _finite_json_numbers(item) for key, item in value.items()}
+  if isinstance(value, (list, tuple)):
+    return [_finite_json_numbers(item) for item in value]
+  return value
+
+
 def _serialize_result(result):
   """Serialize a function result for JSON response.
 
@@ -1038,15 +1058,15 @@ def _serialize_result(result):
   """
   # Dict — serialize each value individually
   if isinstance(result, dict):
-    return {k: _serialize_value(v) for k, v in result.items()}
+    return _finite_json_numbers({k: _serialize_value(v) for k, v in result.items()})
   # Tuple — convert to list
   if isinstance(result, tuple):
-    return {'result': [_serialize_value(v) for v in result]}
+    return {'result': _finite_json_numbers([_serialize_value(v) for v in result])}
   # Top-level value
   serialized = _serialize_value(result)
   if serialized is not result:
-    return {'result': serialized}
-  return {'result': result}
+    return {'result': _finite_json_numbers(serialized)}
+  return {'result': _finite_json_numbers(result)}
 
 
 def _prepare_app(target, host, port, options):

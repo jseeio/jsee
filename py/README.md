@@ -4,9 +4,15 @@ Turn Python functions into web apps with auto-generated GUI and REST API. Zero d
 
 ## Install
 
+This checkout targets **0.9.0**, sharing the JavaScript package's major/minor line. Publication is pending. To use the current code, build and install from the main repository:
+
 ```bash
-pip install jsee
+npm install
+npm run build
+python -m pip install ./py
 ```
+
+The prepared wheel includes the browser runtime; installing or serving it does not require Node.js. The runtime itself has no third-party Python dependencies; individual models may require their own packages.
 
 ## Quick start
 
@@ -46,9 +52,13 @@ JSEE introspects your function's type hints and default values to generate a sch
 
 `**kwargs` does not create a required input field. Extra request fields can reach functions accepting `**kwargs`; legacy `_jsee` metadata is removed unless the function explicitly declares an `_jsee` parameter. Explicit parameters, including `caller` and `history`, retain their supplied values.
 
+JSON and SSE results encode non-finite numbers (`NaN`, positive/negative infinity) as `null`, including nested values, matching JavaScript's JSON encoding. Browser arithmetic can still retain `NaN`, such as the undefined sample deviation of a one-row CSV.
+
 Both the stdlib server and WSGI app validate declared types, options, numeric bounds/steps, and required input presence before invoking a model. Invalid input returns HTTP 400. Explicit defaults are applied without changing the submitted dictionary; `Optional[X]` generates `nullable: true`, and a `None` default remains valid. Named input groups produce nested objects; unnamed layout groups flatten into their parent. Caller-provided schema dictionaries are copied before server normalization.
 
 `serve()` and `create_app()` also share model loading and request decoding. Schema-file model and static paths resolve from the descriptor directory, including CLI calls from another directory. CLI `--name=value` and positional overrides set and lock input defaults.
+
+For a Python model, `entry` selects the callable and `name` identifies its HTTP endpoint. Without `entry`, the loader retains name-based lookup and unnamed callable inference. The [CSV summary example](../examples/python-summary/README.md) uses the same descriptor and function for native Python and Pyodide.
 
 Request bodies default to a 50 MiB limit. Set a positive `max_body_bytes` in either Python entry point, or use `jsee schema.json --max-body-bytes 10485760` for 10 MiB. Malformed lengths and invalid inputs return 400; oversized declarations return 413 before reading the body. This is a body-size policy, not an execution sandbox or request deadline.
 

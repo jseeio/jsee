@@ -73,18 +73,20 @@ class CLIP {
     }
 
     async predict(data, app) {
-        const imgTensor = tf.browser.fromPixels(data.img, 3);
-        const embVis = this.model.encodeImage(imgTensor);
-
-        const classes = data.classes.split(',').map(x => x.trim())
-        const tokens = tf.tensor(this.tokenizer.tokenize(classes))
-        const embText = this.model.encodeText(tokens);
-
-        const [logitsPerImage, logitsPerText] = this.model.similarity.apply([embVis, embText]);
-        const logitsVis = await tf.squeeze(logitsPerImage).array()
-
-        return {
-            logits: logitsVis
+        const logits = tf.tidy(() => {
+            const imgTensor = tf.browser.fromPixels(data.img, 3)
+            const embVis = this.model.encodeImage(imgTensor)
+            const classes = data.classes.split(',').map(x => x.trim())
+            const tokens = tf.tensor(this.tokenizer.tokenize(classes))
+            const embText = this.model.encodeText(tokens)
+            const [logitsPerImage] = this.model.similarity.apply([embVis, embText])
+            return tf.squeeze(logitsPerImage)
+        })
+        // Keep only the result alive across the asynchronous GPU read, then release it too.
+        try {
+            return { logits: await logits.array() }
+        } finally {
+            logits.dispose()
         }
     }
 
@@ -95,6 +97,7 @@ class CLIP {
                 await this.load(data, app)
                 break
             case 'run':
+            case 'interval':
                 if (!this.model) {
                     await this.load(data, app)
                 }
@@ -107,4 +110,3 @@ class CLIP {
 
     }
 }
-

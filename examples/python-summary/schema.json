@@ -1,0 +1,22 @@
+{
+  "model": {
+    "name": "pysummary",
+    "entry": "summarize",
+    "type": "py",
+    "description": "Make pandas generate summary of csv file",
+    "container": "object",
+    "url": "model.py"
+  },
+  "inputs": [
+    {
+      "type": "file",
+      "name": "csv"
+    }
+  ],
+  "outputs": [
+    {
+      "type": "object",
+      "name": "res"
+    }
+  ]
+}

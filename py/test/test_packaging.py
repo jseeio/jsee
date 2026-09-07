@@ -1,6 +1,7 @@
 """Exercise artifacts outside the checkout, including a wheel rebuilt from an sdist."""
 
 import hashlib
+from email.parser import Parser
 import json
 import os
 from pathlib import Path
@@ -74,6 +75,10 @@ def test_sdist_rebuild_and_installed_gui_api(tmp_path):
     wheel = next(wheels.glob('*.whl'))
     expected = {}
     with zipfile.ZipFile(wheel) as archive:
+        metadata_path = next(name for name in archive.namelist() if name.endswith('.dist-info/METADATA'))
+        metadata = Parser().parsestr(archive.read(metadata_path).decode())
+        js_version = json.loads((ROOT / 'package.json').read_text())['version']
+        assert metadata['Version'].split('.')[:2] == js_version.split('.')[:2]
         for name in PACKAGE_ASSETS:
             expected[name] = hashlib.sha256(asset_source(name).read_bytes()).hexdigest()
             assert hashlib.sha256(archive.read('jsee/static/' + name)).hexdigest() == expected[name]

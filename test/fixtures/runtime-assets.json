@@ -1,0 +1,137 @@
+{
+  "assets": [
+    {
+      "group": "python",
+      "path": "pyodide-0.24.1/pyodide.js",
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js",
+      "sha256": "b67a1e4ed23ed8c3ee0b50f3b054f4fccf2cb9dda2f6db0cb69a531bd21107da",
+      "bytes": 17417
+    },
+    {
+      "group": "python",
+      "path": "pyodide-0.24.1/pyodide.asm.js",
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.asm.js",
+      "sha256": "71250bb1cf7216d1f848505f1056f351bd02187fbb112e966f6e9745465d0c4f",
+      "bytes": 1157891
+    },
+    {
+      "group": "python",
+      "path": "pyodide-0.24.1/pyodide.asm.wasm",
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.asm.wasm",
+      "sha256": "f7141d4928ef91480c6080e2746ebb93fd4f3567bf0077f6a7f65b0ad11b9da5",
+      "bytes": 8995509
+    },
+    {
+      "group": "python",
+      "path": "pyodide-0.24.1/python_stdlib.zip",
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/python_stdlib.zip",
+      "sha256": "573b362d25c0ade9f5c2c2d2313fae9a92bc46adf66dd2374130d1f80b5ec9ca",
+      "bytes": 8882369
+    },
+    {
+      "group": "python",
+      "path": "pyodide-0.24.1/pyodide-lock.json",
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide-lock.json",
+      "sha256": "e313a21e0717839411cecf6f5bb74a92124239a2dffa80ec7ed1b712d621380f",
+      "bytes": 84412
+    },
+    {
+      "group": "python",
+      "path": "pyodide-0.24.1/numpy-1.25.2-cp311-cp311-emscripten_3_1_45_wasm32.whl",
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/numpy-1.25.2-cp311-cp311-emscripten_3_1_45_wasm32.whl",
+      "sha256": "1232a857b2f08a2b405e67cfa07713041ca7e242b3edb16e9189634b6f6386ce",
+      "bytes": 12537833
+    },
+    {
+      "group": "python",
+      "path": "pyodide-0.24.1/pandas-1.5.3-cp311-cp311-emscripten_3_1_45_wasm32.whl",
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pandas-1.5.3-cp311-cp311-emscripten_3_1_45_wasm32.whl",
+      "sha256": "c99a9060f2921575d2fe3796220b81aec6973aa1cb25e321245b1ed4423f32e3",
+      "bytes": 21550321
+    },
+    {
+      "group": "python",
+      "path": "pyodide-0.24.1/python_dateutil-2.8.2-py2.py3-none-any.whl",
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/python_dateutil-2.8.2-py2.py3-none-any.whl",
+      "sha256": "d1639bce52a8c621b1e09d004085600f13bd4646194d58912b70a1af907d4a07",
+      "bytes": 462271
+    },
+    {
+      "group": "python",
+      "path": "pyodide-0.24.1/six-1.16.0-py2.py3-none-any.whl",
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/six-1.16.0-py2.py3-none-any.whl",
+      "sha256": "a47befbaf42007f62531b1253c935c54c4f84dd1aaedd30ab00fee1eb105bcf0",
+      "bytes": 38737
+    },
+    {
+      "group": "python",
+      "path": "pyodide-0.24.1/pytz-2023.3-py2.py3-none-any.whl",
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pytz-2023.3-py2.py3-none-any.whl",
+      "sha256": "ad4973f9bb2b0a05b2b84f642ecb441c00e39371ae6c93ac83e6f3f3ff26fd71",
+      "bytes": 1074345
+    },
+    {
+      "group": "python",
+      "path": "pyodide-0.24.1/micropip-0.5.0-py3-none-any.whl",
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/micropip-0.5.0-py3-none-any.whl",
+      "sha256": "494f8d406706f76bec373188ca54141ba34e52babebb484dad9878bdd1f3f911",
+      "bytes": 144917
+    },
+    {
+      "group": "python",
+      "path": "pyodide-0.24.1/packaging-23.1-py3-none-any.whl",
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/packaging-23.1-py3-none-any.whl",
+      "sha256": "81fc5c9676c2a1e121bc66df30bbd2672ce7b7c182dc9b742582750cacc2cb4f",
+      "bytes": 157211
+    },
+    {
+      "group": "ml",
+      "path": "ml/tf-4.10.0.js",
+      "url": "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js",
+      "sha256": "fd04ed96e0f464c40b8c9b9e0866a91c0a156d2dcf4322e2b167fefd04d11dab",
+      "bytes": 1462373
+    },
+    {
+      "group": "ml",
+      "path": "ml/h5wasm-0.4.11.js",
+      "url": "https://cdn.jsdelivr.net/npm/h5wasm@0.4.11/dist/iife/h5wasm.js",
+      "sha256": "62a2b5566b700fbcfdfd5a73d90a7903d8564a9c38f5c260b6fc92cd69aaed57",
+      "bytes": 3388193
+    },
+    {
+      "group": "ml",
+      "path": "ml/modelzoo-0.0.4.js",
+      "url": "https://cdn.jsdelivr.net/npm/modelzoo@0.0.4/dist/iife/index.js",
+      "sha256": "00f2ef2498e93615be488f377c870004ac198a38b22f32ebe7560cbbf217bc6a",
+      "bytes": 26042
+    },
+    {
+      "group": "ml",
+      "path": "ml/bpe-vocab.txt",
+      "url": "https://cdn.jsdelivr.net/npm/modelzoo@0.0.4/bpe_simple_vocab_16e6.txt",
+      "sha256": "67603cfda2e032ad77b5f8808af37789d590db664b26df8705d2bf8b3c553fc8",
+      "bytes": 3194984
+    },
+    {
+      "group": "ml",
+      "path": "ml/gpt2-app-0.0.1.js",
+      "url": "https://cdn.jsdelivr.net/npm/@jseeio/gpt2-tfjs@0.0.1/bundle.js",
+      "sha256": "68f6cab7d9fbf2eaa145e081456035b5b2beb95cb28ca805d5426a0ffe11ecda",
+      "bytes": 7109414
+    },
+    {
+      "group": "ml",
+      "path": "ml/clip.h5",
+      "url": "https://huggingface.co/openai/clip-vit-base-patch32/resolve/3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268/tf_model.h5",
+      "sha256": "0d7e64ea2c496306a4bc0a6a7ab21e4755fd8c7beb01e6d9f5dc8d6662f1bfd2",
+      "bytes": 605551040
+    },
+    {
+      "group": "ml",
+      "path": "ml/gpt2.h5",
+      "url": "https://huggingface.co/openai-community/gpt2/resolve/607a30d783dfa663caf39e06633721c8d4cfcd7e/tf_model.h5",
+      "sha256": "d08c1307f7dfae6f878e0a2ca5715d587d2640530db8ef96fc0c1fc474dd9fee",
+      "bytes": 497933648
+    }
+  ]
+}

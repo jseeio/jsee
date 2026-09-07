@@ -25,5 +25,8 @@ jobs:
       - run: npm run build
       - run: npm run test:python-native
       - run: npm run test:python
+      - run: python -m pip install -r test/python/requirements.txt
+      - run: npm run test:python-apps-native
+      - run: npm run test:ml
       - run: npm run test:probes
       - run: python -m build py

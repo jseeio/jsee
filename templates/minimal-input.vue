@@ -350,6 +350,7 @@
   <div class="jsee-field" v-if="input.type == 'text'">
     <label v-bind:for="input.name" class="jsee-label">{{ input.name }}</label>
     <textarea
+      ref="textarea"
       v-model="input.value"
       v-bind:id="input.name"
       v-bind:placeholder="input.placeholder ? input.placeholder : input.name"

@@ -14,6 +14,19 @@ const echoSchema = (inputs) => ({
 })
 
 test.describe('Input layout', () => {
+  test('sizes a prefilled multiline input after its component mounts', async ({ page }) => {
+    const errors = []
+    page.on('pageerror', error => errors.push(String(error)))
+    await page.goto(urlQueryEscaped(echoSchema([
+      { name: 'text', type: 'text', default: Array(12).fill('a line').join('\n') }
+    ])))
+    await expect(page.locator('#text')).toHaveValue(Array(12).fill('a line').join('\n'))
+    const size = await page.locator('#text').evaluate(el => ({ height: el.style.height, overflow: el.scrollHeight - el.clientHeight }))
+    expect(errors).toEqual([])
+    expect(size.height).not.toBe('')
+    expect(size.overflow).toBeLessThanOrEqual(2)
+  })
+
   test('keeps full-width controls inside their fields in grid layouts', async ({ page }) => {
     const schema = echoSchema([
       { name: 'timesteps_rollout', type: 'int', default: 1024 },

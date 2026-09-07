@@ -12,7 +12,7 @@ module.exports = defineConfig({
     { name: 'chromium', use: { browserName: 'chromium' } }
   ],
   webServer: {
-    command: 'npx http-server -p 8484 --silent',
+    command: 'npx http-server -p 8484 --silent --cors',
     port: 8484,
     reuseExistingServer: true
   }

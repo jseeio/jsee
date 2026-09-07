@@ -22,10 +22,10 @@ class View {
     resultsArr.forEach((x, i) => {
       const row = document.createElement('tr')
       const col1 = document.createElement('td')
-      col1.innerHTML = x[0]
+      col1.textContent = x[0]
       const col2 = document.createElement('td')
       col2.style = 'position: relative; font-size: 12px;'
-      col2.innerHTML = x[1]
+      col2.textContent = x[1]
       const bar = document.createElement('div')
       bar.style = `width: ${Math.round(x[1])}%; background-color: rgba(10, 20, 250, 0.1); height: 20px; position: absolute; top: 0; left: 0;`
       col2.appendChild(bar)
@@ -36,7 +36,7 @@ class View {
   }
 
   async run (data, app) {
-    if (data.caller === 'run') {
+    if (data.caller === 'run' || data.caller === 'interval') {
       console.log('Results:', data)
       const classesArr  = data.classes.split(',').map(s => s.trim())
       const resultsArr = classesArr.map((x, i) => [x, data.logits[i]])

@@ -10,6 +10,30 @@ const gen = require('../src/cli')
 const fixtures = path.join(__dirname, 'fixtures/real-apps')
 const manifest = require('./fixtures/real-apps/manifest.json')
 
+test('detector view renders category labels as text on repeated calls', async ({ page }) => {
+  await page.goto('/load/')
+  const label = '<img src=x onerror="window.categoryExecuted=true">'
+  await page.evaluate(async label => {
+    document.body.innerHTML = '<div id="app"></div>'
+    window.app = new JSEE({ container: '#app', verbose: false, schema: {
+      model: { name: 'View', type: 'class', method: 'run', worker: false,
+        url: '/test/fixtures/real-apps/detect/view.js' },
+      inputs: [
+        { name: 'classes', type: 'text', default: label },
+        { name: 'detect', type: 'text', default: 'no alarm' }
+      ], outputs: []
+    } })
+    await window.app._initPromise
+    await window.app.pipeline({ caller: 'run', classes: label, detect: 'no alarm', logits: [90] })
+  }, label)
+  try {
+    await expect(page.locator('#outputs table td').first()).toHaveText(label)
+    await expect(page.locator('#outputs table img')).toHaveCount(0)
+    await page.evaluate(() => window.app.pipeline({ caller: 'interval', classes: 'updated', detect: 'no alarm', logits: [80] }))
+    await expect(page.locator('#outputs table td').first()).toHaveText('updated')
+  } finally { await page.evaluate(() => window.app.destroy()) }
+})
+
 for (const phase of ['immediate', 'schema', 'model', 'async-init']) {
   test(`destroy prevents initialization and progress from reviving the app: ${phase}`, async ({ page }) => {
     await page.addInitScript(() => {
@@ -366,6 +390,35 @@ for (const worker of [false, true]) {
         return result
       }, worker)
       expect(result).toEqual({ isView: true, values: [2, 3] })
+    })
+
+    test('preserves ImageData as a stage result and a nested worker input', async ({ page }) => {
+      await page.goto('/load/')
+      const results = await page.evaluate(async worker => {
+        const results = []
+        for (const nested of [false, true]) {
+          document.body.innerHTML = '<div id="app"></div>'
+          const app = new JSEE({ container: '#app', verbose: false, schema: {
+            model: [
+              { worker: false, code: `function image () {
+                const image = new ImageData(new Uint8ClampedArray([10, 20, 30, 255]), 1, 1)
+                return ${nested ? '{ image }' : 'image'}
+              }` },
+              { worker, code: `function receive (value) {
+                const image = ${nested ? 'value.image' : 'value'}
+                return { valid: image instanceof ImageData, pixels: Array.from(image.data || []), width: image.width }
+              }` }
+            ], inputs: []
+          } })
+          try {
+            await app._initPromise
+            const result = await app.pipeline({})
+            results.push({ valid: result.valid, pixels: result.pixels, width: result.width })
+          } finally { app.destroy() }
+        }
+        return results
+      }, worker)
+      expect(results).toEqual(Array(2).fill({ valid: true, pixels: [10, 20, 30, 255], width: 1 }))
     })
 
     test('run returns false on failure and later invocation succeeds', async ({ page }) => {
