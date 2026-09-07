@@ -1,0 +1,23 @@
+{
+  "model": {
+    "name": "hash",
+    "type": "function",
+    "url": "hash.js",
+		"worker": true,
+    "autorun": true
+  },
+	"design": {
+		"grid": [4, 8]
+	},
+  "inputs": [
+    { "name": "method", "type": "select", "options": ["sha1", "sha224", "sha256", "sha384", "sha512"], "default": "sha256"},
+    { "name": "file", "type": "file" }
+  ],
+  "outputs": [
+    {
+      "name": "hash",
+      "type": "text"
+    }
+  ]
+}
+

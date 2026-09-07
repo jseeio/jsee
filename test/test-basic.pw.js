@@ -710,6 +710,105 @@ test.describe('Some edge cases', () => {
   })
 })
 
+test.describe('Worker data and lifecycle regressions', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto(`http://localhost:${port}/load/`)
+  })
+
+  test('reuses caller-owned binary inputs without detaching or mutating them', async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      document.body.innerHTML = '<div id="app"></div>'
+      const app = new JSEE({ container: '#app', verbose: false, schema: {
+        model: { worker: true, code: 'function count (data) { data.bytes[0] += 1; return { result: data.bytes[0] } }' },
+        inputs: [{ name: 'bytes', type: 'string', arrayBuffer: true, dtype: 'uint8' }],
+        outputs: [{ name: 'result', type: 'number' }]
+      } })
+      await app._initPromise
+      const bytes = new Uint8Array([7, 8, 9]).subarray(1)
+      app.data.inputs[0].value = bytes
+      const first = await app.run()
+      const firstValue = app.data.outputs[0].value
+      const second = await app.run()
+      const snapshot = { first, second, firstValue, secondValue: app.data.outputs[0].value, byteLength: bytes.byteLength, value: bytes[0] }
+      app.destroy()
+      return snapshot
+    })
+    expect(result).toEqual({ first: true, second: true, firstValue: 9, secondValue: 9, byteLength: 2, value: 8 })
+  })
+
+  test('rebuilds a multi-worker pipeline after timeout', async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      document.body.innerHTML = '<div id="app"></div>'
+      const app = new JSEE({ container: '#app', verbose: false, schema: {
+        model: [
+          { worker: true, timeout: 100, code: 'async function slow (data) { await new Promise(resolve => setTimeout(resolve, data.wait)); return { result: 42 } }' },
+          { worker: true, code: 'function next (data) { return { result: data.result + 1 } }' }
+        ],
+        inputs: [{ name: 'wait', type: 'int', default: 1000 }],
+        outputs: [{ name: 'result', type: 'number' }]
+      } })
+      await app._initPromise
+      const first = await app.run()
+      app.data.inputs[0].value = 0
+      const second = await app.run()
+      const snapshot = { first, second, value: app.data.outputs[0].value, workers: app._workers.length }
+      app.destroy()
+      return snapshot
+    })
+    expect(result).toEqual({ first: false, second: true, value: 43, workers: 2 })
+  })
+
+  test('treats returned control-shaped objects and null as model data', async ({ page }) => {
+    const results = await page.evaluate(async () => {
+      document.body.innerHTML = '<div id="app"></div>'
+      const app = new JSEE({ container: '#app', verbose: false, schema: {
+        model: { worker: true, timeout: 150, code: 'function result (data) { return data.value }' },
+        inputs: [{ name: 'value', type: 'string' }]
+      } })
+      await app._initPromise
+      const results = []
+      for (const value of [{ _status: 'business', result: 42 }, { _status: 'loaded' }, { _partial: true, result: 1 }, null]) {
+        // Exercise the worker result contract separately from output formatting.
+        const run = await app.initWorker({
+          type: 'function', timeout: 150, name: 'value',
+          code: `function value () { return ${JSON.stringify(value)} }`
+        })
+        try { results.push(await run({})) }
+        catch (error) { results.push({ error: String(error) }) }
+      }
+      app.destroy()
+      return results
+    })
+    expect(results).toEqual([{ _status: 'business', result: 42 }, { _status: 'loaded' }, { _partial: true, result: 1 }, null])
+  })
+
+  test('retains model-posted progress and partial output before completion', async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      document.body.innerHTML = '<div id="app"></div>'
+      const app = new JSEE({ container: '#app', verbose: false, schema: {
+        model: { worker: true, code: `async function stream () {
+          postMessage({ _status: 'progress', _progress: 0.5 })
+          postMessage({ _partial: true, result: 'partial' })
+          await new Promise(resolve => setTimeout(resolve, 20))
+          return { result: 'done' }
+        }` },
+        inputs: [], outputs: [{ name: 'result', type: 'code' }]
+      } })
+      await app._initPromise
+      const events = []
+      app.progress = value => events.push(value)
+      const output = app.output.bind(app)
+      app.output = value => { events.push(value.result); output(value) }
+      const succeeded = await app.run()
+      const result = { succeeded, events }
+      app.destroy()
+      return result
+    })
+    expect(result.succeeded).toBe(true)
+    expect(result.events.filter(value => value !== 0)).toEqual([0.5, 'partial', 'done'])
+  })
+})
+
 test.describe('Imports', () => {
   const schema = {
     'model': {

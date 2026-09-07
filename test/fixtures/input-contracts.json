@@ -1,0 +1,287 @@
+[
+  {
+    "name": "named groups preserve nested contracts",
+    "inputs": [
+      {
+        "name": "settings",
+        "type": "group",
+        "elements": [
+          {
+            "name": "count",
+            "type": "int"
+          },
+          {
+            "name": "label",
+            "type": "string",
+            "default": "sample"
+          }
+        ]
+      }
+    ],
+    "expected": {
+      "type": "object",
+      "properties": {
+        "settings": {
+          "type": "object",
+          "properties": {
+            "count": {
+              "type": "integer"
+            },
+            "label": {
+              "type": "string",
+              "default": "sample"
+            }
+          },
+          "required": [
+            "count"
+          ]
+        }
+      },
+      "required": [
+        "settings"
+      ]
+    }
+  },
+  {
+    "name": "unnamed layout groups flatten recursively and omit actions",
+    "inputs": [
+      {
+        "type": "group",
+        "elements": [
+          {
+            "type": "group",
+            "elements": [
+              {
+                "name": "x",
+                "type": "float"
+              }
+            ]
+          },
+          {
+            "name": "submit",
+            "type": "button"
+          },
+          {
+            "name": "refresh",
+            "type": "action"
+          }
+        ]
+      }
+    ],
+    "expected": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    }
+  },
+  {
+    "name": "option labels preserve numeric and boolean values",
+    "inputs": [
+      {
+        "name": "size",
+        "type": "select",
+        "options": [
+          {
+            "label": "Small",
+            "value": 1
+          },
+          {
+            "label": "Large",
+            "value": 2
+          }
+        ],
+        "default": 1
+      },
+      {
+        "name": "flags",
+        "type": "multi-select",
+        "options": [
+          {
+            "label": "Yes",
+            "value": true
+          },
+          {
+            "label": "No",
+            "value": false
+          }
+        ],
+        "default": []
+      }
+    ],
+    "expected": {
+      "type": "object",
+      "properties": {
+        "size": {
+          "type": "integer",
+          "enum": [
+            1,
+            2
+          ],
+          "default": 1
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "boolean",
+            "enum": [
+              true,
+              false
+            ]
+          },
+          "default": []
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "explicit required flags override inferred presence",
+    "inputs": [
+      {
+        "name": "optional",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "required",
+        "type": "string",
+        "required": true,
+        "default": "value"
+      }
+    ],
+    "expected": {
+      "type": "object",
+      "properties": {
+        "optional": {
+          "type": "string"
+        },
+        "required": {
+          "type": "string",
+          "default": "value"
+        }
+      },
+      "required": [
+        "required"
+      ]
+    }
+  },
+  {
+    "name": "integer and float bounds apply outside slider widgets",
+    "inputs": [
+      {
+        "name": "n",
+        "type": "int",
+        "min": 1,
+        "max": 3
+      },
+      {
+        "name": "fraction",
+        "type": "float",
+        "min": 0,
+        "max": 1,
+        "step": 0.25
+      }
+    ],
+    "expected": {
+      "type": "object",
+      "properties": {
+        "n": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "fraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "multipleOf": 0.25
+        }
+      },
+      "required": [
+        "n",
+        "fraction"
+      ]
+    }
+  },
+  {
+    "name": "binary array inputs advertise numeric sequences",
+    "inputs": [
+      {
+        "name": "samples",
+        "type": "string",
+        "arrayBuffer": true,
+        "dtype": "float32"
+      }
+    ],
+    "expected": {
+      "type": "object",
+      "properties": {
+        "samples": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        }
+      },
+      "required": [
+        "samples"
+      ]
+    }
+  },
+  {
+    "name": "file handles and folder entries retain their existing JSON shapes",
+    "inputs": [
+      {
+        "name": "file",
+        "type": "file",
+        "raw": true
+      },
+      {
+        "name": "files",
+        "type": "folder"
+      }
+    ],
+    "expected": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": [
+            "string",
+            "object"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "url"
+              ]
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "url"
+          ]
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "file",
+        "files"
+      ]
+    }
+  }
+]

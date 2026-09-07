@@ -1,0 +1,231 @@
+[
+  {
+    "name": "nested defaults preserve false and zero",
+    "inputs": [
+      {
+        "name": "settings",
+        "type": "group",
+        "elements": [
+          {
+            "name": "enabled",
+            "type": "checkbox",
+            "default": false
+          },
+          {
+            "name": "count",
+            "type": "int",
+            "default": 0
+          },
+          {
+            "name": "note",
+            "type": "string",
+            "required": false
+          }
+        ]
+      }
+    ],
+    "data": {
+      "settings": {},
+      "caller": "run"
+    },
+    "expected": {
+      "settings": {
+        "enabled": false,
+        "count": 0
+      },
+      "caller": "run"
+    }
+  },
+  {
+    "name": "decimal steps tolerate floating point representation",
+    "inputs": [
+      {
+        "name": "value",
+        "type": "float",
+        "step": 0.1
+      }
+    ],
+    "data": {
+      "value": 0.3
+    },
+    "expected": {
+      "value": 0.3
+    }
+  },
+  {
+    "name": "boolean enum does not accept numeric one",
+    "inputs": [
+      {
+        "name": "choice",
+        "type": "select",
+        "options": [
+          true,
+          2
+        ]
+      }
+    ],
+    "data": {
+      "choice": 1
+    },
+    "error": "choice"
+  },
+  {
+    "name": "array and object enum values remain distinct",
+    "inputs": [
+      {
+        "name": "choice",
+        "type": "select",
+        "options": [
+          {
+            "label": "Sequence",
+            "value": [
+              1
+            ]
+          },
+          {
+            "label": "Empty object",
+            "value": {}
+          }
+        ]
+      }
+    ],
+    "data": {
+      "choice": {
+        "0": 1
+      }
+    },
+    "error": "choice"
+  },
+  {
+    "name": "required input remains required despite an advisory default",
+    "inputs": [
+      {
+        "name": "x",
+        "type": "int",
+        "required": true,
+        "default": 3
+      }
+    ],
+    "data": {},
+    "error": "x"
+  },
+  {
+    "name": "numeric binary input accepts a JSON array",
+    "inputs": [
+      {
+        "name": "samples",
+        "type": "string",
+        "arrayBuffer": true
+      }
+    ],
+    "data": {
+      "samples": [
+        20,
+        30
+      ]
+    },
+    "expected": {
+      "samples": [
+        20,
+        30
+      ]
+    }
+  },
+  {
+    "name": "primitive request bodies are rejected",
+    "inputs": [],
+    "data": 3,
+    "error": "inputs"
+  },
+  {
+    "name": "raw URL file handles and folder entries remain valid",
+    "inputs": [
+      {
+        "name": "file",
+        "type": "file",
+        "raw": true
+      },
+      {
+        "name": "files",
+        "type": "folder"
+      }
+    ],
+    "data": {
+      "file": {
+        "kind": "url",
+        "url": "https://example.org/data.csv"
+      },
+      "files": [
+        {
+          "name": "data.csv",
+          "path": "data.csv",
+          "selected": false
+        }
+      ]
+    },
+    "expected": {
+      "file": {
+        "kind": "url",
+        "url": "https://example.org/data.csv"
+      },
+      "files": [
+        {
+          "name": "data.csv",
+          "path": "data.csv",
+          "selected": false
+        }
+      ]
+    }
+  },
+  {
+    "name": "invalid raw URL handles fail before invocation",
+    "inputs": [
+      {
+        "name": "file",
+        "type": "file",
+        "raw": true
+      }
+    ],
+    "data": {
+      "file": {
+        "kind": "url"
+      }
+    },
+    "error": "file.url: required"
+  },
+  {
+    "name": "null defaults retain optional argument compatibility",
+    "inputs": [
+      {
+        "name": "limit",
+        "type": "int",
+        "min": 1,
+        "default": null
+      }
+    ],
+    "data": {},
+    "expected": {
+      "limit": null
+    }
+  },
+  {
+    "name": "nullable enums accept null without losing false values",
+    "inputs": [
+      {
+        "name": "choice",
+        "type": "select",
+        "options": [
+          false,
+          true
+        ],
+        "nullable": true
+      }
+    ],
+    "data": {
+      "choice": null
+    },
+    "expected": {
+      "choice": null
+    }
+  }
+]

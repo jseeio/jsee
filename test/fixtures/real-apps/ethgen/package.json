@@ -1,0 +1,20 @@
+{
+  "name": "@jseeio/ethgen",
+  "version": "0.0.1",
+  "description": "",
+  "main": "src/main.js",
+  "scripts": {
+    "build": "browserify src/main.js -s ethgen | uglifyjs -m > bundle.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Anton Zemlyansky",
+  "license": "MIT",
+  "dependencies": {
+    "crypto": "^1.0.1",
+    "ethers": "^5.5.2"
+  },
+  "devDependencies": {
+    "browserify": "^17.0.0",
+    "uglify-js": "^3.14.5"
+  }
+}

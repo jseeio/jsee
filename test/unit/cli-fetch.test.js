@@ -2,6 +2,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const vm = require('vm')
+const http = require('http')
 const gen = require('../../src/cli')
 const { collectFetchBundleBlocks, resolveLocalImportFile, resolveFetchImport, resolveRuntimeMode, resolveBundleMode, isPyodideBundleMode, isPyodideSingleFileBundleMode, needsFullBundle, shouldBundleModelCode, resolveJseePackageInput, looksLikeMissingPackageInput, getPackageInputInstallHint, findPackageRoot, runPackage, isPackageSpecifier, bundleModelCode, safeJsonForScript, hiddenAssetScript, resolveInside, joinUrl, sanitizeGoogleAnalyticsId, isStreamResult, writeSseStream } = gen
 
@@ -372,6 +373,17 @@ describe('package input resolution', () => {
     )
 
     expect(stdout).toBe('4\n')
+  })
+
+  test.each(require('../fixtures/output-contracts.json'))('run output contract: $name', async fixture => {
+    writeJseePackage(tmpDir, '@statsim/output-contract', {
+      model: { name: 'compute', url: 'model.js', worker: false },
+      inputs: [], outputs: fixture.outputs
+    }, `module.exports = function compute () { return ${JSON.stringify(fixture.result)} }`)
+    const stdout = await captureStdout(() => gen(['--inputs', '@statsim/output-contract', '--run']))
+    const expected = Object.keys(fixture.expected).length === 1
+      ? Object.values(fixture.expected)[0] : fixture.expected
+    expect(JSON.parse(stdout)).toEqual(expected)
   })
 
   test('streams a single file output to stdout', async () => {
@@ -977,6 +989,46 @@ describe('HTML embedding safety', () => {
 })
 
 describe('Node server streaming helpers', () => {
+  test('closes a backpressured generator when the response disconnects', async () => {
+    const { EventEmitter } = require('events')
+    let finalized = false
+    let advanced = false
+    async function * chunks () {
+      try {
+        yield { first: 1 }
+        advanced = true
+        yield { second: 2 }
+      } finally { finalized = true }
+    }
+    const res = Object.assign(new EventEmitter(), {
+      writeHead () {},
+      write () {
+        setImmediate(() => { this.destroyed = true; this.emit('close') })
+        return false
+      },
+      end: jest.fn()
+    })
+    let timer
+    try {
+      await Promise.race([writeSseStream(res, chunks()), new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('waited for drain after disconnect')), 100)
+      })])
+      expect(finalized).toBe(true)
+      expect(advanced).toBe(false)
+      expect(res.listenerCount('drain')).toBe(0)
+      expect(res.listenerCount('close')).toBe(0)
+      expect(res.listenerCount('error')).toBe(0)
+    } finally { clearTimeout(timer) }
+  })
+
+  test('reports generator errors in the stream with one completion sentinel', async () => {
+    async function * chunks () { yield false; throw new Error('generator failed') }
+    const body = []
+    const res = { writeHead () {}, write (chunk) { body.push(chunk); return true }, end () {} }
+    await writeSseStream(res, chunks())
+    expect(body.join('')).toBe('data: {"result":false}\n\nevent: error\ndata: {"error":"generator failed"}\n\ndata: [DONE]\n\n')
+  })
+
   test('detects generators without treating normal arrays as streams', () => {
     function * syncGenerator () {
       yield { count: 1 }
@@ -1063,6 +1115,168 @@ describe('path containment', () => {
     if (fs.existsSync(path.join(root, 'outside-link.txt'))) {
       expect(() => resolveInside(root, 'outside-link.txt')).toThrow(/outside app root/)
     }
+  })
+})
+
+describe('pipeline characterization', () => {
+  const model = code => ({ name: 'step', code, type: 'function' })
+  test('merges records, passes undefined through, and stops before the next model', async () => {
+    const schema = { inputs: [], model: [
+      model('function step () { return { count: 1, flag: false } }'),
+      model('function step () {}'),
+      model('function step (data) { return { count: data.count + 1, stop: true } }'),
+      model('function step () { throw new Error("unreachable") }')
+    ] }
+    expect(await gen.runSchemaOnce(schema, { seed: 4 }, null, process.cwd(), () => {}))
+      .toEqual({ seed: 4, count: 2, flag: false, stop: true })
+  })
+  test.each(['null', 'false', '0', '[]', '[1, 2]'])('passes %s to the following model without object merging', async value => {
+    const schema = { inputs: [], model: [model('function step () { return ' + value + ' }'), model('function step (data) { return { value: data } }')] }
+    expect(await gen.runSchemaOnce(schema, {}, null, process.cwd(), () => {})).toEqual({ value: JSON.parse(value) })
+  })
+  test('a stop flag on initial data prevents the first model from running', async () => {
+    const schema = { inputs: [], model: [model('function step () { throw new Error("unreachable") }')] }
+    expect(await gen.runSchemaOnce(schema, { stop: true }, null, process.cwd(), () => {})).toEqual({ stop: true })
+  })
+})
+
+describe('CLI schema version', () => {
+  test('collects defaults from nested unnamed layout groups', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-group-defaults-'))
+    const schemaPath = path.join(directory, 'schema.json')
+    fs.writeFileSync(schemaPath, JSON.stringify({
+      inputs: [{ type: 'group', elements: [{ type: 'group', elements: [{ name: 'x', type: 'int', default: 7 }] }] }]
+    }))
+    try {
+      let result
+      await captureStdout(async () => { result = await gen(['--inputs', schemaPath, '--run']) })
+      expect(result).toEqual({ x: 7 })
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test('rejects an unsupported version before evaluating model code', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-schema-version-'))
+    const schemaPath = path.join(directory, 'schema.json')
+    fs.writeFileSync(schemaPath, JSON.stringify({
+      schemaVersion: 2,
+      model: { code: 'function model () { throw new Error("model was executed") }', name: 'model' },
+      inputs: []
+    }))
+    try {
+      await expect(gen(['--inputs', schemaPath, '--run'])).rejects.toThrow(/schemaVersion/)
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('file-serving route policy equivalence', () => {
+  let tmpDir
+  let root
+  let distFixture
+  let server
+  let port
+
+  function request (url, value) {
+    return new Promise((resolve, reject) => {
+      const body = value === undefined ? null : JSON.stringify(value)
+      const req = http.request({ hostname: '127.0.0.1', port, path: url,
+        method: body === null ? 'GET' : 'POST',
+        headers: body === null ? {} : { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+      }, res => {
+        let body = ''
+        res.setEncoding('utf8')
+        res.on('data', chunk => { body += chunk })
+        res.on('end', () => resolve({ status: res.statusCode, body }))
+      }).on('error', reject)
+      req.end(body)
+    })
+  }
+
+  beforeAll(async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-route-policy-'))
+    root = path.join(tmpDir, 'app')
+    distFixture = fs.mkdtempSync(path.resolve(__dirname, '../../dist/c6-route-'))
+    for (const directory of [root, distFixture]) {
+      fs.mkdirSync(path.join(directory, 'node_modules'), { recursive: true })
+      fs.mkdirSync(path.join(directory, 'nested'))
+      fs.writeFileSync(path.join(directory, 'inside.txt'), 'inside')
+      fs.writeFileSync(path.join(directory, '.env'), 'private')
+      fs.writeFileSync(path.join(directory, 'node_modules', 'secret.txt'), 'private')
+      fs.writeFileSync(path.join(tmpDir, 'outside.txt'), 'outside-canary')
+      fs.symlinkSync(path.join(tmpDir, 'outside.txt'), path.join(directory, 'escape.txt'))
+      fs.symlinkSync(path.join(directory, '.env'), path.join(directory, 'hidden-link.txt'))
+      fs.symlinkSync(path.join(tmpDir, 'outside.txt'), path.join(directory, 'nested', 'index.html'))
+    }
+    const schemaPath = path.join(root, 'schema.json')
+    fs.writeFileSync(schemaPath, JSON.stringify({
+      model: { name: 'bounded', code: 'function bounded (data) { return { result: data.n * 2 } }' },
+      inputs: [{ name: 'n', type: 'int', min: 1, max: 3 }]
+    }))
+    const express = require('express')
+    // Capture the real application's server while letting the OS choose an isolated port.
+    const listen = jest.spyOn(express.application, 'listen').mockImplementation(function () {
+      server = http.createServer(this)
+      return server.listen(0, '127.0.0.1')
+    })
+    try {
+      await gen(['--inputs', schemaPath, '--serve', '--execute'])
+      if (!server.listening) await new Promise(resolve => server.once('listening', resolve))
+      port = server.address().port
+    } finally {
+      listen.mockRestore()
+    }
+  })
+
+  afterAll(async () => {
+    if (server) await new Promise(resolve => server.close(resolve))
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true })
+    if (distFixture) fs.rmSync(distFixture, { recursive: true, force: true })
+  })
+
+  test.each([
+    ['inside.txt', 200],
+    ['escape.txt', 403],
+    ['.env', 403],
+    ['hidden-link.txt', 403],
+    ['node_modules/secret.txt', 403],
+    ['nested/index.html', 403],
+    ['missing.txt', 404]
+  ])('%s has equivalent access decisions on every file-serving route', async (relative, status) => {
+    const responses = await Promise.all([
+      request('/__jsee/file?path=' + encodeURIComponent(relative)),
+      request('/' + relative),
+      request('/dist/' + path.basename(distFixture) + '/' + relative)
+    ])
+    expect(responses.map(response => response.status)).toEqual([status, status, status])
+    if (status === 200) expect(responses.map(response => response.body)).toEqual(['inside', 'inside', 'inside'])
+    else responses.forEach(response => expect(response.body).not.toContain('outside-canary'))
+  })
+
+  test('encoded traversal and directory index cannot bypass containment', async () => {
+    const responses = await Promise.all([
+      request('/__jsee/file?path=../outside.txt'),
+      request('/%2e%2e/outside.txt'),
+      request('/nested/'),
+      request('/dist/' + path.basename(distFixture) + '/nested/')
+    ])
+    expect(responses.map(response => response.status)).toEqual([403, 403, 403, 403])
+  })
+
+  test.each([[99], ['abc'], ['2'], [null], [1.5]])('rejects n=%p before calling the model', async n => {
+    const response = await request('/bounded', { n })
+    expect(response.status).toBe(400)
+    expect(JSON.parse(response.body).error).toContain('n')
+  })
+
+  test('rejects missing required inputs and accepts a valid bounded integer', async () => {
+    const missing = await request('/bounded', {})
+    expect(missing.status).toBe(400)
+    const valid = await request('/bounded', { n: 2 })
+    expect(valid.status).toBe(200)
+    expect(JSON.parse(valid.body)).toEqual({ result: 4 })
   })
 })
 

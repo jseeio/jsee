@@ -1,0 +1,92 @@
+[
+  {
+    "id": "hash",
+    "files": {
+      "schema.json": "b87953215bc4723ee5909d312fac7a07c924827e466a0535da4c7980840ea20f",
+      "hash.js": "c31ed3d3693aa4468458230fc9f8169d77a748e7f6edccca264c23c510422f46",
+      "src/main.js": "216ce793c428b4dcf4878be045cdb7c7c5c815e2d2f3da9d14af95a2da134a80",
+      "package.json": "a9f75fb3bcebe687b5bd88422b50b17b40b0e584151f09d27b8314d50f2cfaac",
+      "package-lock.json": "c61c78dda088dcc51b228258cd16477a8063a748c3d0409b2b98065b10a31165"
+    },
+    "origin": "git@github.com:jseeio/hash.git",
+    "revision": "ef3ef375ed83384b230e7fa9480afb807f507c97",
+    "worktree_status": "?? _site/"
+  },
+  {
+    "id": "ethgen",
+    "files": {
+      "schema.json": "0266272464004b0bbe149092ffafdea8915bfefeb3ed1658ef5ed6a68c5e37cb",
+      "bundle.js": "37f214fc5a832bd129576d8b627f179c18ad749c5ef0aa0cb567d5e6ef1dbfb2",
+      "src/main.js": "b23ffc5bd36357c95cc0fe7b9aaa5d3d5d9995502bc431de9d066aa9369909d6",
+      "package.json": "b033657146457e9cd9d8f2bab5ea43cd8c6a41525d7d10f6801f20d0c4bdd1c2",
+      "package-lock.json": "9805c58bb4f2b8bfd91b9f557a6d06a4b9980d44f26b75e82da68bc90475faad"
+    },
+    "origin": "git@github.com:jseeio/ethgen.git",
+    "revision": "6f3b4d37dfb98c4781ec2e964debf8a126293e6b",
+    "worktree_status": ""
+  },
+  {
+    "id": "keygen",
+    "files": {
+      "schema.json": "7ae30fc1b4b39a9de1acd3c67ffdf20fe80e402fdde2136e7e194f0026d588d2",
+      "index.js": "55da1489378f5091d9699db5ec259b81953ae28401c591b3570adc0d64769df4",
+      "LICENSE": "0fc903962d48782c400a0357749cb985c9d362a383a35f3b86e982f27454d506"
+    },
+    "origin": "git@github.com:jseeio/keygen.git",
+    "revision": "15dc2fd5a143a67142c603db1f36c1f7293fb673",
+    "worktree_status": ""
+  },
+  {
+    "id": "ulam",
+    "files": {
+      "schema.json": "62fd41d1189b33ae224d6aa09f26747047be29bc33882b2dc8b1dd6ea3742899",
+      "main.js": "679bc098df773f2fd33c0d165ea9098ab751b9ed6e6ae79ab4aa233a554b4f2c",
+      "package.json": "77d154d2d3bfa93c01a09bd888ce75e23b320196983b4d68dd1106e6ed3b5df6"
+    },
+    "origin": "git@github.com:jseeio/prime-spiral.git",
+    "revision": "adde6411cbae6b0d5bbadc49b3371a684636b886",
+    "worktree_status": ""
+  },
+  {
+    "id": "detect",
+    "files": {
+      "schema.json": "17a68c0b03c64b1341f7430e5dd608997844f0263cde8a5039e4b811892d752e",
+      "cam.js": "d5823d7346b3ebcf5093cf7e07709ec03d253ed3b85cff173ceb94140724d106",
+      "clip.js": "e794735c7c583e4742bcc3557e507fd8598103d9220cd8a5b09ee53093b328dc",
+      "view.js": "1b716fcf1c5243010f61ca76cab556880f66594994d203e8acf806546905468c"
+    },
+    "origin": "git@github.com:jseeio/detect.git",
+    "revision": "3a68bcfae87f95a8b808d0f9e6f5af3fda04e676",
+    "worktree_status": ""
+  },
+  {
+    "id": "gpt2",
+    "files": {
+      "schema.json": "ed52dc705aa9d0f539582efdb94b77fac594887daf2b6ec37d54317208f85959",
+      "src/gpt2.js": "0fe555e158a63b77d435f441d6f9397d72efd708875962d265b408c3a9e5de07",
+      "package.json": "4d08b98e105487804ea91dc1f598748dec41b4caeb305e3550cd5f188ec4e7d8",
+      "package-lock.json": "7f46437dab2ebfee83dd8121fd9d020369737eed71411d6b628825e5a055b47b"
+    },
+    "origin": "git@github.com:jseeio/gpt2-tfjs.git",
+    "revision": "4179f1eb5b54f529e9c742e0f65874ee26ea7c88",
+    "worktree_status": "M schema.json"
+  },
+  {
+    "id": "pytest",
+    "files": {
+      "schema.json": "49818ef1195c5f6b3c4a166b5b2a58d3b4d4f308f08dc9694c6916bfbbe538cf",
+      "pytest.py": "cada7b00df31a5f277d70d9d19243a06047df0e1c2eb8deda89ebb219714a72f"
+    },
+    "origin": "local apps/pytest",
+    "revision": null
+  },
+  {
+    "id": "pysummary",
+    "files": {
+      "schema.json": "832357ecb831813b97f97f0033d96c3381c9b7dff69f5c46d66faf18b89fe33b",
+      "pysummary.py": "2d00b2482efb0c1ca2ece9095cfd9405b96772bed4087ec64d60e6d7af933564"
+    },
+    "origin": "local apps/pysummary",
+    "revision": null
+  }
+]

@@ -1,3 +1,6 @@
+const { collectInputValues, getInputDefaultValue, prepareInputs } = require('./schema')
+const { runPipeline } = require('./pipeline')
+const { outputLookupNames, cleanOutputMetadata } = require('./utils')
 const fs = require('fs')
 const path = require('path')
 const os = require('os')
@@ -6,7 +9,7 @@ const Module = require('module')
 
 const minimist = require('minimist')
 
-const { getModelFuncJS, sanitizeName, isRecordObject, normalizeFileOutputValue, generateOpenAPISpec, serializeResult, parseMultipart, fileExtToOutputType, normalizePyodideOptions, isNetworkUrl } = require('./utils.js')
+const { getModelFuncJS, sanitizeName, isRecordObject, normalizeFileOutputValue, generateOpenAPISpec, serializeResult, parseMultipart, fileExtToOutputType, normalizePyodideOptions, isNetworkUrl, assertSchemaVersion } = require('./utils.js')
 
 const API_BODY_LIMIT = '50mb'
 
@@ -165,6 +168,23 @@ function sendEndpointError (res, error, fallbackStatus=500) {
   res.status(status).json({ error: error.message || 'request failed' })
 }
 
+function containedStatic (root) {
+  const serve = require('express').static(root, { dotfiles: 'deny' })
+  return (req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next()
+    try {
+      const requested = decodeURIComponent(req.path).replace(/^\/+/, '') || '.'
+      const resolved = resolveInside(root, requested)
+      // express.static also serves directory indexes; validate that final target as well.
+      if (fs.statSync(resolved).isDirectory()) resolveInside(root, path.join(resolved, 'index.html'))
+      serve(req, res, next)
+    } catch (error) {
+      if (error.status === 404) return next()
+      sendEndpointError(res, error, error instanceof URIError ? 400 : 500)
+    }
+  }
+}
+
 function isAsyncIterable (value) {
   return !!value
     && typeof value !== 'string'
@@ -188,12 +208,22 @@ function isStreamResult (value) {
 function writeSseFrame (res, payload, eventName) {
   const prefix = eventName ? `event: ${eventName}\n` : ''
   const frame = `${prefix}data: ${payload}\n\n`
-  return new Promise(resolve => {
-    if (res.write(frame)) {
-      resolve()
-      return
+  return new Promise((resolve, reject) => {
+    if (res.destroyed || res.writableEnded) return reject(new Error('Stream disconnected'))
+    if (res.write(frame)) return resolve()
+    const cleanup = () => {
+      res.removeListener('drain', drained)
+      res.removeListener('close', closed)
+      res.removeListener('error', failed)
     }
-    res.once('drain', resolve)
+    const drained = () => { cleanup(); resolve() }
+    const failed = error => { cleanup(); reject(error) }
+    const closed = () => failed(new Error('Stream disconnected'))
+    // A response can close instead of draining. Never leave the producer awaiting it.
+    res.once('drain', drained)
+    res.once('close', closed)
+    res.once('error', failed)
+    if (res.destroyed || res.writableEnded) closed()
   })
 }
 
@@ -205,14 +235,19 @@ async function writeSseStream (res, result) {
     'X-Accel-Buffering': 'no'
   })
   try {
-    for await (const chunk of result) {
-      await writeSseFrame(res, JSON.stringify(serializeResult(chunk)))
+    try {
+      for await (const chunk of result) {
+        await writeSseFrame(res, JSON.stringify(serializeResult(chunk)))
+      }
+    } catch (error) {
+      if (res.destroyed || res.writableEnded) return
+      await writeSseFrame(res, JSON.stringify({ error: error.message || 'stream failed' }), 'error')
     }
+    await writeSseFrame(res, '[DONE]')
+    res.end()
   } catch (error) {
-    await writeSseFrame(res, JSON.stringify({ error: error.message || 'stream failed' }), 'error')
+    if (!res.destroyed && !res.writableEnded) throw error
   }
-  await writeSseFrame(res, '[DONE]')
-  res.end()
 }
 
 // Auto-detect CLI argument type: file path, number, JSON array/object, or string
@@ -1190,60 +1225,8 @@ function writeOutputFile (cwd, outputPath, content) {
 }
 
 // Run mode helpers
-function getInputDefaultValue (input) {
-  if (!input || typeof input !== 'object') return undefined
-  if (input.type === 'group' && Array.isArray(input.elements)) {
-    const value = {}
-    input.elements.forEach(element => {
-      const elementValue = getInputDefaultValue(element)
-      if (typeof elementValue !== 'undefined' && element.name) value[element.name] = elementValue
-    })
-    return value
-  }
-  if (Object.prototype.hasOwnProperty.call(input, 'default')) return input.default
-
-  switch (input.type) {
-    case 'int':
-    case 'float':
-    case 'number':
-      return 0
-    case 'string':
-    case 'text':
-      return ''
-    case 'color':
-      return '#000000'
-    case 'categorical':
-    case 'select':
-    case 'radio':
-      return input.options && input.options.length ? input.options[0] : ''
-    case 'bool':
-    case 'checkbox':
-    case 'toggle':
-      return false
-    case 'multi-select':
-      return []
-    case 'range':
-      return [input.min || 0, input.max || 100]
-    case 'slider':
-      return input.min || 0
-    case 'folder':
-      return input.default || []
-    case 'file':
-      return ''
-    default:
-      return undefined
-  }
-}
-
 function getSchemaInputDefaults (schema) {
-  const data = {}
-  if (!schema.inputs) return data
-  schema.inputs.forEach(input => {
-    if (!input.name) return
-    const value = getInputDefaultValue(input)
-    if (typeof value !== 'undefined') data[input.name] = value
-  })
-  return data
+  return collectInputValues(schema.inputs, getInputDefaultValue)
 }
 
 function loadBrowserStyleModelFunction (src, model, modelPath) {
@@ -1283,7 +1266,7 @@ function resolveExportedTarget (target, model) {
   return target
 }
 
-async function loadCliModelFunction (model, schemaPath, cwd, log) {
+async function loadCliModelFunction (model, schemaPath, cwd, log, inputs) {
   if (model.type === 'get' || model.type === 'post') {
     throw new Error(`--run cannot execute remote ${model.type.toUpperCase()} model ${model.name || model.url}. Use a local JavaScript model.`)
   }
@@ -1329,22 +1312,17 @@ async function loadCliModelFunction (model, schemaPath, cwd, log) {
     log,
     progress: () => {},
     isCancelled: () => false
-  })
+  }, Array.isArray(inputs) ? Object.keys(collectInputValues(inputs, () => null)) : undefined)
 }
 
 async function runSchemaOnce (schema, data, schemaPath, cwd, log) {
-  let result = data
-  for (const model of schema.model) {
-    const modelFunc = await loadCliModelFunction(model, schemaPath, cwd, log)
-    const next = await modelFunc(result)
-    if (isRecordObject(result) && isRecordObject(next)) {
-      result = Object.assign({}, result, next)
-    } else if (typeof next !== 'undefined') {
-      result = next
-    }
-    if (isRecordObject(result) && result.stop) break
-  }
-  return result
+  assertSchemaVersion(schema)
+  const inputs = prepareInputs(schema.inputs, data)
+  const stages = schema.model.map(model => async values => {
+    const modelFunc = await loadCliModelFunction(model, schemaPath, cwd, log, schema.inputs)
+    return modelFunc(values)
+  })
+  return runPipeline(stages, inputs)
 }
 
 function flattenOutputs (outputs, flat=[]) {
@@ -1359,22 +1337,9 @@ function flattenOutputs (outputs, flat=[]) {
   return flat
 }
 
-function cleanRunResultObject (result) {
-  if (!isRecordObject(result)) return result
-  const clean = Object.assign({}, result)
-  delete clean.caller
-  delete clean.stop
-  delete clean._status
-  delete clean._log
-  delete clean._progress
-  return clean
-}
-
 function getRunOutputValue (result, output) {
   if (!isRecordObject(result)) return result
-  const names = [output.name, sanitizeName(output.name)]
-  if (output.alias) names.push(output.alias)
-  for (const name of names) {
+  for (const name of outputLookupNames(output)) {
     if (name && Object.prototype.hasOwnProperty.call(result, name)) return result[name]
   }
   if (Object.prototype.hasOwnProperty.call(output, 'value')) return output.value
@@ -1382,7 +1347,7 @@ function getRunOutputValue (result, output) {
 }
 
 function getRunOutputEntries (schema, result) {
-  const cleanResult = cleanRunResultObject(result)
+  const cleanResult = cleanOutputMetadata(result, schema.outputs)
   const outputs = flattenOutputs(schema.outputs || [])
   if (outputs.length) {
     return outputs.map((output, index) => {
@@ -1541,7 +1506,7 @@ function getRunOutputTarget (entry, argv, inputNames, cwd) {
 
 function emitRunOutputs (schema, result, argv, outputs, cwd) {
   const entries = getRunOutputEntries(schema, result)
-  const inputNames = new Set((schema.inputs || []).map(input => sanitizeName(input.name)))
+  const inputNames = new Set(Object.keys(collectInputValues(schema.inputs, () => null)).map(sanitizeName))
   const outputDir = getRunOutputsDirectory(outputs, cwd)
   const targets = new Map()
 
@@ -1778,6 +1743,11 @@ function getDataFromArgv (schema, argv, loadFiles=true) {
   let data = {}
   if (schema.inputs) {
     schema.inputs.forEach(inp => {
+      if (inp.type === 'group' && !inp.name) {
+        Object.assign(data, getDataFromArgv({ inputs: inp.elements }, argv, loadFiles))
+        return
+      }
+      if (!inp.name) return
       const inputName = sanitizeName(inp.name)
       if (inputName in argv) {
         switch (inp.type) {
@@ -2599,6 +2569,7 @@ Documentation: https://jsee.org
     schema = genSchema(jsdocData)
   }
   log('Schema path:', schemaPath)
+  assertSchemaVersion(schema)
 
   // Second pass over CLI arguments
   // Iterate over schema inputs and update argv aliases
@@ -2701,7 +2672,7 @@ Documentation: https://jsee.org
   if (shouldExecute) {
     await Promise.all(schema.model.map(async m => {
       log('Preparing a model to run on the server side:', m.name, m.url)
-      modelFuncs[m.name] = await loadCliModelFunction(m, schemaPath, cwd, log)
+      modelFuncs[m.name] = await loadCliModelFunction(m, schemaPath, cwd, log, schema.inputs)
       m.type = 'post'
       m.url = `/${m.name}`
       m.worker = false
@@ -2763,6 +2734,7 @@ Documentation: https://jsee.org
   // Generate jsee code
   let jseeHtml = ''
   let hiddenElementHtml = ''
+  const assetRoot = schemaPath ? path.dirname(schemaPath) : cwd
   const bundleMode = resolveBundleMode(argv.fetch)
   const shouldBundle = bundleMode !== 'none'
   const offlineStrictBundle = isOfflineStrictBundleMode(bundleMode)
@@ -2787,14 +2759,14 @@ Documentation: https://jsee.org
     const bundleBlocks = collectFetchBundleBlocks(schema)
     for (let m of bundleBlocks) {
       if (offlineStrictBundle) {
-        assertOfflineStrictModel(m, cwd, bundleOutputDirs)
+        assertOfflineStrictModel(m, assetRoot, bundleOutputDirs)
       }
       if (m.type === 'get' || m.type === 'post') {
         continue
       }
       if (m.url) {
         // Fetch model from the local file system (remote URLs not yet supported here)
-        const modelPath = path.join(cwd, m.url)
+        const modelPath = path.resolve(assetRoot, m.url)
         if (!m.name) m.name = getModelExportName(m)
         const modelSource = fs.readFileSync(modelPath, 'utf8')
         const modelCode = await bundleModelCode(m, modelPath, modelSource)
@@ -2802,10 +2774,10 @@ Documentation: https://jsee.org
       }
 
       const pyodideRuntime = pyodideSingleFileBundle
-        ? await preparePyodideSingleFileBundle(m, cwd, getPyodideAssetDir)
+        ? await preparePyodideSingleFileBundle(m, assetRoot, getPyodideAssetDir)
         : pyodideAssetBundle
-          ? await preparePyodideAssetsForBundle(m, cwd, bundleOutputDirs, getPyodideAssetDir)
-          : await readPyodideRuntimeForBundle(m, cwd)
+          ? await preparePyodideAssetsForBundle(m, assetRoot, bundleOutputDirs, getPyodideAssetDir)
+          : await readPyodideRuntimeForBundle(m, assetRoot)
       if (pyodideRuntime) {
         appendHiddenAsset(pyodideRuntime.src, pyodideRuntime.code)
         if (pyodideRuntime.manifestSrc) {
@@ -2822,7 +2794,7 @@ Documentation: https://jsee.org
           if (typeof i !== 'string') {
             continue
           }
-          const importMeta = resolveFetchImport(i, m.url, cwd)
+          const importMeta = resolveFetchImport(i, m.url, assetRoot)
           if (!importMeta) {
             continue
           }
@@ -3053,7 +3025,7 @@ Documentation: https://jsee.org
               if (contentType.includes('multipart/form-data') && Buffer.isBuffer(req.body)) {
                 dataFromGUI = parseMultipart(contentType, req.body)
               }
-              const data = { ...dataFromGUI, ...dataFromArgv }
+              const data = prepareInputs(schema.inputs, { ...dataFromGUI, ...dataFromArgv })
               log('Data for model execution:', data)
               const result = await modelFunc(data)
               if (m.stream === true && isStreamResult(result)) {
@@ -3069,7 +3041,7 @@ Documentation: https://jsee.org
                 res.end()
                 return
               }
-              res.status(500).json({ error: error.message })
+              res.status(error.code === 'JSEE_INPUT_INVALID' ? 400 : 500).json({ error: error.message })
             }
           } else {
             res.status(404).json({ error: 'Unknown model: ' + m.name })
@@ -3115,11 +3087,11 @@ Documentation: https://jsee.org
     //   log(`Serving jsee.runtime.js from: ${pathToJSEE}`)
     //   res.sendFile(pathToJSEE)
     // })
-    app.use('/dist', express.static(path.join(__dirname, '..', 'dist'), { dotfiles: 'deny' })) // Serve static files from the dist folder
+    app.use('/dist', containedStatic(path.join(__dirname, '..', 'dist'))) // Serve static files from the dist folder
     // app.use(express.static(cwd))
     // app.use(express.static(require.main.path)) // Serve static files from the main module path
     // app.use(express.static(path.join(require.main.path, '..'))) // Serve static files from the parent directory of the main module path
-    app.use(express.static(appRoot, { dotfiles: 'deny' })) // Serve static files from the app root
+    app.use(containedStatic(appRoot)) // Serve static files from the app root
     app.listen(argv.port, argv.host, () => {
       console.log(`JSEE app is running: http://${getDisplayHost(argv.host)}:${argv.port}`)
     })

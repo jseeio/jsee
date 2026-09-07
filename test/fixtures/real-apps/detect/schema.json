@@ -1,0 +1,50 @@
+{
+  "model": [
+    {
+      "name": "Cam",
+      "method": "run",
+      "type": "class",
+      "url": "cam.js",
+		  "worker": false
+    },
+    {
+      "name": "CLIP",
+      "method": "run",
+      "type": "class",
+      "url": "clip.js",
+		  "worker": true,
+      "imports": [
+        "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0",
+        "https://cdn.jsdelivr.net/npm/h5wasm@latest/dist/iife/h5wasm.js",
+        "https://cdn.jsdelivr.net/npm/modelzoo@latest/dist/iife/index.js"
+      ]
+    },
+    {
+      "name": "View",
+      "method": "run",
+      "type": "class",
+      "url": "view.js",
+      "worker": false
+    }
+  ],
+	"design": {
+		"grid": [4, 7]
+	},
+  "inputs": [
+    { "name": "classes", "type": "text", "default": "man, woman, room, santa claus" },
+    { "name": "detect", "type": "text", "default": "santa claus" },
+    { "name": "load", "type": "action", "display": true, "title": "Load model"}
+  ],
+  "outputs": [
+    {
+      "name": "output",
+      "type": "text"
+    }
+  ],
+  "examples": [
+    { "classes": "man, woman, room, santa claus", "detect": "santa claus" },
+    { "classes": "street, car, bird, dog", "detect": "bird"}
+  ],
+  "interval": 1000
+}
+

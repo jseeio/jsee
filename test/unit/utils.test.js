@@ -48,6 +48,22 @@ const {
   inferOutputType,
   generateOpenAPISpec
 } = require('../../src/utils')
+const { jseeInputsToJsonSchema } = require('../../src/utils')
+const inputContracts = require('../fixtures/input-contracts.json')
+const { prepareInputs } = require('../../src/schema')
+const inputValidation = require('../fixtures/input-validation.json')
+
+describe('shared input contracts', () => {
+  test.each(inputContracts)('$name', ({ inputs, expected }) => {
+    expect(jseeInputsToJsonSchema(inputs)).toEqual(expected)
+  })
+  test.each(inputValidation)('$name', ({ inputs, data, expected, error }) => {
+    const original = JSON.stringify(data)
+    if (error) expect(() => prepareInputs(inputs, data)).toThrow(error)
+    else expect(prepareInputs(inputs, data)).toEqual(expected)
+    expect(JSON.stringify(data)).toBe(original)
+  })
+})
 
 describe('isObject', () => {
   test('returns true for plain objects', () => {
@@ -863,6 +879,12 @@ describe('interval helpers', () => {
 describe('getModelFuncJS', () => {
   const mockApp = { log: jest.fn() }
 
+  test('binds args by declared input order and excludes undeclared metadata', async () => {
+    const target = (...args) => args
+    const wrapped = await getModelFuncJS({ type: 'function', container: 'args' }, target, mockApp, ['a', 'b'])
+    expect(wrapped({ b: 2, caller: 'run', a: 9 })).toEqual([9, 2])
+  })
+
   test('wraps function with object container (default)', async () => {
     const target = (inputs) => inputs.a + inputs.b
     const wrapped = await getModelFuncJS({ type: 'function' }, target, mockApp)
@@ -889,6 +911,14 @@ describe('getModelFuncJS', () => {
     const wrapped = await getModelFuncJS({ type: 'function' }, target, ctxApp)
     expect(wrapped({ a: 7 })).toEqual({ value: 7, cancelled: true })
     expect(ctxApp.isCancelled).toHaveBeenCalledTimes(1)
+  })
+
+  test('creates an invocation context for each object call when provided', async () => {
+    let id = 0
+    const wrapped = await getModelFuncJS({ type: 'function' }, (inputs, ctx) => ctx.id,
+      mockApp, [], () => ({ id: ++id }))
+    expect(wrapped({})).toBe(1)
+    expect(wrapped({})).toBe(2)
   })
 
   test('wraps class type', async () => {
@@ -955,6 +985,87 @@ describe('getModelFuncAPI', () => {
   })
 })
 
+describe('API stream contract', () => {
+  const originalFetch = global.fetch
+  afterEach(() => { global.fetch = originalFetch })
+
+  function respond (body, status=200, type='text/event-stream') {
+    global.fetch = jest.fn().mockResolvedValue(new Response(body, {
+      status, headers: { 'Content-Type': type }
+    }))
+  }
+
+  test.each(['get', 'post'])('%s consumes SSE without requiring a presentation callback', async type => {
+    respond('data: {"result":1}\n\ndata: {"result":2}\n\ndata: [DONE]\n\n')
+    await expect(getModelFuncAPI({ type, url: '/api', stream: true }, () => {})({})).resolves.toEqual({ result: 2 })
+  })
+
+  test('preserves falsey chunks and stops at the done sentinel', async () => {
+    respond('data: false\n\ndata: 0\n\ndata: ""\n\ndata: null\n\ndata: [DONE]\n\ndata: "too late"\n\n')
+    const chunks = []
+    const run = getModelFuncAPI({ type: 'post', url: '/api', stream: true }, () => {}, value => chunks.push(value))
+    await expect(run({})).resolves.toBeNull()
+    expect(chunks).toEqual([false, 0, '', null])
+  })
+
+  test.each(['\n', '\r\n', '\r'])('joins multiline frames across UTF-8 byte chunks with %j endings', async newline => {
+    const bytes = new TextEncoder().encode('\uFEFF: comment' + newline + 'event: update' + newline + 'data: {"text":' + newline + 'data: "☀"}' + newline + newline)
+    respond(new ReadableStream({ start (controller) {
+      for (const byte of bytes) controller.enqueue(new Uint8Array([byte]))
+      controller.close()
+    } }))
+    const chunks = []
+    await expect(getModelFuncAPI({ type: 'post', url: '/api' }, () => {}, value => chunks.push(value))({})).resolves.toEqual({ text: '☀' })
+    expect(chunks).toEqual([{ text: '☀' }])
+  })
+
+  test('rejects error events while preserving ordinary error-shaped results', async () => {
+    respond('data: {"error":"business value"}\n\nevent: error\ndata: {"error":"model failed"}\n\ndata: [DONE]\n\n')
+    const chunks = []
+    await expect(getModelFuncAPI({ type: 'post', url: '/api' }, () => {}, value => chunks.push(value))({})).rejects.toThrow('model failed')
+    expect(chunks).toEqual([{ error: 'business value' }])
+  })
+
+  test('cancels and releases the response reader when completion arrives before EOF', async () => {
+    const cancel = jest.fn()
+    const stream = new ReadableStream({ start (controller) {
+      controller.enqueue(new TextEncoder().encode('data: 3\n\ndata: [DONE]\n\n'))
+    }, cancel })
+    respond(stream)
+    const promise = getModelFuncAPI({ type: 'post', url: '/api' }, () => {}, () => {})({})
+    let timer
+    try {
+      await expect(Promise.race([promise, new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('stream waited beyond DONE')), 100)
+      })])).resolves.toBe(3)
+      expect(cancel).toHaveBeenCalledTimes(1)
+      expect(stream.locked).toBe(false)
+    } finally { clearTimeout(timer) }
+  })
+
+  test('retains the legacy final data frame without a blank terminator', async () => {
+    respond('data: {"result":4}')
+    await expect(getModelFuncAPI({ type: 'post', url: '/api' }, () => {}, () => {})({})).resolves.toEqual({ result: 4 })
+  })
+
+  test('releases the reader when a chunk callback fails', async () => {
+    const cancel = jest.fn()
+    const stream = new ReadableStream({ start (controller) {
+      controller.enqueue(new TextEncoder().encode('data: 1\n\n'))
+    }, cancel })
+    respond(stream)
+    const callback = () => { throw new Error('presentation failed') }
+    await expect(getModelFuncAPI({ type: 'post', url: '/api' }, () => {}, callback)({})).rejects.toThrow('presentation failed')
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(stream.locked).toBe(false)
+  })
+
+  test.each(['get', 'post'])('%s rejects unsuccessful HTTP responses before returning model data', async type => {
+    respond('{"error":"invalid value"}', 400, 'application/json')
+    await expect(getModelFuncAPI({ type, url: '/api' }, () => {})({})).rejects.toThrow('invalid value')
+  })
+})
+
 describe('security runtime guards', () => {
   test('blocks dynamic code execution when allowEval is false', () => {
     expect(() => assertEvalAllowed({ allowEval: false }, 'inline model code'))
@@ -1006,6 +1117,21 @@ describe('validateSchema', () => {
     })
     expect(report.errors).toEqual([])
     expect(report.warnings).toEqual([])
+  })
+
+  test.each([null, 0, 2, '1', true, {}, 1.5])('rejects unsupported schemaVersion %p', schemaVersion => {
+    expect(validateSchema({ schemaVersion, inputs: [] }).errors.join(' ')).toContain('schemaVersion')
+  })
+
+  test('version 1 and an absent version have the same validation behavior', () => {
+    const schema = { inputs: [{ name: 'x', type: 'int' }] }
+    expect(validateSchema({ ...schema, schemaVersion: 1 })).toEqual(validateSchema(schema))
+  })
+
+  test('rejects malformed outputs and duplicate flattened input names', () => {
+    expect(validateSchema({ inputs: [{ name: 'x' }], outputs: 'result' }).errors.join(' ')).toContain('outputs')
+    const inputs = [{ name: 'x' }, { type: 'group', elements: [{ name: 'x' }] }]
+    expect(validateSchema({ inputs }).errors.join(' ')).toContain('Duplicate input name: x')
   })
 
   test('returns error when schema has no model, no view/render, and no inputs', () => {
@@ -1569,6 +1695,27 @@ describe('parseSSELine', () => {
 })
 
 describe('toTypedArray', () => {
+  test('converts typed subarray values numerically without adjoining elements', () => {
+    const source = new Float32Array([10, 20, 30, 40]).subarray(1, 3)
+    expect(Array.from(toTypedArray(source, 'float64'))).toEqual([20, 30])
+    expect(Array.from(toTypedArray(source, 'int16'))).toEqual([20, 30])
+  })
+
+  test('interprets only the bytes in a DataView, including unaligned views', () => {
+    const bytes = new Uint8Array(18)
+    bytes.set(new Uint8Array(new Float64Array([20, 30]).buffer), 1)
+    const view = new DataView(bytes.buffer, 1, 16)
+    expect(Array.from(toTypedArray(view, 'float64'))).toEqual([20, 30])
+    expect(() => toTypedArray(new DataView(bytes.buffer, 1, 3), 'float64')).toThrow(RangeError)
+  })
+
+  test('keeps raw ArrayBuffer byte interpretation', () => {
+    const source = new Float64Array([20, 30])
+    const result = toTypedArray(source.buffer, 'float64')
+    expect(Array.from(result)).toEqual([20, 30])
+    expect(result.buffer).toBe(source.buffer)
+  })
+
   test('converts JS array to Float64Array', () => {
     const result = toTypedArray([1, 2, 3], 'float64')
     expect(result).toBeInstanceOf(Float64Array)
@@ -1644,6 +1791,19 @@ describe('wrapTypedArrayInputs', () => {
 })
 
 describe('collectTransferables', () => {
+  test('deduplicates backing buffers across views, raw references, and cycles', () => {
+    const buffer = new ArrayBuffer(16)
+    const value = { a: new Float32Array(buffer), b: new DataView(buffer, 4, 8), buffer }
+    value.self = value
+    expect(collectTransferables(value)).toEqual([buffer])
+    expect(collectTransferables([buffer, value.a, value.b])).toEqual([buffer])
+  })
+
+  test('excludes non-transferable shared backing buffers', () => {
+    const buffer = new SharedArrayBuffer(16)
+    expect(collectTransferables({ buffer, view: new Uint8Array(buffer) })).toEqual([])
+  })
+
   test('collects ArrayBuffer from typed array', () => {
     const arr = new Float32Array([1, 2, 3])
     const result = collectTransferables({ data: arr })
@@ -1723,6 +1883,12 @@ describe('createValidateFn', () => {
     expect(fn('hello')).toBeNull()
   })
 
+  test('required is enforced alongside a permissive validate expression', () => {
+    const fn = createValidateFn({ name: 'x', required: true, validate: 'true' }, mockCompile, filtrexOptions)
+    expect(fn('')).toBe('Required')
+    expect(fn(false)).toBeNull()
+  })
+
   test('required rejects null and undefined', () => {
     const fn = createValidateFn(
       { name: 'x', type: 'string', required: true },
@@ -1760,6 +1926,13 @@ describe('createValidateFn', () => {
 })
 
 describe('runValidation', () => {
+  test('group expressions receive the values of their nested fields', () => {
+    const input = { type: 'group', name: 'settings', elements: [{ name: 'x', value: 3 }] }
+    const validate = jest.fn(values => values.x === 3 ? null : 'Wrong group value')
+    expect(runValidation([input], [validate])).toBe(false)
+    expect(validate).toHaveBeenCalledWith({ x: 3 })
+  })
+
   test('sets _error on invalid inputs', () => {
     const inputs = [
       { name: 'a', value: '', _error: null },

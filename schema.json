@@ -1,0 +1,193 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:jsee:descriptor:1",
+  "title": "JSEE computation descriptor",
+  "description": "Version 1 JSON authoring format. Runtime capability checks and input-value validation are separate. Unknown extension properties are preserved.",
+  "type": "object",
+  "anyOf": [
+    { "required": ["model"] },
+    { "required": ["render"] },
+    { "required": ["view"] },
+    { "required": ["inputs"] }
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "title": { "type": "string" },
+    "description": { "type": "string" },
+    "model": { "$ref": "#/definitions/models" },
+    "render": { "$ref": "#/definitions/models" },
+    "view": { "$ref": "#/definitions/models" },
+    "inputs": { "type": "array", "items": { "$ref": "#/definitions/input" } },
+    "outputs": { "type": "array", "items": { "$ref": "#/definitions/output" } },
+    "imports": { "$ref": "#/definitions/imports" },
+    "design": { "$ref": "#/definitions/design" },
+    "security": { "$ref": "#/definitions/security" },
+    "examples": { "type": "array", "items": { "type": ["object", "array"] } },
+    "autorun": { "type": "boolean" },
+    "reactive": { "type": "boolean" },
+    "persist": { "type": "boolean" },
+    "notify": { "type": "boolean" },
+    "interval": { "type": "number", "minimum": 0 },
+    "inferInputTypes": { "type": "boolean" },
+    "page": { "$ref": "#/definitions/page" }
+  },
+  "definitions": {
+    "inputType": {
+      "enum": ["int", "float", "number", "string", "color", "text", "categorical", "select", "bool", "checkbox", "file", "group", "action", "button", "slider", "radio", "toggle", "date", "multi-select", "range", "folder"]
+    },
+    "modelType": { "enum": ["function", "class", "module", "async-init", "async-function", "get", "post", "py"] },
+    "outputType": {
+      "enum": ["text", "string", "int", "float", "bool", "table", "chart", "3d", "map", "pdf", "gallery", "gauge", "number", "alert", "highlight", "chat", "viewer", "markdown", "image", "audio", "video", "object", "html", "svg", "code", "file", "group", "function", "blank"]
+    },
+    "alias": { "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] },
+    "columns": { "type": "integer", "minimum": 1, "maximum": 12 },
+    "size": { "type": ["number", "string"] },
+    "import": {
+      "anyOf": [
+        { "type": "string" },
+        { "type": "object", "required": ["url"], "properties": { "url": { "type": "string" }, "code": { "type": "string" } } }
+      ]
+    },
+    "imports": { "anyOf": [{ "type": "string" }, { "type": "array", "items": { "$ref": "#/definitions/import" } }] },
+    "models": { "anyOf": [{ "$ref": "#/definitions/model" }, { "type": "array", "items": { "$ref": "#/definitions/model" } }] },
+    "model": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "url": { "type": "string" },
+        "code": { "type": "string" },
+        "type": { "$ref": "#/definitions/modelType" },
+        "container": { "enum": ["object", "args"] },
+        "worker": { "type": "boolean" },
+        "timeout": { "type": "number", "exclusiveMinimum": 0 },
+        "method": { "type": "string" },
+        "export": { "type": "string" },
+        "entry": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "imports": { "$ref": "#/definitions/imports" },
+        "autorun": { "type": "boolean" },
+        "reactive": { "type": "boolean" },
+        "stream": { "type": "boolean" },
+        "pyodide": {
+          "anyOf": [
+            { "type": "string" },
+            { "type": "object", "properties": { "url": { "type": "string" }, "indexURL": { "type": "string" }, "packages": { "type": "array", "items": { "type": "string" } } } }
+          ]
+        }
+      }
+    },
+    "input": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "type": { "$ref": "#/definitions/inputType" },
+        "label": { "type": "string" },
+        "description": { "type": "string" },
+        "default": {},
+        "value": {},
+        "options": { "type": "array" },
+        "elements": { "type": "array", "items": { "$ref": "#/definitions/input" } },
+        "required": { "type": "boolean" },
+        "nullable": { "type": "boolean" },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "step": { "type": "number", "exclusiveMinimum": 0 },
+        "alias": { "$ref": "#/definitions/alias" },
+        "display": { "type": ["string", "boolean"] },
+        "validate": { "type": "string" },
+        "error": { "type": "string" },
+        "disabled": { "type": "boolean" },
+        "reactive": { "type": "boolean" },
+        "enter": { "type": "boolean" },
+        "raw": { "type": "boolean" },
+        "stream": { "type": "boolean" },
+        "select": { "type": "boolean" },
+        "arrayBuffer": { "type": "boolean" },
+        "dtype": { "enum": ["float32", "float64", "int8", "uint8", "int16", "uint16", "int32", "uint32"] },
+        "url": { "type": "string" },
+        "urlAutoLoad": { "type": "boolean" },
+        "accept": { "type": "string" },
+        "placeholder": { "type": "string" },
+        "columns": { "$ref": "#/definitions/columns" },
+        "style": { "enum": ["blocks", "accordion", "tabs"] },
+        "collapsed": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["type"], "properties": { "type": { "const": "group" } } },
+          "then": { "required": ["elements"] },
+          "else": {
+            "if": { "required": ["type"], "properties": { "type": { "enum": ["button", "action"] } } },
+            "else": { "required": ["name"] }
+          }
+        }
+      ]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "$ref": "#/definitions/outputType" },
+        "label": { "type": "string" },
+        "description": { "type": "string" },
+        "alias": { "$ref": "#/definitions/alias" },
+        "value": {},
+        "elements": { "type": "array", "items": { "$ref": "#/definitions/output" } },
+        "columns": { "$ref": "#/definitions/columns" },
+        "style": { "enum": ["blocks", "accordion", "tabs"] },
+        "filename": { "type": "string" },
+        "mime": { "type": "string" },
+        "contentType": { "type": "string" },
+        "width": { "$ref": "#/definitions/size" },
+        "height": { "$ref": "#/definitions/size" },
+        "precision": { "type": "integer", "minimum": 0 },
+        "prefix": { "type": "string" },
+        "suffix": { "type": "string" },
+        "min": { "type": "number" },
+        "max": { "type": "number" }
+      },
+      "if": { "required": ["type"], "properties": { "type": { "const": "group" } } },
+      "then": { "required": ["elements"] }
+    },
+    "design": {
+      "type": "object",
+      "properties": {
+        "layout": { "type": "string" },
+        "framework": { "type": "string" },
+        "theme": { "type": "string" },
+        "primary": { "type": "string" },
+        "secondary": { "type": "string" },
+        "bg": { "type": "string" },
+        "fg": { "type": "string" },
+        "font": { "type": "string" },
+        "radius": { "$ref": "#/definitions/size" },
+        "grid": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "number", "minimum": 0 } }
+      }
+    },
+    "security": {
+      "type": "object",
+      "description": "Gates JSEE-managed operations; does not sandbox arbitrary model code.",
+      "properties": {
+        "mode": { "enum": ["trusted", "secure"] },
+        "trusted": { "type": "boolean" },
+        "allowEval": { "type": "boolean" },
+        "allowNetwork": { "type": "boolean" },
+        "allowRawHtml": { "type": "boolean" },
+        "allowNotifications": { "type": "boolean" },
+        "allowFileViewer": { "type": "boolean" }
+      }
+    },
+    "page": {
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "url": { "type": "string" },
+        "ga": { "type": "string" },
+        "social": { "type": "object", "additionalProperties": { "type": "string" } },
+        "org": { "type": "object", "properties": { "name": { "type": "string" }, "url": { "type": "string" }, "description": { "type": "string" } } }
+      }
+    }
+  }
+}

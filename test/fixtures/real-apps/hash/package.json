@@ -1,0 +1,15 @@
+{
+  "name": "hash",
+  "version": "1.0.0",
+  "description": "Hash file",
+  "main": "src/main.js",
+  "scripts": {
+    "build": "browserify src/main.js -s hash | uglifyjs -cm > hash.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "hash.js": "^1.1.7"
+  }
+}

@@ -13,15 +13,27 @@ function progress (value) {
 let initialized = false
 let cancelled = false
 let streamInputConfig = {}
+let runToken = null
 
 function isCancelled () {
   return cancelled === true
 }
 
 function getStreamOptions () {
+  const context = createRunContext()
   return {
-    isCancelled,
-    onProgress: progress
+    isCancelled: context.isCancelled,
+    onProgress: context.progress
+  }
+}
+
+function createRunContext () {
+  const token = runToken
+  const active = () => token && token.active && runToken === token && !isCancelled()
+  return {
+    log: (...args) => { if (active()) log(...args) },
+    progress: value => { if (active()) progress(value) },
+    isCancelled: () => !active()
   }
 }
 
@@ -134,25 +146,27 @@ async function initJS (model) {
     log,
     progress,
     isCancelled
-  })
+  }, model._inputNames, createRunContext)
 
   return modelFunc
 }
 
 function initAPI (model) {
   log('Init API')
-  return utils.getModelFuncAPI(model, log, undefined, model._security)
+  const onChunk = model.stream ? value => postMessage({ _jsee: 'partial', value }) : undefined
+  return utils.getModelFuncAPI(model, log, onChunk, model._security)
 }
 
 onmessage = async function (e) {
-  var data = e.data
-  log('Received message of type:', typeof data)
-
-  if ((typeof data === 'object') && (data._cmd === 'cancel')) {
+  const message = e.data
+  // Inspect the runtime envelope before unwrapping model data, which may use any keys.
+  if (message && message._jsee === 'cancel') {
     cancelled = true
     log('Cancel command received')
     return
   }
+  const data = message && message._jsee === 'run' ? message.value : message
+  log('Received message of type:', typeof data)
 
   if (utils.isWorkerInitMessage(data, initialized)) {
     try {
@@ -181,23 +195,27 @@ onmessage = async function (e) {
           throw new Error(`No type information: ${m.type}`)
       }
       initialized = true
-      postMessage({ _status: 'loaded' })
+      postMessage({ _jsee: 'loaded' })
     } catch (error) {
       postMessage({
-        _status: 'error',
+        _jsee: 'error',
         _error: error && error.message ? error.message : String(error)
       })
     }
   } else {
+    const token = runToken = { active: true }
     try {
       cancelled = false
       const runData = utils.wrapStreamInputs(data, streamInputConfig, getStreamOptions())
       log('Run model')
       const results = await self.modelFunc(runData)
       log('Results:', results)
-      postMessage(results)
+      // Returned values never share the control namespace used by model-posted messages.
+      postMessage({ _jsee: 'result', value: results })
     } catch (error) {
-      postMessage({ _status: 'error', _error: error })
+      postMessage({ _jsee: 'error', _error: error })
+    } finally {
+      token.active = false
     }
   }
 }

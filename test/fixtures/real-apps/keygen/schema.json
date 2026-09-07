@@ -1,0 +1,21 @@
+{
+  "model": {
+    "name": "keygen",
+    "type": "async-function",
+    "url": "index.js",
+		"worker": false,
+    "autorun": false
+  },
+	"design": {
+		"grid": [4, 8]
+	},
+  "inputs": [
+		{ "name": "length", "type": "categorical", "options": [1024, 2048, 4096], "default": 4096 },
+		{ "name": "hash", "type": "categorical", "options": ["SHA-1", "SHA-256", "SHA-384", "SHA-512"], "default": "SHA-512" }
+  ],
+  "outputs": [
+    { "name": "Public key", "type": "code", "filename": "id_rsa.pub" },
+    { "name": "Private key", "type": "code", "filename": "id_rsa" }
+  ]
+}
+

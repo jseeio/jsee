@@ -1,0 +1,39 @@
+[
+  {
+    "name": "declared metadata names",
+    "outputs": [{ "type": "group", "elements": [
+      { "name": "caller", "type": "code" },
+      { "name": "stop", "type": "code" },
+      { "name": "_status", "type": "code" },
+      { "name": "_log", "type": "code" },
+      { "name": "_progress", "type": "code" }
+    ] }],
+    "result": { "caller": "customer", "stop": false, "_status": "business", "_log": ["entry"], "_progress": 0 },
+    "expected": { "caller": "customer", "stop": false, "_status": "business", "_log": ["entry"], "_progress": 0 }
+  },
+  {
+    "name": "metadata aliases and sanitized names",
+    "outputs": [{ "type": "group", "elements": [
+      { "name": "Status", "type": "code", "alias": ["missing", "_status"] },
+      { "name": "Progress", "type": "code", "alias": "_progress" },
+      { "name": "Display name", "type": "code" }
+    ] }],
+    "result": { "_status": "business", "_progress": 0, "display_name": "Ada", "_log": ["hidden"] },
+    "expected": { "Status": "business", "Progress": 0, "Display name": "Ada" }
+  },
+  {
+    "name": "ordered aliases with name precedence",
+    "outputs": [
+      { "name": "primary", "type": "code", "alias": ["shadow"] },
+      { "name": "display", "type": "code", "alias": ["absent", "wire"] }
+    ],
+    "result": { "primary": "name wins", "shadow": "ignored", "wire": "fallback" },
+    "expected": { "primary": "name wins", "display": "fallback" }
+  },
+  {
+    "name": "undeclared metadata remains hidden",
+    "outputs": [],
+    "result": { "caller": "run", "stop": false, "_status": "business", "_log": [], "_progress": 0, "answer": 42 },
+    "expected": { "answer": 42 }
+  }
+]

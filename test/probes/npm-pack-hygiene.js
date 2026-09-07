@@ -21,6 +21,10 @@ const required = [
   'dist/jsee.full.js',
   'dist/jsee.runtime.js',
   'src/cli.js',
+  'schema.json',
+  'src/schema.js',
+  'src/schema.d.ts',
+  'src/pipeline.js',
   'src/browser-bundle-node.js'
 ]
 

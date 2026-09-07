@@ -1,5 +1,6 @@
 node_modules/
 package-lock.json
+!test/fixtures/real-apps/*/package-lock.json
 apps/
 dist/
 tmp/

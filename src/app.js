@@ -1,3 +1,4 @@
+const { cloneSchema, getOptionValue, getInputDefaultValue } = require('./schema')
 // import Vue from 'vue'
 // import { createApp } from 'vue'
 // import { createApp } from 'vue/dist/vue.esm-bundler'
@@ -35,15 +36,6 @@ function stableHash (value) {
     hash = hash >>> 0
   }
   return hash.toString(36)
-}
-
-function getOptionValue (option) {
-  if (option && typeof option === 'object') {
-    if (typeof option.value !== 'undefined') return option.value
-    if (typeof option.name !== 'undefined') return option.name
-    if (typeof option.label !== 'undefined') return option.label
-  }
-  return option
 }
 
 function optionIncludesValue (options, value) {
@@ -261,60 +253,20 @@ function resetInputs (inputs, example) {
       // Default value
       setInputValue(input, input.default)
     } else {
-      switch (input.type) {
-        case 'int':
-        case 'float':
-        case 'number':
-          input.value = 0
-          break
-        case 'string':
-        case 'text':
-          input.value = ''
-          break
-        case 'color':
-          input.value = '#000000'
-          break
-        case 'categorical':
-        case 'select':
-          input.value = input.options ? input.options[0] : ''
-          break
-        case 'bool':
-        case 'checkbox':
-          input.value = false
-          break
-        case 'file':
-          input.file = null
-          input.value = ''
-          break
-        case 'folder':
-          input.value = input.default || []
-          break
-        case 'slider':
-          input.value = input.min || 0
-          break
-        case 'range':
-          input.value = [input.min || 0, input.max || 100]
-          break
-        case 'radio':
-          input.value = input.options ? input.options[0] : ''
-          break
-        case 'toggle':
-          input.value = false
-          break
-        case 'date':
-          input.value = ''
-          break
-        case 'multi-select':
-          input.value = []
-          break
-        case 'group':
-          resetInputs(input.elements)
-          break
-        default:
-          input.value = ''
+      if (input.type === 'group') resetInputs(input.elements)
+      else {
+        if (input.type === 'file') input.file = null
+        const value = getInputDefaultValue(input)
+        input.value = value === undefined ? '' : value
       }
     }
   })
+}
+
+function getValidationInputs (inputs) {
+  return inputs.flatMap(input => input.type === 'group'
+    ? [input, ...getValidationInputs(input.elements || [])]
+    : [input])
 }
 
 function createVueApp (env, mountedCallback, logMain) {
@@ -323,7 +275,7 @@ function createVueApp (env, mountedCallback, logMain) {
   }
 
   // Vue's data is based on schema
-  const dataInit = env.schema
+  const dataInit = cloneSchema(env.schema)
   dataInit._security = env.security || normalizeSecurityOptions(env.schema.security)
   // Determine a container for Vue app
   const container = env.container
@@ -362,15 +314,13 @@ function createVueApp (env, mountedCallback, logMain) {
   }
 
   // Initialize _error property on all inputs for reactivity
-  dataInit.inputs.forEach(input => {
+  const validationInputs = getValidationInputs(dataInit.inputs)
+  validationInputs.forEach(input => {
     input._error = null
-    if (input.type === 'group' && input.elements) {
-      input.elements.forEach(el => { el._error = null })
-    }
   })
 
   // Prepare validation functions for inputs with validate or required
-  const validateFunctions = dataInit.inputs.map(input =>
+  const validateFunctions = validationInputs.map(input =>
     createValidateFn(input, filtrex.compileExpression, filtrexOptions)
   )
 
@@ -434,7 +384,7 @@ function createVueApp (env, mountedCallback, logMain) {
           if (env.schema.persist !== false) {
             saveInputsToStorage(this.inputs, storageKey)
           }
-          runValidation(this.inputs, validateFunctions)
+          this.validateInputs()
           if (env.schema.reactive) {
             this.run('reactive')
           }
@@ -445,6 +395,9 @@ function createVueApp (env, mountedCallback, logMain) {
       mountedCallback(container)
     },
     methods: {
+      validateInputs () {
+        return runValidation(getValidationInputs(this.inputs), validateFunctions)
+      },
       display (index) {
         const res = index < displayFunctions.length
           ? displayFunctions[index](this.$data)
@@ -480,7 +433,6 @@ function createVueApp (env, mountedCallback, logMain) {
         }
       },
       run (caller) {
-        if (runValidation(this.inputs, validateFunctions)) return
         this.clickRun = true
         // Catch to prevent unhandled rejection from button/autorun clicks
         env.run(caller).catch(err => console.error('Run error:', err))

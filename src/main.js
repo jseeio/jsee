@@ -2,6 +2,9 @@ import { createVueApp } from './app'
 import Worker from './worker.js'
 
 const utils = require('./utils')
+const { outputLookupNames, collectOutputNames, cleanOutputMetadata } = utils
+const { cloneSchema, collectInputValues, prepareInputs } = require('./schema')
+const { runPipeline } = require('./pipeline')
 const isObject = utils.isObject
 const { DEFAULT_CONTAINER, DEFAULT_WORKER_TIMEOUT } = require('./constants')
 
@@ -33,21 +36,7 @@ if (typeof EXTENDED !== 'undefined' && EXTENDED) {
 const fetch = window['fetch']
 const Blob = window['Blob']
 
-let verbose = true
 let instanceCounter = 0
-function log () {
-  if (verbose) {
-    console.log(`[JSEE v${VERSION}]`, ...arguments)
-    const logElement = document.querySelector('#log')
-    if (logElement) {
-      logElement.textContent += `\n${[...arguments].join(' ')}`
-      logElement.scrollTop = logElement.scrollHeight // auto scroll to bottom
-      if (logElement.textContent.length > 10000) {
-        logElement.textContent = logElement.textContent.slice(-10000)
-      }
-    }
-  }
-}
 
 function makeInstanceUid (value) {
   instanceCounter += 1
@@ -63,33 +52,8 @@ function makeInstanceUid (value) {
 
 const getName = utils.getName
 
-// Return input value
-function getValue (input) {
-  if (input.type === 'group') {
-    const value = {}
-    input.elements.forEach(el => {
-      value[el.name] = getValue(el)
-    })
-    return value
-  } else {
-    return input.value
-  }
-}
-
 function hasOwn (obj, key) {
   return Object.prototype.hasOwnProperty.call(obj, key)
-}
-
-function outputLookupNames (output) {
-  const names = []
-  if (output.name) {
-    names.push(output.name)
-    names.push(utils.sanitizeName(output.name))
-  }
-  if (output.alias) {
-    names.push(...(Array.isArray(output.alias) ? output.alias : [output.alias]))
-  }
-  return names.filter(Boolean)
 }
 
 function resolveOutputResult (res, output) {
@@ -99,23 +63,6 @@ function resolveOutputResult (res, output) {
     }
   }
   return { found: false, value: undefined }
-}
-
-function collectOutputNames (outputs, names=new Set()) {
-  if (!Array.isArray(outputs)) {
-    return names
-  }
-  outputs.forEach(output => {
-    if (!output) {
-      return
-    }
-    if (output.type === 'group' && output.elements) {
-      collectOutputNames(output.elements, names)
-      return
-    }
-    outputLookupNames(output).forEach(name => names.add(name))
-  })
-  return names
 }
 
 function getModelType (model) {
@@ -201,9 +148,8 @@ export default class JSEE {
       }
     }
 
-    // Set global verbose flag
-    // This check sets verbose to true in all cases except when params.verbose is explicitly set to false
-    verbose = !(params.verbose === false)
+    this.verbose = params.verbose !== false
+    this.log = this.log.bind(this)
     this.uid = makeInstanceUid(params.id || params.uid)
     this.progressId = `${this.uid}-progress`
     this.overlayId = `${this.uid}-overlay`
@@ -217,12 +163,16 @@ export default class JSEE {
     this._rejectRun = null
     this._rejectWorkerRun = null
     this._workers = []
+    this._apiRequests = new Set()
     this._pendingRun = null
     this._runToken = null
     this._intervalLoop = false
     this._intervalToken = null
     this._intervalPromise = null
     this._needsModelReinit = false
+    this._destroyed = false
+    this._initController = new AbortController()
+    this._reinitController = null
 
     // Check if schema is provided
     if (typeof this.schema === 'undefined') {
@@ -235,7 +185,7 @@ export default class JSEE {
       // Check if 'jsee-container' exists
       if (document.querySelector(DEFAULT_CONTAINER)) {
         this.container = DEFAULT_CONTAINER
-        log(`Using default container: ${this.container}`)
+        this.log(`Using default container: ${this.container}`)
       } else {
         notyf.error('No container provided')
         throw new Error('No container provided')
@@ -246,7 +196,15 @@ export default class JSEE {
   }
 
   log (...args) {
-    log(...args)
+    if (!this.verbose) return
+    console.log(`[JSEE v${VERSION}]`, ...args)
+    const container = typeof this.container === 'string' ? document.querySelector(this.container) : this.container
+    // Prefer the instance's sink while retaining the legacy external #log sink.
+    const logElement = (container && container.querySelector('#log')) || document.querySelector('#log')
+    if (logElement) {
+      logElement.textContent = (logElement.textContent + `\n${args.join(' ')}`).slice(-10000)
+      logElement.scrollTop = logElement.scrollHeight
+    }
   }
 
   notify (txt) {
@@ -266,12 +224,15 @@ export default class JSEE {
   }
 
   cancelCurrentRun () {
-    log('Stopping current run')
+    this.log('Stopping current run')
     const cancelError = new Error('Cancelled')
     this.stopInterval()
     this.cancelled = true
     this._pendingRun = null
     this._runToken = {}
+    if (this._reinitController) this._reinitController.abort()
+    this._apiRequests.forEach(controller => controller.abort())
+    this._apiRequests.clear()
     if (typeof this._rejectRun === 'function') {
       this._rejectRun(cancelError)
       this._rejectRun = null
@@ -285,6 +246,10 @@ export default class JSEE {
       this._rejectWorkerRun = null
     }
     // Terminate all workers to force-stop blocking WASM computations
+    this._terminateWorkers()
+  }
+
+  _terminateWorkers () {
     const hadWorkers = this._workers.length > 0
     this._workers.forEach(w => {
       try { w.terminate() } catch (e) { /* ignore */ }
@@ -295,19 +260,35 @@ export default class JSEE {
     if (hadWorkers) this._needsModelReinit = true
   }
 
+  _createRunContext () {
+    const token = this._runToken
+    const active = () => !this._destroyed && token && token.active && this._runToken === token
+    const callbacks = { isCancelled: () => !active() }
+    for (const name of ['log', 'progress', 'output', 'outputAsync']) {
+      callbacks[name] = (...args) => active() ? this[name](...args) : undefined
+    }
+    // Retain browser context fields/methods while binding callbacks to this invocation.
+    // Other methods must still mutate the actual instance, not a shadow context object.
+    return new Proxy(this, {
+      get (target, name) {
+        if (Object.prototype.hasOwnProperty.call(callbacks, name)) return callbacks[name]
+        const value = Reflect.get(target, name, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      }
+    })
+  }
+
   isCancelled () {
     return this.cancelled === true
   }
 
   destroy () {
-    log('Destroying JSEE instance')
+    if (this._destroyed) return
+    this._destroyed = true
+    this._initController.abort()
+    this.log('Destroying JSEE instance')
     // Cancel any running computation
     this.cancelCurrentRun()
-    // Terminate all workers
-    this._workers.forEach(w => {
-      try { w.terminate() } catch (e) { /* ignore */ }
-    })
-    this._workers = []
     // Unmount Vue app
     if (this.app && this.app.__vueApp) {
       this.app.__vueApp.unmount()
@@ -332,6 +313,7 @@ export default class JSEE {
   }
 
   progress (i) {
+    if (this._destroyed) return
     const progressState = utils.getProgressState(i)
     if (!progressState) {
       return
@@ -381,12 +363,17 @@ export default class JSEE {
 
   async init () {
     // At this point this.schema is defined but can be in different forms (e.g. string, object, function)
-    await this.initSchema() // Inits: this.schema (object)
-    await this.initModel() // Inits: this.model (array of objects)
-    await this.initInputs() // Inits: schema inputs based on url
-    this.streamInputConfig = collectStreamInputConfig(this.schema.inputs)
-    await this.initVue() // Inits: this.app, this.data
-    await this.initPipeline() // Inits: this.pipeline (function)
+    try {
+      // Each asynchronous boundary can outlive destroy(); never start the next stage afterward.
+      for (const initialize of [this.initSchema, this.initModel, this.initInputs, this.initVue, this.initPipeline]) {
+        if (this._destroyed) return false
+        await initialize.call(this)
+      }
+    } catch (error) {
+      this._terminateWorkers()
+      if (!this._destroyed) throw error
+    }
+    if (this._destroyed) return false
 
     // Request notification permission if schema opts in
     if (this.schema.notify && this.security.allowNotifications !== false
@@ -398,10 +385,10 @@ export default class JSEE {
       // 1. If autorun is enabled in the schema, run the model immediately
       // 2. Server-side inputs: If there are inputs with disabled and reactive flags
       // (we assume that they are set by the server and trigger the model run)
-      log('[Init] First run of the model due to autorun or reactive inputs')
+      this.log('[Init] First run of the model due to autorun or reactive inputs')
       // Catch here to prevent unhandled rejection from init-time run
       const initCaller = this.schema.autorun ? 'autorun' : 'reactive'
-      this.run(initCaller).catch(err => log('Init run error:', err))
+      this.run(initCaller).catch(err => this.log('Init run error:', err))
     }
   }
 
@@ -416,13 +403,15 @@ export default class JSEE {
       if (schema) {
         // Schema block found in the hidden element, use its content
         this.schema = JSON.parse(schema)
-        log(`Loaded schema from the hidden DOM element for ${this.schemaUrl}:`, this.schema)
+        this.log(`Loaded schema from the hidden DOM element for ${this.schemaUrl}:`, this.schema)
       } else {
         // Fetch schema from the URL
-        log('Fetching schema from:', this.schemaUrl)
-        this.schema = await fetch(this.schemaUrl)
-        this.schema = await this.schema.json()
-        log('Loaded schema from URL:', this.schema)
+        this.log('Fetching schema from:', this.schemaUrl)
+        const response = await fetch(this.schemaUrl, { signal: this._initController.signal })
+        const schema = await response.json()
+        if (this._destroyed) return
+        this.schema = schema
+        this.log('Loaded schema from URL:', this.schema)
       }
     }
 
@@ -441,10 +430,12 @@ export default class JSEE {
       throw new Error(`Schema is in a wrong format: ${this.schema}`)
     }
 
+    // Model normalization owns its descriptor copy, independently of the caller and other instances.
+    this.schema = cloneSchema(this.schema)
     // Validate schema shape early so init stages fail fast on critical issues
     const schemaValidation = utils.validateSchema(this.schema)
     schemaValidation.warnings.forEach(warning => {
-      log('[Schema validation warning]', warning)
+      this.log('[Schema validation warning]', warning)
     })
     if (schemaValidation.errors.length) {
       const firstError = schemaValidation.errors[0]
@@ -455,7 +446,7 @@ export default class JSEE {
     this.security = utils.normalizeSecurityOptions(this.schema.security)
   }
 
-  async initModel () {
+  async initModel (signal=this._initController.signal) {
     // Model is the main part of the schema that defines all computations
     // At the end it should be an array of objects that define a sequence of tasks
     this.model = []
@@ -470,7 +461,7 @@ export default class JSEE {
       view.forEach(v => {
         v.worker = false // Render should not be in a worker
       })
-      log('View is defined in the schema')
+      this.log('View is defined in the schema')
     }
 
     // Check if model is a function (model)
@@ -490,7 +481,7 @@ export default class JSEE {
 
     // Check if model is empty — allow identity pipeline (no model)
     if (this.model.length === 0) {
-      log('No model defined, using identity pipeline')
+      this.log('No model defined, using identity pipeline')
       return
     }
 
@@ -530,17 +521,19 @@ export default class JSEE {
         if (modelCode) {
           // Code block found in the hidden element, use its content
           m.code = modelCode
-          log(`Loaded code from the hidden DOM element for ${m.url}`)
+          this.log(`Loaded code from the hidden DOM element for ${m.url}`)
         } else {
           // Update model URL if needed
           if (!m.url.includes('/') && this.schemaUrl && this.schemaUrl.includes('/')) {
             m.url = window.location.protocol + '//' + window.location.host + this.schemaUrl.split('/').slice(0, -1).join('/') + '/' + m.url
-            log(`Changed the old model URL to ${m.url} (based on the schema URL)`)
+            this.log(`Changed the old model URL to ${m.url} (based on the schema URL)`)
           }
-          log('Loaded code from:', m.url)
+          this.log('Loaded code from:', m.url)
           utils.assertNetworkAllowed(m.url, this.security, `model[${i}].url`)
-          m.code = await fetch(m.url)
-          m.code = await m.code.text()
+          const response = await fetch(m.url, { signal })
+          const code = await response.text()
+          if (this._destroyed) return
+          m.code = code
         }
       }
 
@@ -548,10 +541,10 @@ export default class JSEE {
       if (typeof m.name === 'undefined'){
         if ((m.url) && isJavascriptModelUrl(m.url)) {
           m.name = m.url.split('/').pop().split('.')[0]
-          log('Use model name from url:', m.name)
+          this.log('Use model name from url:', m.name)
         } else if (m.code) {
           m.name = getName(m.code)
-          log('Use model name from code:', m.name)
+          this.log('Use model name from code:', m.name)
         }
       }
 
@@ -613,11 +606,12 @@ export default class JSEE {
             utils.assertNetworkAllowed(imp._rawUrl || imp.url, this.security, 'worker CSS import')
           }
           await utils.importScripts(imp)
+          if (this._destroyed) return
         }
       }
     } // end of model-loop
 
-    log('Models initialized:', this.model.length)
+    this.log('Models initialized:', this.model.length)
   }
 
   async initInputs () {
@@ -630,9 +624,9 @@ export default class JSEE {
         const inferred = utils.inferInputsFromModel(this.model[0], {
           inferTypes: this.schema.inferInputTypes === true
         })
-        log('Trying to infer inputs from params:', inferred.inputs.map(input => input.name))
+        this.log('Trying to infer inputs from params:', inferred.inputs.map(input => input.name))
         inferred.warnings.forEach(warning => {
-          log('[Schema inference warning]', warning)
+          this.log('[Schema inference warning]', warning)
         })
         this.schema.inputs = inferred.inputs
       } else {
@@ -642,7 +636,7 @@ export default class JSEE {
 
     // Read URL params, e.g. ?input1=1&input2=2
     const urlParams = new URLSearchParams(window.location.search)
-    log('URL params:', urlParams)
+    this.log('URL params:', urlParams)
 
     // Iterate over inputs and set values from URL
     this.schema.inputs.forEach(input => {
@@ -653,7 +647,7 @@ export default class JSEE {
 
       // Get input value from URL params
       const paramValue = utils.getUrlParam(urlParams, input)
-      log(`Param value for ${input.name}:`, paramValue)
+      this.log(`Param value for ${input.name}:`, paramValue)
 
       if (paramValue === null) return
       if (input.type === 'file') {
@@ -663,14 +657,15 @@ export default class JSEE {
       }
       input.default = utils.coerceParam(paramValue, input.type, input.name)
     })
-    log('Inputs are:', this.schema.inputs)
+    this.log('Inputs are:', this.schema.inputs)
     applySecurityToInputs(this.schema.inputs, this.security)
+    this.streamInputConfig = collectStreamInputConfig(this.schema.inputs)
   }
 
   initVue () {
     return new Promise((resolve, reject) => {
       try {
-        log('Initializing VUE')
+        this.log('Initializing VUE')
         this.app = createVueApp(this, (container) => {
           // Called when the app is mounted
           // FYI "this" here refers to port object
@@ -680,7 +675,7 @@ export default class JSEE {
           // Init overlay
           this.overlay = new Overlay(this.inputsContainer ? this.inputsContainer : this.outputsContainer, this.overlayId)
           resolve()
-        }, log)
+        }, this.log)
         this.data = this.app.$data
       } catch (err) {
         reject(err)
@@ -688,19 +683,26 @@ export default class JSEE {
     })
   }
 
-  async initPipeline () {
-    // Initial identity operation (just pass the input to output)
-    this.pipeline = (inputs) => inputs
+  async initPipeline (checkCancelled=() => {}) {
+    const stages = []
+    this.pipeline = inputs => {
+      const runToken = this._runToken
+      return runPipeline(stages, inputs, () => {
+        // Cancellation remains attached to this invocation even after the next Run resets state.
+        if (this._runToken !== runToken) throw new Error('Cancelled')
+      })
+    }
     // Async for-loop over this.model (again)
     for (const [i, m] of this.model.entries()) {
+      checkCancelled()
       let modelFunc
       if (m.worker) {
         // Init worker model
-        log(`[Init pipeline] Initializing model ${i} in a worker: ${m.name || m.url}`)
+        this.log(`[Init pipeline] Initializing model ${i} in a worker: ${m.name || m.url}`)
         modelFunc = await this.initWorker(m)
       } else {
         // Init specific model types
-        log(`[Init pipeline] Initializing model ${i} in the main thread: ${m.name || m.url}`)
+        this.log(`[Init pipeline] Initializing model ${i} in the main thread: ${m.name || m.url}`)
         switch (m.type) {
           case 'py':
             modelFunc = await this.initPython(m)
@@ -714,7 +716,7 @@ export default class JSEE {
             break
           case 'get':
           case 'post':
-            log('Initializing API model')
+            this.log('Initializing API model')
             modelFunc = await this.initAPI(m)
             break
           default:
@@ -722,50 +724,32 @@ export default class JSEE {
             throw new Error(`No type information: ${m.type}`)
         }
 
+        if (this._destroyed) return
         const streamInputConfig = this.streamInputConfig || {}
         const hasStreamInputs = Object.keys(streamInputConfig).length > 0
         if (hasStreamInputs) {
           const originalModelFunc = modelFunc
           modelFunc = (inputs) => {
+            const context = this._createRunContext()
             const wrappedInputs = utils.wrapStreamInputs(inputs, streamInputConfig, {
-              isCancelled: () => this.isCancelled(),
-              onProgress: (value) => this.progress(value)
+              isCancelled: context.isCancelled,
+              onProgress: context.progress
             })
             return originalModelFunc(wrappedInputs)
           }
         }
       }
 
-      this.pipeline = (p => {
-        return async (inputs) => {
-          const resPrev = await p(inputs)
-          // Early stop if resPrev is object and has stop flag
-          if (isObject(resPrev) && resPrev.stop) {
-            log('[Pipeline] Stopping the pipeline due to stop flag in the result')
-            return resPrev
-          }
-          const resNext = await modelFunc(resPrev)
-          if (isObject(resNext) && isObject(resPrev)) {
-            // If both results are objects, merge them
-            log(`[Pipeline] Merging results: ${Object.keys(resPrev).join(', ')} + ${Object.keys(resNext).join(', ')}`)
-            return Object.assign({}, resPrev, resNext)
-          } else if (typeof resNext !== 'undefined') {
-            // If next result is defined, return it
-            return resNext
-          } else {
-            // Otherwise return previous result (pass through)
-            log('[Pipeline] Passing through the previous result')
-            return resPrev
-          }
-        }
-      })(this.pipeline)
+      if (this._destroyed) return
+      checkCancelled()
+      stages.push(modelFunc)
 
       notyf.success('Pipeline initialized')
       this.overlay.hide()
     }
 
     if (this.model.length === 0) {
-      log('Identity pipeline ready (no model)')
+      this.log('Identity pipeline ready (no model)')
       this.overlay.hide()
     }
   }
@@ -777,7 +761,7 @@ export default class JSEE {
 
     // Init worker with the model
     if (typeof model.code === 'function') {
-      log('Convert code in schema to string for WebWorker')
+      this.log('Convert code in schema to string for WebWorker')
       model.code = model.code.toString()
     }
 
@@ -789,78 +773,87 @@ export default class JSEE {
 
     // Timeout prevents permanently frozen UI if worker hangs (default 30s, configurable via model.timeout)
     const timeoutMs = model.timeout || DEFAULT_WORKER_TIMEOUT
-    this._cancelWorkerRun = () => worker.postMessage({ _cmd: 'cancel' })
+    this._cancelWorkerRun = () => worker.postMessage({ _jsee: 'cancel' })
     let workerInitialized = false
 
     const modelFunc = (inputs) => {
       const isInitCall = utils.isWorkerInitMessage(inputs, workerInitialized)
       const payload = isInitCall
         ? inputs
-        : utils.toWorkerSerializable(inputs)
+        : { _jsee: 'run', value: utils.toWorkerSerializable(inputs) }
 
       let rejectWorkerRun = null
+      let acceptingMessages = true
       const workerPromise = new Promise((resolve, reject) => {
         rejectWorkerRun = reject
         this._rejectWorkerRun = reject
         worker.onmessage = (e) => {
+          if (!acceptingMessages) return
           const res = e.data
-          if ((typeof res === 'object') && (res._status)) {
-            switch (res._status) {
+          if (res && (res._jsee || res._status)) {
+            // Raw _status/_partial messages remain the legacy model-posted callback API.
+            switch (res._jsee || res._status) {
+              case 'result':
+                this.progress(0)
+                resolve(res.value)
+                break
+              case 'partial':
+                this.output(res.value, true)
+                break
               case 'loaded':
                 notyf.success('Loaded model (in worker)')
-                log('Loaded model (in worker):', res)
+                this.log('Loaded model (in worker):', res)
                 this.progress(0)
                 workerInitialized = true
                 resolve(res)
                 break
               case 'log':
-                log(...res._log)
+                this.log(...res._log)
                 break
               case 'progress':
                 this.progress(res._progress)
                 break
               case 'error':
                 notyf.error(res._error)
-                log('Error from worker:', res._error)
+                this.log('Error from worker:', res._error)
                 this.progress(0)
                 reject(res._error)
                 break
+              default:
+                resolve(res)
+                break
             }
-          } else if ((typeof res === 'object') && res._partial) {
+          } else if (res && res._partial) {
             // Partial/streaming result: update outputs without resolving the promise
-            log('Partial result from worker:', Object.keys(res))
+            this.log('Partial result from worker:', Object.keys(res))
             const partial = { ...res }
             delete partial._partial
-            this.output(partial)
+            this.output(partial, true)
           } else {
-            log('Response from worker:', res)
+            this.log('Response from worker:', res)
             this.progress(0)
             resolve(res)
           }
         }
         worker.onerror = (e) => {
+          if (!acceptingMessages) return
           notyf.error(e.message)
-          log('Error from worker:', e)
+          this.log('Error from worker:', e)
           this.progress(0)
           reject(e)
         }
         try {
-          // Transfer ArrayBuffers for zero-copy WASM passing
-          const transferables = utils.collectTransferables(payload)
-          if (transferables.length) {
-            worker.postMessage(payload, transferables)
-          } else {
-            worker.postMessage(payload)
-          }
+          // Structured cloning preserves caller-owned buffers for later runs and pipeline stages.
+          worker.postMessage(payload)
         } catch (error) {
           const hasBinaryPayload = utils.containsBinaryPayload(payload)
           if (hasBinaryPayload) {
             const message = 'Worker postMessage failed for payload with File/Blob/binary data. JSON fallback would drop that data.'
-            log(message, error)
+            this.log(message, error)
             reject(new Error(message))
             return
           }
-          log('Worker postMessage failed, retrying with JSON fallback. Complex objects may lose metadata.', error)
+          this.log('Worker postMessage failed, retrying with JSON fallback. Complex objects may lose metadata.', error)
           try {
             const fallbackPayload = JSON.parse(JSON.stringify(payload))
             worker.postMessage(fallbackPayload)
@@ -868,6 +861,9 @@ export default class JSEE {
             reject(fallbackError)
           }
         }
+      }).finally(() => {
+        // A settled stage must not keep accepting presentation callbacks while idle.
+        acceptingMessages = false
       })
 
       // Skip timeout for init call (loading model can be slow); apply to execution calls
@@ -879,14 +875,16 @@ export default class JSEE {
         timeoutId = setTimeout(() => {
           if (settled) return
           settled = true
-          try { worker.terminate() } catch (e) { /* ignore */ }
-          this._workers = this._workers.filter(w => w !== worker)
+          // Pipeline closures retain every worker, so rebuilding requires disposing the whole set.
+          this._terminateWorkers()
+          this._needsModelReinit = true
           reject(new Error(`Worker timed out after ${timeoutMs}ms`))
         }, timeoutMs)
       })
       return Promise.race([workerPromise, timeoutPromise])
         .finally(() => {
           settled = true
+          acceptingMessages = false
           if (timeoutId !== null) clearTimeout(timeoutId)
           if (this._rejectWorkerRun === rejectWorkerRun) {
             this._rejectWorkerRun = null
@@ -897,6 +895,7 @@ export default class JSEE {
     // Initial worker call with model definition and stream input config
     const modelInitPayload = Object.assign({}, model, {
       _streamInputConfig: this.streamInputConfig || {},
+      _inputNames: Object.keys(collectInputValues(this.schema.inputs, () => null)),
       _security: this.security
     })
     await modelFunc(modelInitPayload)
@@ -920,14 +919,17 @@ export default class JSEE {
       utils.assertEvalAllowed(this.security, 'cached Pyodide loader script')
     }
     const preparedRuntimeOptions = await utils.preparePyodideRuntimeOptions(runtimeOptions, window)
+    if (this._destroyed) return
     utils.assertPyodideNetworkAllowed(preparedRuntimeOptions, this.security)
     if (typeof loadPyodide === 'undefined') {
       const runtimeImport = preparedRuntimeOptions.code
         ? { url: preparedRuntimeOptions.url, code: preparedRuntimeOptions.code }
         : preparedRuntimeOptions.url
       await utils.importScripts(runtimeImport)
+      if (this._destroyed) return
     }
     const pyodide = await loadPyodide(utils.getPyodideLoadOptions(preparedRuntimeOptions))
+    if (this._destroyed) return
     if (model.imports && Array.isArray(model.imports) && model.imports.length) {
       if (this.security.allowNetwork === false && !preparedRuntimeOptions.embeddedAssets) {
         throw new Error('security.allowNetwork is false; blocked Pyodide package loading')
@@ -937,13 +939,14 @@ export default class JSEE {
         .filter(Boolean)
       await pyodide.loadPackage(packages)
     } else if (this.security.allowNetwork === false) {
-      log('Skipping Pyodide loadPackagesFromImports because security.allowNetwork is false')
+      this.log('Skipping Pyodide loadPackagesFromImports because security.allowNetwork is false')
     } else {
       await pyodide.loadPackagesFromImports(model.code)
     }
+    if (this._destroyed) return
     const entry = utils.getPyodideEntryName(model)
     const bindInputs = (data) => utils.bindPyodideInputs(pyodide, data, window, {
-      warn: message => log('[Pyodide input warning]', message)
+      warn: message => this.log('[Pyodide input warning]', message)
     })
     if (entry) {
       await pyodide.runPythonAsync(model.code)
@@ -974,7 +977,7 @@ export default class JSEE {
 
     // Load imports if defined (before calling the model)
     if (model.imports && model.imports.length) {
-      log('Loading imports from schema')
+      this.log('Loading imports from schema')
       utils.assertImportNetworkAllowed(model.imports, this.security, 'model.imports')
       model.imports.forEach((imp, index) => {
         if (imp && imp.code && !utils.isCssImport(imp.url)) {
@@ -982,6 +985,7 @@ export default class JSEE {
         }
       })
       await utils.importScripts(...model.imports)
+      if (this._destroyed) return
       notyf.success('Loaded: JS imports')
     }
 
@@ -993,20 +997,21 @@ export default class JSEE {
       }
       utils.assertNetworkAllowed(model.url, this.security, 'module model URL')
       const moduleUrl = model._moduleUrl || utils.getUrl(model.url)
-      log('Loading module model from:', moduleUrl)
+      this.log('Loading module model from:', moduleUrl)
       const mod = await import(/* webpackIgnore: true */ moduleUrl)
+      if (this._destroyed) return
       target = utils.getModuleModelTarget(mod, model)
     } else if (typeof model.code === 'string') {
       // 1 -> 2
       // Danger zone
       utils.assertEvalAllowed(this.security, 'JavaScript model.code')
       if (model.name) {
-        log('Evaluating code from string (has name)')
+        this.log('Evaluating code from string (has name)')
         target = Function(
           `${model.code} ;return ${model.name}`
         )()
       } else {
-        log('Evaluating code from string (no name)')
+        this.log('Evaluating code from string (no name)')
         target = eval(`(${model.code})`) // ( ͡° ͜ʖ ͡°) YEAHVAL
       }
     } else {
@@ -1016,30 +1021,43 @@ export default class JSEE {
     if (typeof target === 'undefined' && model.url && model.type !== 'module') {
       utils.assertNetworkAllowed(model.url, this.security, 'JavaScript model URL')
       const scriptUrl = utils.getUrl(model.url)
-      log('Loading script from URL:', scriptUrl)
+      this.log('Loading script from URL:', scriptUrl)
       await utils.importScripts(scriptUrl)
+      if (this._destroyed) return
       if (!model.name) {
         throw new Error('JavaScript URL model requires model.name when code is not fetched')
       }
       target = window[model.name]
     }
 
-    const modelFunc = await utils.getModelFuncJS(model, target, this)
+    const inputNames = Object.keys(collectInputValues(this.schema.inputs, () => null))
+    const modelFunc = await utils.getModelFuncJS(model, target, this, inputNames, () => this._createRunContext())
     return modelFunc
   }
 
   initAPI (model) {
-    log('Initializing API model:', model)
+    this.log('Initializing API model:', model)
     this.overlay.hide()
     if (model.worker) {
       // Worker:
       this.worker.postMessage(model)
     } else {
-      // Main: pass onChunk callback for SSE streaming
-      const onChunk = model.stream ? (chunk) => {
-        this.output(chunk)
-      } : undefined
-      return utils.getModelFuncAPI(model, log, onChunk, this.security)
+      const request = utils.getModelFuncAPI(model, this.log, undefined, this.security)
+      return async data => {
+        const runToken = this._runToken
+        const controller = new AbortController()
+        this._apiRequests.add(controller)
+        try {
+          return await request(data, {
+            signal: controller.signal,
+            onChunk: model.stream ? chunk => {
+              if (this._runToken === runToken && !controller.signal.aborted) this.output(chunk, true)
+            } : undefined
+          })
+        } finally {
+          this._apiRequests.delete(controller)
+        }
+      }
     }
   }
 
@@ -1074,7 +1092,7 @@ export default class JSEE {
         if (!runSucceeded || !this._intervalLoop || this._intervalToken !== intervalToken || this.isCancelled()) {
           break
         }
-        log('Interval is defined:', intervalDelay)
+        this.log('Interval is defined:', intervalDelay)
         if (this.data) this.data.running = true
         await utils.delay(intervalDelay)
       }
@@ -1101,6 +1119,7 @@ export default class JSEE {
   }
 
   async runOnce (caller='run') {
+    if (this._destroyed) return false
     // caller can be:
     // 1. custom input button name
     // 2. `run`
@@ -1110,17 +1129,13 @@ export default class JSEE {
     // Prevent overlapping runs: automatic calls are dropped, manual clicks queue
     if (this.running) {
       if (caller === 'autorun' || caller === 'reactive' || caller === 'interval') return false
-      log('Run already in progress, queuing', caller)
+      this.log('Run already in progress, queuing', caller)
       this._pendingRun = caller
       return false
     }
 
-    // Re-init model if workers were terminated by cancelCurrentRun
-    if (this._needsModelReinit) {
-      this._needsModelReinit = false
-      await this.initModel()
-      await this.initPipeline()
-    }
+    // Programmatic, queued, and UI calls share the browser's control validation.
+    if (this.app && this.app.validateInputs()) return false
 
     const schema = this.schema
     const data = this.data
@@ -1129,25 +1144,30 @@ export default class JSEE {
     let runSucceeded = false
     let rejectCurrentRun = null
     // Run token to detect stale results when worker.onmessage gets rebound
-    const runToken = this._runToken = {}
+    const runToken = this._runToken = { active: true }
+    const checkCancelled = () => {
+      if (this._destroyed || this._runToken !== runToken) throw new Error('Cancelled')
+    }
 
     try {
-      log('Running the pipeline...')
-      // Collect input values
-      let inputValues = {}
-      data.inputs.forEach(input => {
-        // Skip buttons
-        if (input.name && !(input.type === 'action' || input.type === 'button')) {
-          inputValues[input.name] = getValue(input)
-        } else if (input.type === 'group' && !input.name && input.elements) {
-          // Unnamed groups (e.g. tabs layout): flatten children into top-level
-          input.elements.forEach(el => {
-            if (el.name) {
-              inputValues[el.name] = getValue(el)
-            }
-          })
+      // Rebuilding owns the run slot too; keep retry set until every stage is ready.
+      if (this._needsModelReinit) {
+        this._reinitController = new AbortController()
+        try {
+          await this.initModel(this._reinitController.signal)
+          checkCancelled()
+          await this.initPipeline(checkCancelled)
+          checkCancelled()
+          this._needsModelReinit = false
+        } finally {
+          this._reinitController = null
+          if (this._needsModelReinit) this._terminateWorkers()
         }
-      })
+      }
+      this.log('Running the pipeline...')
+      // Collect input values
+      let inputValues = collectInputValues(data.inputs)
+      inputValues = prepareInputs(schema.inputs, inputValues)
       // For folder inputs with select mode, filter to selected files
       data.inputs.forEach(input => {
         if (input.type === 'folder' && input.select && Array.isArray(inputValues[input.name])) {
@@ -1156,22 +1176,24 @@ export default class JSEE {
         }
       })
 
-      // Add caller to input values so we can change model behavior based on it
-      inputValues.caller = caller
+      // Preserve legacy metadata injection without overwriting declared computation inputs.
+      const declaredInputs = collectInputValues(schema.inputs, () => null)
+      if (!hasOwn(declaredInputs, 'caller')) inputValues.caller = caller
 
       // Chat mode: inject history and capture user message
       const chatOutput = this.data.outputs
         ? this.data.outputs.find(o => o.type === 'chat')
         : null
       if (chatOutput) {
-        inputValues.history = chatOutput._messages || []
+        delete chatOutput._streamedResponse
+        if (!hasOwn(declaredInputs, 'history')) inputValues.history = chatOutput._messages || []
         this._lastChatMessage = inputValues.message || ''
       }
 
       // Convert declared arrayBuffer inputs to typed arrays for WASM efficiency
       inputValues = utils.wrapTypedArrayInputs(inputValues, schema.inputs)
 
-      log('Input values:', inputValues)
+      this.log('Input values:', inputValues)
       this.overlay.show()
       if (this.data) this.data.running = true
 
@@ -1180,10 +1202,13 @@ export default class JSEE {
         rejectCurrentRun = reject
         this._rejectRun = reject
       })
-      const pipelinePromise = Promise.resolve().then(() => this.pipeline(inputValues))
+      const pipelinePromise = Promise.resolve().then(() => {
+        checkCancelled()
+        return this.pipeline(inputValues)
+      })
       pipelinePromise.catch(err => {
         if (this.cancelled || this._runToken !== runToken) {
-          log('Cancelled pipeline settled:', err)
+          this.log('Cancelled pipeline settled:', err)
         }
       })
       const results = await Promise.race([pipelinePromise, cancelPromise])
@@ -1207,14 +1232,15 @@ export default class JSEE {
       runSucceeded = true
     } catch (err) {
       // Silently ignore cancellation errors from cancelCurrentRun()
-      if (this.cancelled && err && err.message === 'Cancelled') {
-        log('Run cancelled by user')
+      if (this._runToken !== runToken) {
+        this.log('Run cancelled by user')
       } else {
         // Surface pipeline/worker errors so they don't silently swallow failures
-        log('Pipeline error:', err)
+        this.log('Pipeline error:', err)
         notyf.error(typeof err === 'string' ? err : (err.message || 'Pipeline error'))
       }
     } finally {
+      runToken.active = false
       if (this._rejectRun === rejectCurrentRun) {
         this._rejectRun = null
       }
@@ -1234,7 +1260,7 @@ export default class JSEE {
       if (this._pendingRun) {
         const pending = this._pendingRun
         this._pendingRun = null
-        this.run(pending).catch(err => log('Queued run error:', err))
+        this.run(pending).catch(err => this.log('Queued run error:', err))
       }
     }
     return runSucceeded
@@ -1253,7 +1279,7 @@ export default class JSEE {
         const resolved = resolveOutputResult(res, output)
         if (resolved.found) {
           const r = resolved.value
-          log(`Updating output: ${output.name} with data: ${typeof r}`)
+          this.log(`Updating output: ${output.name} with data: ${typeof r}`)
           if (output.type === 'file') {
             const fileValue = utils.normalizeFileOutputValue(output, r)
             if (typeof fileValue.filename === 'string') output.filename = fileValue.filename
@@ -1288,14 +1314,15 @@ export default class JSEE {
     })
   }
 
-  output (res) {
+  output (res, partial=false) {
+    if (this._destroyed) return
     // Edge case: no output field with reactivity is handled — undefined results exit early
 
     if (typeof res === 'undefined') {
       return
     }
 
-    log('[Output] Got output results of type:', typeof res)
+    this.log('[Output] Got output results of type:', typeof res)
 
     // Normalize primitive results to {result: value} for consistent rendering
     // regardless of execution mode (browser worker vs server POST)
@@ -1308,40 +1335,43 @@ export default class JSEE {
     const inputNames = this.schema.inputs ? this.schema.inputs.map(i => i.name) : []
     const outputNames = collectOutputNames(this.data.outputs || this.schema.outputs || [])
     const resultKeys = isObject(res) ? Object.keys(res) : []
-    log('Input names:', inputNames)
+    this.log('Input names:', inputNames)
 
     if (isObject(res)) {
-      // Drop system fields
-      delete res.caller
-      delete res.stop
-      delete res._status
-      delete res._log
-      delete res._progress
-      log('Processing results as an object:', res)
+      // UI routing consumes fields; keep the computation's result intact for later stages.
+      res = cleanOutputMetadata(res, this.data.outputs || this.schema.outputs)
+      this.log('Processing results as an object:', res)
 
       // Chat mode: accumulate messages instead of replacing output
       if (this.data.outputs) {
         this.data.outputs.forEach(output => {
           if (output.type !== 'chat' || typeof res[output.name] === 'undefined') return
           if (!output._messages) output._messages = []
-          if (this._lastChatMessage) {
+          const previous = output._streamedResponse
+          if (this._lastChatMessage && !previous) {
             output._messages.push({ role: 'user', content: this._lastChatMessage })
           }
           const response = res[output.name]
+          let message
           if (typeof response === 'string') {
-            output._messages.push({ role: 'assistant', content: response })
+            message = { role: 'assistant', content: response }
           } else if (isObject(response) && response.content) {
-            output._messages.push({ role: response.role || 'assistant', content: response.content })
+            message = { role: response.role || 'assistant', content: response.content }
           }
+          // Completion repeats the last stream value; append each delivered chunk once.
+          if (message && (partial || !previous || previous.role !== message.role || previous.content !== message.content)) {
+            output._messages.push(message)
+          }
+          if (partial) output._streamedResponse = message
+          else delete output._streamedResponse
           delete res[output.name]
         })
       }
 
       if (this.model.length === 0) {
         // Identity mode: all keys become outputs, auto-detect types
-        log('Identity mode: creating outputs from all result keys')
+        this.log('Identity mode: creating outputs from all result keys')
         this.data.outputs = Object.keys(res)
-          .filter(key => key !== 'caller')
           .map(key => ({
             name: key,
             type: utils.inferOutputType(key, res[key]),
@@ -1350,16 +1380,16 @@ export default class JSEE {
       } else if (this.data.outputs && this.data.outputs.length
           && resultKeys.some(key => outputNames.has(key))) {
         // Declared outputs win over input updates when names overlap.
-        log('Updating outputs from matching result keys:', Object.keys(res))
+        this.log('Updating outputs from matching result keys:', Object.keys(res))
         this._mapResultsToOutputs(this.data.outputs, res)
       } else if (resultKeys.length > 0 && resultKeys.every(key => inputNames.includes(key))) {
         // Update input fields from results
         // e.g. loading a csv file and updating list of target variables
         // This will be dynamically updated in the UI
-        log('Updating inputs from results with keys:', Object.keys(res))
+        this.log('Updating inputs from results with keys:', Object.keys(res))
         this.data.inputs.forEach((input, i) => {
           if (input.name && (typeof res[input.name] !== 'undefined')) {
-            log(`Updating input: ${input.name} with data: ${res[input.name]}`)
+            this.log(`Updating input: ${input.name} with data: ${res[input.name]}`)
             const r = res[input.name]
             if (typeof r === 'object') {
               Object.keys(r).forEach(k => {
@@ -1372,15 +1402,14 @@ export default class JSEE {
         })
       } else if (this.data.outputs && this.data.outputs.length) {
         // Update outputs from results
-        log('Updating outputs from results with keys:', Object.keys(res))
+        this.log('Updating outputs from results with keys:', Object.keys(res))
         this._mapResultsToOutputs(this.data.outputs, res)
       } else if (!this.schema.render && !this.schema.view) {
         // There's no render or view defined in the schema, also:
         // No outputs defined, create outputs from results
-        log('Creating outputs from results with keys:', Object.keys(res))
+        this.log('Creating outputs from results with keys:', Object.keys(res))
         this.data.outputs = Object.keys(res)
           .filter(key => !inputNames.includes(key))
-          .filter(key => key !== 'caller') // Filter out caller
           .map(key => {
             return {
               'name': key,

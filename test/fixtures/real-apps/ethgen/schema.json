@@ -1,0 +1,17 @@
+{
+  "model": {
+    "name": "ethgen",
+    "type": "function",
+    "url": "bundle.js",
+		"worker": true,
+    "autorun": true
+  },
+	"design": {
+		"grid": [2, 10]
+	},
+  "outputs": [
+    { "name": "Address", "type": "code", "filename": "eth.pub" },
+    { "name": "Private key", "type": "code", "filename": "eth.key" }
+  ]
+}
+

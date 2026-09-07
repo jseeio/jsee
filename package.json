@@ -1,6 +1,6 @@
 {
   "name": "@jseeio/jsee",
-  "version": "0.8.8",
+  "version": "0.9.0",
   "description": "JavaScript Execution Environment",
   "type": "commonjs",
   "main": "src/cli.js",
@@ -40,7 +40,12 @@
       "require": "./src/browser-bundle-node.js",
       "default": "./dist/jsee.runtime.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./schema": {
+      "types": "./src/schema.d.ts",
+      "default": "./src/schema.js"
+    },
+    "./schema.json": "./schema.json"
   },
   "unpkg": "dist/jsee.core.js",
   "jsdelivr": "dist/jsee.core.js",
@@ -56,26 +61,30 @@
     "templates/",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "schema.json"
   ],
   "private": false,
   "scripts": {
     "build-dev": "webpack --mode=development --progress --stats-children --env DEVELOPMENT && node scripts/compat-runtime.js",
     "build-full": "webpack --mode=production --progress --env FULL",
-    "build": "webpack --mode=production --progress && webpack --mode=production --progress --env FULL && node scripts/compat-runtime.js && npm test",
+    "build": "webpack --mode=production --progress && webpack --mode=production --progress --env FULL && node scripts/compat-runtime.js && npm run copy-runtime-py && npm test",
+    "build:python": "npm run build && python -m build py",
     "watch-dev": "nodemon --watch . --ignore dist,.git --ext vue,js,css,html --exec 'npm run build-dev'",
     "watch": "nodemon --watch . --ignore dist,.git --ext vue,js,css,html --exec 'npm run build-dev && npm run test:basic'",
     "prepublishOnly": "npm run build",
-    "test": "npm run test:unit && npm run test:e2e",
+    "test": "npm run test:types && npm run test:unit && npm run test:e2e",
     "test:unit": "jest --config jest.unit.config.js",
-    "test:e2e": "npx playwright test test/test-basic.pw.js test/test-inputs.pw.js",
+    "test:e2e": "npx playwright test test/test-basic.pw.js test/test-inputs.pw.js test/test-execution.pw.js",
     "test:basic": "npx playwright test test/test-basic.pw.js",
     "test:inputs": "npx playwright test test/test-inputs.pw.js",
     "test:python": "npx playwright test test/test-python.pw.js",
+    "test:python-native": "python -m pytest py/test/ -q",
     "test:probes": "node test/probes/run.js",
     "test-head": "HEADLESS=false npm test",
     "lint": "eslint src/ test/",
-    "copy-runtime-py": "mkdir -p py/jsee/static && cp dist/jsee.core.js py/jsee/static/jsee.core.js && cp dist/jsee.full.js py/jsee/static/jsee.full.js"
+    "copy-runtime-py": "mkdir -p py/jsee/static && cp dist/jsee.core.js py/jsee/static/jsee.core.js && cp dist/jsee.full.js py/jsee/static/jsee.full.js && cp schema.json py/jsee/static/schema.json",
+    "test:types": "tsc --project test/types/tsconfig.json"
   },
   "bin": {
     "jsee": "./bin/jsee"
@@ -102,7 +111,6 @@
     "url": "https://github.com/jseeio/jsee/issues"
   },
   "dependencies": {
-    "@mdi/font": "^6.5.95",
     "@observablehq/plot": "^0.6",
     "csv-parse": "^5.6.0",
     "dom-to-image": "^2.6.0",
@@ -116,10 +124,8 @@
     "notyf": "^3.10.0",
     "three": "^0.170",
     "vue": "^3.2.47",
-    "vue-file-picker": "^0.0.2",
     "vue-style-loader": "^4.1.3",
-    "vue3-json-viewer": "^2.2.2",
-    "vuex": "^4.0.2"
+    "vue3-json-viewer": "^2.2.2"
   },
   "optionalDependencies": {
     "esbuild": "^0.28.1"
@@ -129,6 +135,7 @@
     "@babel/plugin-transform-runtime": "^7.4.4",
     "@babel/preset-env": "^7.16.5",
     "@playwright/test": "^1.58.2",
+    "ajv": "8.20.0",
     "babel-loader": "^9.1.2",
     "css-loader": "^6.7.3",
     "eslint": "^8.57.1",
@@ -140,7 +147,7 @@
     "source-map-loader": "^4.0.1",
     "style-loader": "^3.3.2",
     "terser-webpack-plugin": "^5.3.7",
-    "uglify-es": "^3.3.9",
+    "typescript": "7.0.2",
     "vue-loader": "^17.0.1",
     "webpack": "^5.78.0",
     "webpack-cli": "^5.0.1",

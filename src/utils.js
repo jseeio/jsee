@@ -1,8 +1,14 @@
+const { assertSchemaVersion, jseeInputsToJsonSchema, collectInputValues } = require('./schema')
 const { DEFAULT_CHUNK_SIZE, STREAM_HIGH_WATER } = require('./constants')
 
 // https://stackoverflow.com/questions/8511281/check-if-a-value-is-an-object-in-javascript
 function isObject (item) {
   return (typeof item === 'object' && !Array.isArray(item) && item !== null)
+}
+
+function isArrayBuffer (value) {
+  // Views can expose buffers created in another realm (iframes or Node VM contexts).
+  return Object.prototype.toString.call(value) === '[object ArrayBuffer]'
 }
 
 function isBinaryLike (value) {
@@ -166,40 +172,9 @@ function containsBinaryPayload (value, seen=new WeakSet()) {
   return false
 }
 
-const VALID_INPUT_TYPES = [
-  'int',
-  'float',
-  'number',
-  'string',
-  'color',
-  'text',
-  'categorical',
-  'select',
-  'bool',
-  'checkbox',
-  'file',
-  'group',
-  'action',
-  'button',
-  'slider',
-  'radio',
-  'toggle',
-  'date',
-  'multi-select',
-  'range',
-  'folder'
-]
-
-const VALID_MODEL_TYPES = [
-  'function',
-  'class',
-  'module',
-  'async-init',
-  'async-function',
-  'get',
-  'post',
-  'py'
-]
+const descriptor = require('../schema.json')
+const VALID_INPUT_TYPES = descriptor.definitions.inputType.enum
+const VALID_MODEL_TYPES = descriptor.definitions.modelType.enum
 
 const SECURITY_FLAGS = [
   'allowEval',
@@ -379,6 +354,33 @@ const URL_ATTRS = new Set(['href', 'src', 'poster', 'xlink:href'])
 
 function sanitizeName (inputName) {
   return inputName.toLowerCase().replace(/[^a-z0-9_]/g, '_')
+}
+
+function outputLookupNames (output) {
+  const names = output.name ? [output.name, sanitizeName(output.name)] : []
+  if (output.alias) names.push(...(Array.isArray(output.alias) ? output.alias : [output.alias]))
+  return names.filter(Boolean)
+}
+
+function collectOutputNames (outputs, names=new Set()) {
+  if (!Array.isArray(outputs)) return names
+  for (const output of outputs) {
+    if (!output) continue
+    if (output.type === 'group' && Array.isArray(output.elements)) collectOutputNames(output.elements, names)
+    else outputLookupNames(output).forEach(name => names.add(name))
+  }
+  return names
+}
+
+function cleanOutputMetadata (result, outputs) {
+  if (!isRecordObject(result)) return result
+  const clean = { ...result }
+  const declared = collectOutputNames(outputs)
+  // Legacy control fields stay hidden unless a descriptor explicitly presents them.
+  for (const key of ['caller', 'stop', '_status', '_log', '_progress']) {
+    if (!declared.has(key)) delete clean[key]
+  }
+  return clean
 }
 
 function isWorkerInitMessage (data, initialized=false) {
@@ -786,7 +788,7 @@ function createFetchStream (source, options={}) {
 }
 
 function wrapStreamInputs (inputs, streamConfig={}, options={}) {
-  if (!isObject(inputs)) {
+  if (!isRecordObject(inputs)) {
     return inputs
   }
 
@@ -817,7 +819,7 @@ function wrapStreamInputs (inputs, streamConfig={}, options={}) {
   return wrapped
 }
 
-async function getModelFuncJS (model, target, app) {
+async function getModelFuncJS (model, target, app, inputNames, getContext=() => app) {
   let modelFunc
   switch (model.type) {
     case 'class':
@@ -843,7 +845,9 @@ async function getModelFuncJS (model, target, app) {
       if (Array.isArray(a[0]) && a[0].length && a.length === 1) {
         return modelFunc(...a[0])
       } else if (isObject(a[0]) && a.length === 1) {
-        return modelFunc(...Object.values(a[0]))
+        // Declared arguments are positional; object insertion order and runtime metadata are not.
+        const values = Array.isArray(inputNames) ? inputNames.map(name => a[0][name]) : Object.values(a[0])
+        return modelFunc(...values)
       } else {
         return modelFunc(...a)
       }
@@ -853,7 +857,7 @@ async function getModelFuncJS (model, target, app) {
       if (isObject(a[0]) && a.length === 1) {
         // In case when we have only one input object
         // Pass log and callback to the model function
-        return modelFunc(a[0], app)
+        return modelFunc(a[0], getContext())
       } else {
         return modelFunc(...a)
       }
@@ -1304,70 +1308,103 @@ function parseSSELine (line) {
   }
 }
 
+async function readSSE (response, onChunk) {
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let data = []
+  let event = ''
+  let lastResult = null
+  let complete = false
+  let eof = false
+  const dispatch = () => {
+    if (!data.length) { event = ''; return }
+    const payload = data.join('\n')
+    data = []
+    if (payload.trim() === '[DONE]') { complete = true; return }
+    let value
+    try { value = JSON.parse(payload) } catch (_) { value = payload }
+    if (event === 'error') {
+      throw new Error(value && (value.error || value.message) || String(value || 'Stream failed'))
+    }
+    event = ''
+    lastResult = value
+    if (onChunk) onChunk(value)
+  }
+  const line = text => {
+    if (!text) { dispatch(); return }
+    const colon = text.indexOf(':')
+    const field = colon < 0 ? text : text.slice(0, colon)
+    let value = colon < 0 ? '' : text.slice(colon + 1)
+    if (value.startsWith(' ')) value = value.slice(1)
+    if (field === 'data') data.push(value)
+    else if (field === 'event') event = value
+  }
+  const consume = final => {
+    let start = 0
+    for (let i = 0; i < buffer.length && !complete; i++) {
+      if (buffer[i] !== '\n' && buffer[i] !== '\r') continue
+      // A CRLF may straddle chunks; consume the pair as one line ending.
+      if (buffer[i] === '\r' && i + 1 === buffer.length && !final) break
+      line(buffer.slice(start, i))
+      if (buffer[i] === '\r' && buffer[i + 1] === '\n') i++
+      start = i + 1
+    }
+    buffer = buffer.slice(start)
+  }
+  try {
+    while (!complete) {
+      const { done, value } = await reader.read()
+      if (done) {
+        eof = true
+        buffer += decoder.decode()
+        consume(true)
+        // Preserve JSEE's legacy acceptance of a final frame without a blank line.
+        if (!complete) {
+          if (buffer) line(buffer)
+          dispatch()
+        }
+        break
+      }
+      buffer += decoder.decode(value, { stream: true })
+      consume(false)
+    }
+    return lastResult
+  } finally {
+    try {
+      if (!eof) await reader.cancel()
+    } finally { reader.releaseLock() }
+  }
+}
+
 function getModelFuncAPI (model, log=console.log, onChunk, security) {
-  switch (model.type) {
-    case 'get':
-      return (data) => {
-        assertApiNetworkAllowed(model, security)
-        const query = new URLSearchParams(data).toString()
-        const finalURL = model.url +'?' + query
-        assertNetworkAllowed(finalURL, security, 'GET model URL')
-        log('Sending GET request to:', finalURL)
-        const resPromise = fetch(finalURL)
-          .then(response => response.json())
-        return resPromise
+  if (model.type !== 'get' && model.type !== 'post') return undefined
+  return (data, options={}) => {
+    assertApiNetworkAllowed(model, security)
+    const url = model.type === 'get' ? model.url + '?' + new URLSearchParams(data).toString() : model.url
+    assertNetworkAllowed(url, security, 'API model URL')
+    log('Sending', model.type.toUpperCase(), 'request to', url)
+    const init = model.type === 'post' ? {
+      method: 'POST',
+      headers: { 'Accept': model.stream ? 'text/event-stream' : 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    } : {}
+    if (model.type === 'get' && model.stream) init.headers = { 'Accept': 'text/event-stream' }
+    if (options.signal) init.signal = options.signal
+    const request = Object.keys(init).length ? fetch(url, init) : fetch(url)
+    return request.then(async response => {
+      if (response.ok === false) {
+        const body = await response.text()
+        let message = body
+        try { const value = JSON.parse(body); message = value.error || value.message || body } catch (_) { /* text error */ }
+        const error = new Error(`HTTP ${response.status}: ${message || response.statusText || 'Request failed'}`)
+        error.status = response.status
+        throw error
       }
-    case 'post':
-      return (data) => {
-        assertApiNetworkAllowed(model, security)
-        assertNetworkAllowed(model.url, security, 'POST model URL')
-        log('Sending POST request to', model.url)
-        const accept = model.stream ? 'text/event-stream' : 'application/json'
-        return fetch(model.url, {
-          method: 'POST',
-          headers: {
-            'Accept': accept,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(data)
-        }).then(async (response) => {
-          const contentType = response.headers.get('content-type') || ''
-          // SSE streaming response
-          if (contentType.includes('text/event-stream') && response.body && onChunk) {
-            const reader = response.body.getReader()
-            const decoder = new TextDecoder()
-            let buffer = ''
-            let lastResult = null
-            while (true) {
-              const { done, value } = await reader.read()
-              if (done) break
-              buffer += decoder.decode(value, { stream: true })
-              const lines = buffer.split('\n')
-              buffer = lines.pop()
-              for (const line of lines) {
-                const trimmed = line.trim()
-                if (!trimmed) continue
-                const parsed = parseSSELine(trimmed)
-                if (parsed !== null) {
-                  lastResult = parsed
-                  onChunk(parsed)
-                }
-              }
-            }
-            // Process any remaining buffer
-            buffer += decoder.decode()
-            if (buffer.trim()) {
-              const parsed = parseSSELine(buffer.trim())
-              if (parsed !== null) {
-                lastResult = parsed
-                onChunk(parsed)
-              }
-            }
-            return lastResult
-          }
-          return response.json()
-        })
-      }
+      const contentType = response.headers && response.headers.get('content-type') || ''
+      if (contentType.includes('text/event-stream') && response.body) return readSSE(response, options.onChunk || onChunk)
+      return response.json()
+    })
   }
 }
 
@@ -1386,8 +1423,12 @@ function toTypedArray (value, dtype) {
   if (!dtype || !TYPED_ARRAY_CONSTRUCTORS[dtype]) return value
   const Ctor = TYPED_ARRAY_CONSTRUCTORS[dtype]
   if (value instanceof Ctor) return value
-  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
-    return new Ctor(value instanceof ArrayBuffer ? value : value.buffer)
+  if (isArrayBuffer(value)) return new Ctor(value)
+  if (ArrayBuffer.isView(value)) {
+    // Typed arrays carry numeric values; DataView carries an explicitly bounded byte range.
+    return typeof value.BYTES_PER_ELEMENT === 'number'
+      ? new Ctor(value)
+      : new Ctor(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength))
   }
   if (Array.isArray(value)) return new Ctor(value)
   return value
@@ -1404,10 +1445,10 @@ function collectTransferables (value, seen) {
   if (seen.has(value)) return []
   seen.add(value)
   const buffers = []
-  if (value instanceof ArrayBuffer) {
+  if (isArrayBuffer(value)) {
     buffers.push(value)
   } else if (ArrayBuffer.isView(value)) {
-    buffers.push(value.buffer)
+    buffers.push(...collectTransferables(value.buffer, seen))
   } else if (Array.isArray(value)) {
     value.forEach(item => buffers.push(...collectTransferables(item, seen)))
   } else {
@@ -2431,6 +2472,12 @@ function validateSchema (schema) {
     return report
   }
 
+  try {
+    assertSchemaVersion(schema)
+  } catch (error) {
+    report.errors.push(error.message)
+  }
+
   const hasModel = typeof schema.model !== 'undefined'
   const hasView = (typeof schema.view !== 'undefined') || (typeof schema.render !== 'undefined')
 
@@ -2449,6 +2496,27 @@ function validateSchema (schema) {
         validateInputSchema(input, `inputs[${index}]`, report)
       })
     }
+  }
+
+  const checkNames = (inputs, names=new Set()) => {
+    if (!Array.isArray(inputs)) return
+    inputs.forEach(input => {
+      if (!isObject(input)) return
+      if (input.type === 'group' && !input.name) {
+        checkNames(input.elements, names)
+        return
+      }
+      if (typeof input.name === 'string' && input.type !== 'button' && input.type !== 'action') {
+        if (names.has(input.name)) report.errors.push(`Duplicate input name: ${input.name}`)
+        names.add(input.name)
+      }
+      if (input.type === 'group') checkNames(input.elements)
+    })
+  }
+  checkNames(schema.inputs)
+
+  if (schema.outputs !== undefined && !Array.isArray(schema.outputs)) {
+    report.errors.push('`outputs` should be an array')
   }
 
   if ((typeof schema.inferInputTypes !== 'undefined') && (typeof schema.inferInputTypes !== 'boolean')) {
@@ -2495,53 +2563,6 @@ function getUrlParam (urlParams, input) {
     if (urlParams.has(alias)) return urlParams.get(alias)
   }
   return null
-}
-
-function jseeInputsToJsonSchema (inputs) {
-  const properties = {}
-  const required = []
-  for (const inp of (inputs || [])) {
-    const prop = {}
-    if (inp.description) prop.description = inp.description
-    switch (inp.type) {
-      case 'int':
-        prop.type = 'integer'
-        break
-      case 'float': case 'number':
-        prop.type = 'number'
-        break
-      case 'bool': case 'checkbox': case 'toggle':
-        prop.type = 'boolean'
-        break
-      case 'select': case 'categorical': case 'radio':
-        prop.type = 'string'
-        if (inp.options) prop.enum = inp.options
-        break
-      case 'slider':
-        prop.type = 'number'
-        if (inp.min !== undefined) prop.minimum = inp.min
-        if (inp.max !== undefined) prop.maximum = inp.max
-        if (inp.step !== undefined) prop.multipleOf = inp.step
-        break
-      case 'range':
-        prop.type = 'array'
-        prop.items = { type: 'number' }
-        prop.minItems = 2
-        prop.maxItems = 2
-        break
-      case 'multi-select':
-        prop.type = 'array'
-        prop.items = { type: 'string' }
-        if (inp.options) prop.items.enum = inp.options
-        break
-      default:
-        prop.type = 'string'
-    }
-    if (inp.default !== undefined) prop.default = inp.default
-    properties[inp.name] = prop
-    if (inp.default === undefined) required.push(inp.name)
-  }
-  return { type: 'object', properties, required }
 }
 
 function flattenJseeOutputs (outputs, flat=[]) {
@@ -2852,33 +2873,36 @@ function columnsToRows (data) {
 }
 
 function createValidateFn (input, filtrexCompile, filtrexOptions) {
+  let validate = null
   if (input.validate) {
     const expr = input.validate.replace(/\'/g, '"')
     const f = filtrexCompile(expr, filtrexOptions)
     const msg = input.error || 'Invalid value'
-    return function (value) {
+    validate = function (value) {
       try {
         return f({ value }) ? null : msg
       } catch (e) {
         return msg
       }
     }
-  } else if (input.required) {
+  }
+  if (input.required) {
     const msg = input.error || 'Required'
     return function (value) {
       if (value === null || value === undefined || value === '') return msg
       if (Array.isArray(value) && value.length === 0) return msg
-      return null
+      return validate ? validate(value) : null
     }
   }
-  return null
+  return validate
 }
 
 function runValidation (inputs, validateFunctions) {
   let hasErrors = false
   inputs.forEach((input, index) => {
     if (index < validateFunctions.length && validateFunctions[index]) {
-      input._error = validateFunctions[index](input.value)
+      const value = input.type === 'group' ? collectInputValues(input.elements) : input.value
+      input._error = validateFunctions[index](value)
       if (input._error) hasErrors = true
     }
   })
@@ -2948,6 +2972,9 @@ module.exports = {
   delay,
   debounce,
   sanitizeName,
+  outputLookupNames,
+  collectOutputNames,
+  cleanOutputMetadata,
   isWorkerInitMessage,
   getProgressState,
   getIntervalDelay,
@@ -2968,6 +2995,7 @@ module.exports = {
   assertEvalAllowed,
   assertImportNetworkAllowed,
   sanitizeHtml,
+  assertSchemaVersion,
   validateSchema,
   toWorkerSerializable,
   containsBinaryPayload,

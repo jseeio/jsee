@@ -4,21 +4,15 @@ function assert (condition, message) {
   if (!condition) throw new Error(message)
 }
 
-function extractConstArray (source, name) {
-  const match = source.match(new RegExp(`const ${name} = \\[([\\s\\S]*?)\\]`))
-  assert(match, `could not find ${name}`)
-  return Array.from(match[1].matchAll(/'([^']+)'/g)).map(item => item[1])
-}
-
 function countBacktickToken (text, token) {
   const pattern = new RegExp('`' + token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '`', 'g')
   return (text.match(pattern) || []).length
 }
 
-const utilsSource = fs.readFileSync('src/utils.js', 'utf8')
+const descriptor = require('../../schema.json')
 const readme = fs.readFileSync('README.md', 'utf8')
-const inputTypes = extractConstArray(utilsSource, 'VALID_INPUT_TYPES')
-const modelTypes = extractConstArray(utilsSource, 'VALID_MODEL_TYPES')
+const inputTypes = descriptor.definitions.inputType.enum
+const modelTypes = descriptor.definitions.modelType.enum
 
 modelTypes.forEach(type => {
   assert(readme.includes('`' + type + '`'), `README does not document model type ${type}`)

@@ -1,0 +1,26 @@
+{
+  "model": {
+    "name": "pytest",
+    "type": "py",
+    "description": "Testing pyodide project",
+    "container": "object",
+    "url": "pytest.py",
+    "autorun": true
+  },
+  "inputs": [
+    {
+      "type": "int",
+      "name": "a"
+    },
+    {
+      "type": "int",
+      "name": "b"
+    }
+  ],
+  "outputs": [
+    {
+      "type": "int"
+    }
+  ]
+}
+

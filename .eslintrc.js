@@ -35,5 +35,5 @@ module.exports = {
       },
     },
   ],
-  ignorePatterns: ['dist/', 'node_modules/', 'apps/', 'tmp/', 'load/'],
+  ignorePatterns: ['dist/', 'node_modules/', 'apps/', 'tmp/', 'load/', 'test/fixtures/real-apps/'],
 }
