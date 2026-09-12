@@ -14,7 +14,8 @@ import json
 import os
 import typing
 import types
-import importlib
+import importlib.util
+import uuid
 from inspect import signature, _empty
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import urllib.parse
@@ -796,7 +797,7 @@ def _load_model_func(schema, cwd='.'):
   return funcs
 
 
-def _filter_kwargs(func, data):
+def _filter_kwargs(func, data, *, legacy_metadata=True):
   """Drop undeclared runtime metadata before calling Python model functions."""
   if not isinstance(data, dict):
     return data
@@ -808,7 +809,7 @@ def _filter_kwargs(func, data):
     for p in params.values()
   )
   if accepts_var_kw:
-    return {k: v for k, v in data.items() if k != '_jsee' or k in params}
+    return {k: v for k, v in data.items() if not legacy_metadata or k != '_jsee' or k in params}
   return {
     k: v
     for k, v in data.items()
@@ -821,6 +822,69 @@ def _call_model_func(func, data):
   if inspect.isawaitable(result):
     result = asyncio.run(result)
   return result
+
+
+async def invoke_schema(schema, data, *, cwd='.'):
+  """Execute a local Python pipeline; keep terminal status separate from model data.
+
+  Accepts decoded inputs, not file paths/URLs to fetch. Synchronous model code runs
+  on the calling thread. This function does not enforce a timeout or OS isolation.
+  """
+  run_id = str(uuid.uuid4())
+  code = 'JSEE_SCHEMA_INVALID'
+  try:
+    if not isinstance(schema, dict):
+      raise ValueError('Schema should be an object')
+    _validate_schema_version(schema)
+    models = schema.get('model')
+    if isinstance(models, dict):
+      models = [models]
+    if not isinstance(models, list) or not models or any(not isinstance(m, dict) for m in models):
+      raise ValueError('Schema should define one or more model objects')
+    if 'inputs' in schema and not isinstance(schema['inputs'], list):
+      raise ValueError('inputs should be an array')
+    code = 'JSEE_INPUT_INVALID'
+    # Validation precedes module initialization. JSON input containers belong to this invocation.
+    result = _prepare_inputs(schema.get('inputs'), copy.deepcopy(data))
+    code = 'JSEE_CAPABILITY_UNSUPPORTED'
+    for model in models:
+      url = model.get('url')
+      if (model.get('type') not in (None, 'py') or not isinstance(url, str)
+          or not url.endswith('.py') or urllib.parse.urlparse(url).scheme
+          or model.get('code') or model.get('stream') or model.get('imports') or schema.get('imports')):
+        raise ValueError('invoke_schema supports local Python files without schema imports or streaming')
+    code = 'JSEE_EXECUTION_FAILED'
+    funcs = _load_model_func(schema, cwd)
+    input_names = list(jsee_inputs_to_json_schema(schema.get('inputs', []))['properties'])
+    for model in models:
+      # Match JS truthiness for the legacy stop field, including empty arrays/objects.
+      stop = result.get('stop') if isinstance(result, dict) else None
+      if isinstance(stop, (dict, list)) or bool(stop):
+        break
+      func = funcs[model.get('name', 'model')]
+      if model.get('container') == 'args':
+        args = [result.get(name) for name in input_names] if isinstance(result, dict) else (
+          result if isinstance(result, list) and result else [result])
+        value = func(*args)
+      elif isinstance(result, dict):
+        # Invocation context lives outside data; only legacy endpoints filter undeclared _jsee.
+        value = func(**_filter_kwargs(func, result, legacy_metadata=False))
+      else:
+        value = func(result)
+      if inspect.isawaitable(value):
+        value = await value
+      if inspect.isgenerator(value) or inspect.isasyncgen(value):
+        if inspect.isasyncgen(value):
+          await value.aclose()
+        else:
+          value.close()
+        code = 'JSEE_CAPABILITY_UNSUPPORTED'
+        raise ValueError('Streaming results require a streaming invocation interface')
+      # None corresponds to JS null, not undefined; records alone merge across stages.
+      result = {**result, **value} if isinstance(result, dict) and isinstance(value, dict) else value
+    return {'runId': run_id, 'status': 'succeeded', 'result': result}
+  except Exception as error:
+    return {'runId': run_id, 'status': 'failed', 'error': {'code': code, 'message': str(error)}}
 
 
 def _wrap_chat_result(result):

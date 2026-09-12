@@ -891,11 +891,21 @@ Shared version numbers identify tested contracts, with these runtime differences
 |---|---|---|---|
 | Groups, defaults, options, numeric constraints | Shared fixtures | Shared fixtures | Shared fixtures |
 | Custom input expressions and nonempty controls | UI validation | Not evaluated | Not evaluated |
-| Pipeline execution | Browser orchestrates stages | CLI `--run` executes JS pipelines; HTTP exposes stages | HTTP/WSGI expose stages; browser orchestrates |
+| Pipeline execution | Browser orchestrates stages | `invokeSchema` and CLI `--run` execute JS pipelines; HTTP exposes stages | `invoke_schema` executes Python pipelines; HTTP/WSGI expose stages |
 | Python callable selection | Pyodide `entry` | Not a native Python runtime | `entry`, with a separate endpoint `name` |
 | Interruption | Worker termination; cooperative main-thread and fetch cancellation | No OS containment | Stream cleanup; no forced interruption of arbitrary model code |
 
-The proposed whole-pipeline server operation and MCP adapter remain future work. Existing security flags gate JSEE-managed operations and do not provide an OS sandbox.
+### Whole-pipeline invocation
+
+Node exports `invokeSchema(schema, inputs, { schemaPath, cwd, log })` from `@jseeio/jsee/cli`. Python exports async `invoke_schema(schema, inputs, cwd='.')` from `jsee`. Both validate inputs before importing models, apply declared defaults, and execute the complete `model` pipeline. See the [clean sales example](examples/clean-sales/README.md) for JavaScript, Python, and a generated offline form with a CSV download.
+
+The returned envelope is `{ runId, status: 'succeeded', result }` or `{ runId, status: 'failed', error: { code, message } }`. Each call gets a new run ID; model fields named `status` or `runId` remain inside `result`. Error codes are `JSEE_SCHEMA_INVALID`, `JSEE_INPUT_INVALID`, `JSEE_CAPABILITY_UNSUPPORTED`, and `JSEE_EXECUTION_FAILED`. These checks cover invocation prerequisites and existing input-value rules; full descriptor authoring validation remains separate.
+
+Results retain accumulated pipeline data, including intermediate values. Only records merge; arrays, scalars and null replace the previous value. Python `None` corresponds to JS null; JavaScript's undefined retains the previous value. The existing truthy `stop` field stops later stages. JSON input containers are copied before execution. Runtime values are returned directly, without HTTP serialization or file persistence.
+
+This initial interface supports local JS functions/classes/async initializers and native Python sync/async functions in files. Python uses keyword binding by default and schema input order for `container: 'args'`. Python stages retain the loader's unique-name requirement. Schema imports, remote models, and streaming are rejected explicitly; normal imports inside model source remain usable. Calls execute on the caller's thread without forced interruption, worker isolation, or enforcement of browser timeout/security flags.
+
+The whole-pipeline server operation, artifact handles, and MCP adapter remain future work. Existing security flags gate JSEE-managed operations and do not provide an OS sandbox.
 
 ## Changelog
 

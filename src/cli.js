@@ -1,4 +1,4 @@
-const { collectInputValues, getInputDefaultValue, prepareInputs } = require('./schema')
+const { collectInputValues, getInputDefaultValue, prepareInputs, cloneSchema } = require('./schema')
 const { runPipeline } = require('./pipeline')
 const { outputLookupNames, cleanOutputMetadata } = require('./utils')
 const fs = require('fs')
@@ -1315,14 +1315,56 @@ async function loadCliModelFunction (model, schemaPath, cwd, log, inputs) {
   }, Array.isArray(inputs) ? Object.keys(collectInputValues(inputs, () => null)) : undefined)
 }
 
-async function runSchemaOnce (schema, data, schemaPath, cwd, log) {
+async function runSchemaOnce (schema, data, schemaPath, cwd=process.cwd(), log=() => {}) {
   assertSchemaVersion(schema)
   const inputs = prepareInputs(schema.inputs, data)
-  const stages = schema.model.map(model => async values => {
+  const models = Array.isArray(schema.model) ? schema.model : [schema.model]
+  const stages = models.map(model => async values => {
     const modelFunc = await loadCliModelFunction(model, schemaPath, cwd, log, schema.inputs)
     return modelFunc(values)
   })
   return runPipeline(stages, inputs)
+}
+
+async function invokeSchema (schema, data, { schemaPath, cwd=process.cwd(), log=() => {} }={}) {
+  const runId = crypto.randomUUID()
+  let code = 'JSEE_SCHEMA_INVALID'
+  try {
+    if (!isRecordObject(schema)) throw new Error('Schema should be an object')
+    assertSchemaVersion(schema)
+    const models = Array.isArray(schema.model) ? schema.model : [schema.model]
+    if (!models.length || models.some(model => !isRecordObject(model))) {
+      throw new Error('Schema should define one or more model objects')
+    }
+    if (schema.inputs !== undefined && !Array.isArray(schema.inputs)) throw new Error('inputs should be an array')
+    code = 'JSEE_INPUT_INVALID'
+    // Validate before imports/initializers can have effects. Models own a copy of JSON input containers.
+    const inputs = prepareInputs(schema.inputs, cloneSchema(data))
+    code = 'JSEE_CAPABILITY_UNSUPPORTED'
+    for (const model of models) {
+      if (!['function', 'async-function', 'class', 'async-init', undefined].includes(model.type) ||
+          model.stream || toArray(model.imports).length || toArray(schema.imports).length ||
+          (typeof model.code !== 'function' && typeof model.code !== 'string' && (!model.url || isNetworkUrl(model.url)))) {
+        throw new Error('invokeSchema supports local JavaScript models without schema imports or streaming')
+      }
+    }
+    code = 'JSEE_EXECUTION_FAILED'
+    // Both entry points use the same loader and transitions; terminal calls cannot leave a stream open.
+    const stages = models.map(model => async values => {
+      const func = await loadCliModelFunction(model, schemaPath, cwd, log, schema.inputs)
+      const result = await func(values)
+      if (isStreamResult(result)) {
+        if (typeof result.return === 'function') await result.return()
+        code = 'JSEE_CAPABILITY_UNSUPPORTED'
+        throw new Error('Streaming results require a streaming invocation interface')
+      }
+      return result
+    })
+    const result = await runPipeline(stages, inputs)
+    return { runId, status: 'succeeded', result }
+  } catch (error) {
+    return { runId, status: 'failed', error: { code, message: error instanceof Error ? error.message : String(error) } }
+  }
 }
 
 function flattenOutputs (outputs, flat=[]) {
@@ -1667,7 +1709,7 @@ function getBrowserFieldEsbuildOptions (modelPath) {
   return options
 }
 
-async function bundleModelCode (model, modelPath, code) {
+async function bundleModelCode (model, modelPath, code, exportNames=[getModelExportName(model)]) {
   if (!shouldBundleModelCode(code)) return code
 
   const esbuild = getOptionalEsbuild()
@@ -1678,11 +1720,13 @@ async function bundleModelCode (model, modelPath, code) {
     !hasEsModuleExport(code) &&
     (hasRequireCall(code) || hasStaticImport(code))
 
-  if (needsExportShim && !isJsIdentifier(modelName)) {
+  if (needsExportShim && exportNames.some(name => !isJsIdentifier(name))) {
     throw new Error(`Bundling ${model.url || modelPath} requires a valid JavaScript model name or an explicit module export.`)
   }
 
   const options = Object.assign({
+    // esbuild's service outlives calls and may retain a working directory that has been removed.
+    absWorkingDir: path.dirname(modelPath),
     bundle: true,
     write: false,
     platform: 'browser',
@@ -1693,7 +1737,7 @@ async function bundleModelCode (model, modelPath, code) {
 
   if (needsExportShim) {
     options.stdin = {
-      contents: `${code}\nexport default ${modelName}\n`,
+      contents: `${code}\nexport { ${exportNames.join(', ')} }\n`,
       resolveDir: path.dirname(modelPath),
       sourcefile: path.basename(modelPath),
       loader: 'js'
@@ -1704,7 +1748,7 @@ async function bundleModelCode (model, modelPath, code) {
 
   try {
     const result = await esbuild.build(options)
-    return result.outputFiles[0].text + buildBundledModelExposeCode(bundleGlobalName, modelName)
+    return result.outputFiles[0].text + exportNames.map(name => buildBundledModelExposeCode(bundleGlobalName, name)).join('')
   } catch (error) {
     throw new Error(`Failed to bundle ${model.url || modelPath}: ${error.message}`)
   }
@@ -2769,7 +2813,9 @@ Documentation: https://jsee.org
         const modelPath = path.resolve(assetRoot, m.url)
         if (!m.name) m.name = getModelExportName(m)
         const modelSource = fs.readFileSync(modelPath, 'utf8')
-        const modelCode = await bundleModelCode(m, modelPath, modelSource)
+        // One hidden asset serves every stage at this URL, so it must expose all requested entries.
+        const exportNames = [...new Set(bundleBlocks.filter(block => block.url === m.url).map(getModelExportName))]
+        const modelCode = await bundleModelCode(m, modelPath, modelSource, exportNames)
         appendHiddenAsset(m.url, modelCode)
       }
 
@@ -3120,6 +3166,7 @@ module.exports.needsFullBundle = needsFullBundle
 module.exports.shouldBundleModelCode = shouldBundleModelCode
 module.exports.bundleModelCode = bundleModelCode
 module.exports.runSchemaOnce = runSchemaOnce
+module.exports.invokeSchema = invokeSchema
 module.exports.emitRunOutputs = emitRunOutputs
 module.exports.escapeHtml = escapeHtml
 module.exports.escapeAttr = escapeAttr

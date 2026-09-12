@@ -1120,6 +1120,10 @@ describe('path containment', () => {
 
 describe('pipeline characterization', () => {
   const model = code => ({ name: 'step', code, type: 'function' })
+  test('accepts the single-model descriptor form without normalization by a caller', async () => {
+    const schema = { inputs: [], model: model('function step () { return { value: 42 } }') }
+    expect(await gen.runSchemaOnce(schema, {}, null, process.cwd(), () => {})).toEqual({ value: 42 })
+  })
   test('merges records, passes undefined through, and stops before the next model', async () => {
     const schema = { inputs: [], model: [
       model('function step () { return { count: 1, flag: false } }'),
@@ -1347,6 +1351,23 @@ describe('model dependency bundling', () => {
     expect(shouldBundleModelCode('module.exports = function gen () {}')).toBe(true)
     expect(shouldBundleModelCode('export function gen () {}')).toBe(true)
     expect(shouldBundleModelCode('import helper from "./helper"')).toBe(true)
+  })
+
+  test.each(['commonjs', 'esm', 'implicit'])('keeps every requested entry from a shared %s source', async style => {
+    fs.writeFileSync(path.join(tmpDir, 'helper.js'), 'module.exports = value => value + 1\n')
+    const functions = 'function first(data) { return { value: data.value + 1 } }\nfunction second(data) { return { value: data.value * 2 } }\n'
+    const source = style === 'commonjs' ? functions + 'module.exports = { first, second }\n'
+      : style === 'esm' ? functions + 'export { first, second }\n'
+        : 'const helper = require("./helper")\n' + functions
+    fs.writeFileSync(path.join(tmpDir, 'model.js'), source)
+    fs.writeFileSync(path.join(tmpDir, 'schema.json'), JSON.stringify({
+      model: [{ name: 'first', url: 'model.js' }, { name: 'second', url: 'model.js' }],
+      inputs: [{ name: 'value', type: 'int', default: 3 }]
+    }))
+    const html = await gen(['schema.json', '-o', 'app.html', '-f'], true)
+    const code = extractHiddenCode(html, 'model.js')
+    expect(runHiddenModel(code, 'first', { value: 3 })).toEqual({ value: 4 })
+    expect(runHiddenModel(code, 'second', { value: 4 })).toEqual({ value: 8 })
   })
 
   test('bundles require dependencies while preserving the JSEE model name', async () => {

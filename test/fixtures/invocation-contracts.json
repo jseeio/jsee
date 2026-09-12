@@ -1,0 +1,94 @@
+[
+  {
+    "name": "merge records and await stages",
+    "inputs": [{"name": "x", "type": "int", "default": 3}],
+    "data": {},
+    "steps": [
+      {"js": "async function step(data) { return {total: data.x + 1} }", "py": "async def step(x):\n    return {'total': x + 1}\n"},
+      {"js": "function step(data) { return {doubled: data.total * 2} }", "py": "def step(total):\n    return {'doubled': total * 2}\n"}
+    ],
+    "result": {"x": 3, "total": 4, "doubled": 8}
+  },
+  {
+    "name": "null is an atomic result",
+    "data": {},
+    "steps": [
+      {"js": "function step() { return null }", "py": "def step():\n    return None\n"},
+      {"js": "function step(data) { return {value: data} }", "py": "def step(data):\n    return {'value': data}\n"}
+    ],
+    "result": {"value": null}
+  },
+  {
+    "name": "arrays replace records",
+    "data": {"seed": 2},
+    "steps": [
+      {"js": "function step() { return [1, 2] }", "py": "def step():\n    return [1, 2]\n"},
+      {"js": "function step(data) { return {value: data} }", "py": "def step(data):\n    return {'value': data}\n"}
+    ],
+    "result": {"value": [1, 2]}
+  },
+  {
+    "name": "false is a terminal result",
+    "data": {},
+    "steps": [{"js": "function step() { return false }", "py": "def step():\n    return False\n"}],
+    "result": false
+  },
+  {
+    "name": "model status and run identity remain data",
+    "data": {"status": "business", "runId": "model-id", "_status": "business"},
+    "steps": [{"js": "function step(data) { return data }", "py": "def step(**data):\n    return data\n"}],
+    "result": {"status": "business", "runId": "model-id", "_status": "business"}
+  },
+  {
+    "name": "declared metadata-shaped input reaches keyword models",
+    "inputs": [{"name": "_jsee", "type": "string"}],
+    "data": {"_jsee": "user data"},
+    "steps": [{"js": "function step(data) { return {seen: data._jsee} }", "py": "def step(**data):\n    return {'seen': data.get('_jsee')}\n"}],
+    "result": {"_jsee": "user data", "seen": "user data"}
+  },
+  {
+    "name": "stop prevents subsequent execution",
+    "data": {"seed": 1},
+    "steps": [
+      {"js": "function step() { return {stop: [], answer: 42} }", "py": "def step():\n    return {'stop': [], 'answer': 42}\n"},
+      {"js": "function step() { throw Error('unreachable') }", "py": "def step():\n    raise ValueError('unreachable')\n"}
+    ],
+    "result": {"seed": 1, "stop": [], "answer": 42}
+  },
+  {
+    "name": "positional arguments follow schema order",
+    "inputs": [{"name": "a", "type": "int"}, {"name": "b", "type": "int"}],
+    "data": {"b": 2, "a": 9, "caller": "external"},
+    "steps": [{"container": "args", "js": "function step(a, b) { return a - b }", "py": "def step(a, b, /):\n    return a - b\n"}],
+    "result": 7
+  },
+  {
+    "name": "nested inputs belong to invocation",
+    "data": {"group": {"values": [1, 2]}},
+    "steps": [{"js": "function step(data) { data.group.values.push(3); return data }", "py": "def step(group):\n    group['values'].append(3)\n    return {'group': group}\n"}],
+    "result": {"group": {"values": [1, 2, 3]}}
+  },
+  {
+    "name": "invalid inputs fail before initialization",
+    "inputs": [{"name": "policy", "type": "select", "options": ["drop", "error"]}],
+    "data": {"policy": "ignore"},
+    "steps": [{"js": "throw Error('must not load')", "py": "raise RuntimeError('must not load')\n"}],
+    "error": "JSEE_INPUT_INVALID"
+  },
+  {
+    "name": "execution failure stops pipeline",
+    "data": {},
+    "steps": [
+      {"js": "function step() { throw Error('bad data') }", "py": "def step():\n    raise ValueError('bad data')\n"},
+      {"js": "function step() { return 42 }", "py": "def step():\n    return 42\n"}
+    ],
+    "error": "JSEE_EXECUTION_FAILED",
+    "message": "bad data"
+  },
+  {
+    "name": "undeclared generators fail explicitly",
+    "data": {},
+    "steps": [{"js": "function* step() { yield 1 }", "py": "def step():\n    yield 1\n"}],
+    "error": "JSEE_CAPABILITY_UNSUPPORTED"
+  }
+]

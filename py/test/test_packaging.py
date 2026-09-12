@@ -90,11 +90,17 @@ def test_sdist_rebuild_and_installed_gui_api(tmp_path):
         text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
     assert result.returncode == 0, result.stdout
-    smoke = '''
-import hashlib, io, json, os
+    smoke = r'''
+import asyncio, hashlib, io, json, os
 from pathlib import Path
 from importlib.resources import files
 from jsee.jsee import _find_runtime, create_app
+from jsee import invoke_schema
+Path('pipeline.py').write_text('def first(x):\n    return {"y": x + 1}\nasync def second(y):\n    return {"z": y * 2}\n')
+invocation = asyncio.run(invoke_schema({'model': [
+    {'name': 'first', 'url': 'pipeline.py'}, {'name': 'second', 'url': 'pipeline.py'}]}, {'x': 2}))
+assert invocation['status'] == 'succeeded', invocation
+assert invocation['result'] == {'x': 2, 'y': 3, 'z': 6}, invocation
 expected = json.loads(os.environ['JSEE_EXPECTED_ASSETS'])
 descriptor = files('jsee').joinpath('static/schema.json').read_bytes()
 assert hashlib.sha256(descriptor).hexdigest() == expected['schema.json']

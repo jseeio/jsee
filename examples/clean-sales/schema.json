@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "clean_sales",
+  "title": "Clean sales CSV",
+  "description": "Drop rows with missing prices, calculate revenue, and download the cleaned CSV.",
+  "model": [
+    {"name": "parse_sales", "url": "model.js"},
+    {"name": "clean_rows", "url": "model.js"},
+    {"name": "summarize", "url": "model.js"}
+  ],
+  "inputs": [
+    {"name": "csv", "type": "file", "description": "CSV with price and quantity columns", "required": true},
+    {"name": "missing", "type": "select", "options": ["drop", "error"], "default": "drop"}
+  ],
+  "outputs": [
+    {"name": "summary", "type": "object"},
+    {"name": "table", "type": "table"},
+    {"name": "cleaned_csv", "type": "file"}
+  ]
+}

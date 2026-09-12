@@ -1,0 +1,15 @@
+[
+  {"name": "drop missing prices by default", "data": {"csv": "price,quantity\n10,2\n20,1\n,3\n"}, "summary": {"rows_read": 3, "rows_kept": 2, "total_revenue": 40}, "csv": "price,quantity\n10,2\n20,1\n"},
+  {"name": "preserve quoted and multiline fields", "data": {"csv": "\ufefflabel,quantity,price\r\n\"a,\"\"b\"\"\",2,10.5\r\n\"two\nlines\",1,2e1\r\n", "missing": "error"}, "summary": {"rows_read": 2, "rows_kept": 2, "total_revenue": 41}, "csv": "label,quantity,price\n\"a,\"\"b\"\"\",2,10.5\n\"two\nlines\",1,2e1\n"},
+  {"name": "header only", "data": {"csv": "price,quantity\n"}, "summary": {"rows_read": 0, "rows_kept": 0, "total_revenue": 0}, "csv": "price,quantity\n"},
+  {"name": "preserve carriage returns inside quoted fields", "data": {"csv": "price,quantity,label\n1,2,\"a\rb\"\n"}, "summary": {"rows_read": 1, "rows_kept": 1, "total_revenue": 2}, "csv": "price,quantity,label\n1,2,\"a\rb\"\n"},
+  {"name": "drop every row", "data": {"csv": "price,quantity\n,2\n,1\n"}, "summary": {"rows_read": 2, "rows_kept": 0, "total_revenue": 0}, "csv": "price,quantity\n"},
+  {"name": "reject policy before computation", "data": {"csv": "", "missing": "ignore"}, "error": "JSEE_INPUT_INVALID"},
+  {"name": "missing CSV", "data": {}, "error": "JSEE_INPUT_INVALID"},
+  {"name": "error policy rejects missing price", "data": {"csv": "price,quantity\n,3\n", "missing": "error"}, "error": "JSEE_EXECUTION_FAILED"},
+  {"name": "reject missing quantity", "data": {"csv": "price,quantity\n1,\n"}, "error": "JSEE_EXECUTION_FAILED"},
+  {"name": "reject nondecimal price", "data": {"csv": "price,quantity\n0x10,2\n"}, "error": "JSEE_EXECUTION_FAILED"},
+  {"name": "reject overflow", "data": {"csv": "price,quantity\n1e308,2\n"}, "error": "JSEE_EXECUTION_FAILED"},
+  {"name": "reject duplicate headers", "data": {"csv": "price,price,quantity\n1,2,3\n"}, "error": "JSEE_EXECUTION_FAILED"},
+  {"name": "reject malformed row", "data": {"csv": "price,quantity\n1,2,3\n"}, "error": "JSEE_EXECUTION_FAILED"}
+]

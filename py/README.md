@@ -46,6 +46,16 @@ This starts a server at `http://localhost:5050` with:
 - Schema discovery at `/api`
 - OpenAPI spec at `/api/openapi.json`
 
+### Whole-pipeline invocation
+
+`await jsee.invoke_schema(schema, inputs, cwd=directory)` executes every model stage without starting a server. Use `asyncio.run(...)` from synchronous code. Inputs are validated before model imports; declared defaults apply and JSON input containers are copied. Stage names must be unique, and paths resolve relative to `cwd`.
+
+The result is `{'runId': ..., 'status': 'succeeded', 'result': ...}` or a failed status with `error: {'code': ..., 'message': ...}`. Model fields remain separate from invocation status. Records merge between stages; scalars, lists, and `None` replace prior data. A truthy `stop` prevents later stages. The result retains intermediates and native values; this function does not apply the HTTP serializer or store files.
+
+Local sync/async Python functions are supported, with keyword binding by default and schema input order for `container: 'args'`. Source imports work normally. Schema imports, remote models, and streams fail with `JSEE_CAPABILITY_UNSUPPORTED`. Other codes distinguish invalid schema prerequisites, invalid inputs, and execution failure. Synchronous code runs on the calling thread; browser timeout/security settings do not provide containment here.
+
+The [clean sales example](../examples/clean-sales/README.md) has shared JS/Python cases and a browser form. Canonical CLI/HTTP/MCP adapters and remote artifact handles remain subsequent work.
+
 ## How it works
 
 JSEE introspects your function's type hints and default values to generate a schema describing inputs and their types. The schema drives both the GUI (rendered by the JSEE runtime in the browser) and the API endpoints.

@@ -1,0 +1,10 @@
+{
+  "name": "clean-sales-example",
+  "private": true,
+  "dependencies": {
+    "csv-parse": "5.6.0"
+  },
+  "browser": {
+    "csv-parse/sync": "csv-parse/browser/esm/sync"
+  }
+}

@@ -10,6 +10,37 @@ const gen = require('../src/cli')
 const fixtures = path.join(__dirname, 'fixtures/real-apps')
 const manifest = require('./fixtures/real-apps/manifest.json')
 
+test('clean_sales generated form runs the complete pipeline offline and downloads exact CSV', async ({ page }) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-clean-sales-'))
+  const output = path.join(directory, 'index.html')
+  const fixture = require('./fixtures/clean-sales.json')[0]
+  const requests = []
+  try {
+    await gen(['--inputs', path.resolve(__dirname, '../examples/clean-sales/schema.json'), '-o', output, '-f', '--runtime', 'inline'])
+    await page.route(/^https?:\/\//, route => {
+      requests.push(route.request().url())
+      return route.abort()
+    })
+    await page.goto(pathToFileURL(output).href)
+    await page.evaluate(() => window.env._initPromise)
+    await page.setInputFiles('input[type="file"]', { name: 'sales.csv', mimeType: 'text/csv', buffer: Buffer.from(fixture.data.csv) })
+    await expect.poll(() => page.evaluate(() => window.env.data.inputs[0].value)).toBe(fixture.data.csv)
+    await page.getByRole('button', { name: /^Run/ }).click()
+    await expect(page.locator('#outputs')).toContainText('total_revenue')
+    await expect(page.locator('#outputs')).toContainText('40')
+    await expect(page.locator('#outputs table tbody tr')).toHaveCount(2)
+    const downloadPromise = page.waitForEvent('download')
+    await page.locator('#outputs').getByRole('button', { name: /Download/ }).click()
+    const download = await downloadPromise
+    expect(download.suggestedFilename()).toBe('cleaned-sales.csv')
+    expect(fs.readFileSync(await download.path(), 'utf8')).toBe(fixture.csv)
+    expect(requests).toEqual([])
+  } finally {
+    if (!page.isClosed()) await page.goto('about:blank').catch(() => {})
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
 test('detector view renders category labels as text on repeated calls', async ({ page }) => {
   await page.goto('/load/')
   const label = '<img src=x onerror="window.categoryExecuted=true">'
