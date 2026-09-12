@@ -2263,6 +2263,20 @@ function isNetworkUrl (value) {
   return (typeof value === 'string') && /^(https?:)?\/\//i.test(value)
 }
 
+function invocationUnsupportedReason (schema) {
+  const models = Array.isArray(schema.model) ? schema.model : [schema.model]
+  const hasImports = value => Array.isArray(value) ? value.length > 0 : Boolean(value)
+  if (!models.length) return 'Invocation requires a model'
+  for (const model of models) {
+    if (!model || !['function', 'async-function', 'class', 'async-init', undefined].includes(model.type) ||
+        model.stream || hasImports(model.imports) || hasImports(schema.imports) ||
+        (typeof model.code !== 'function' && typeof model.code !== 'string' && (!model.url || isNetworkUrl(model.url)))) {
+      return 'invokeSchema supports local JavaScript models without schema imports or streaming'
+    }
+  }
+  return null
+}
+
 function assertNetworkAllowed (url, security, context='network URL') {
   const options = normalizeSecurityOptions(security)
   if (options.allowNetwork === false && isNetworkUrl(url)) {
@@ -2669,13 +2683,14 @@ function jseeOutputToJsonSchema (output) {
     case 'map':
     case '3d':
     case 'gallery':
-    case 'object':
       return {
         oneOf: [
           { type: 'object', additionalProperties: true },
           { type: 'array', items: {} }
         ]
       }
+    // The JSON viewer accepts any JSON value, including scalars and null.
+    case 'object':
     case 'blank':
     case 'function':
       return {}
@@ -2689,10 +2704,8 @@ function jseeOutputsToJsonSchema (outputs) {
   if (!flatOutputs.length) {
     return { type: 'object', additionalProperties: true }
   }
-  const properties = {}
-  flatOutputs.forEach(output => {
-    properties[output.name] = jseeOutputToJsonSchema(output)
-  })
+  // Output names are data, including __proto__.
+  const properties = Object.fromEntries(flatOutputs.map(output => [output.name, jseeOutputToJsonSchema(output)]))
   return {
     type: 'object',
     properties,
@@ -2999,6 +3012,7 @@ module.exports = {
   buildPyodideEntryCallCode,
   pyodideResultToJs,
   isNetworkUrl,
+  invocationUnsupportedReason,
   assertNetworkAllowed,
   assertApiNetworkAllowed,
   assertEvalAllowed,
@@ -3013,6 +3027,8 @@ module.exports = {
   getUrlParam,
   coerceParam,
   jseeInputsToJsonSchema,
+  jseeOutputsToJsonSchema,
+  flattenJseeOutputs,
   generateOpenAPISpec,
   serializeResult,
   parseMultipart,

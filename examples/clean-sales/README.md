@@ -26,7 +26,28 @@ run = asyncio.run(invoke_schema(schema, {'csv': 'price,quantity\n10,2\n20,1\n,3\
 print(run['result']['summary'] if run['status'] == 'succeeded' else run['error'])
 ```
 
-Both return `rows_read: 3`, `rows_kept: 2`, `total_revenue: 40`. `result.cleaned_csv` contains `filename`, `mime`, and the exact CSV `content`. These programmatic calls receive decoded CSV text; they do not interpret that text as a file path or URL. The result includes accumulated pipeline intermediates. Remote artifact handles and the CLI/HTTP/MCP invocation adapters are subsequent work.
+Both return `rows_read: 3`, `rows_kept: 2`, `total_revenue: 40`. `result.cleaned_csv` contains `filename`, `mime`, and the exact CSV `content`. These programmatic calls receive decoded CSV text; they do not interpret that text as a file path or URL. The result includes accumulated pipeline intermediates. The JSON CLI/HTTP adapters below project declared outputs and store the CSV as a retrievable artifact. MCP remains subsequent work.
+
+Use the JSON adapters from the repository root:
+
+```sh
+node bin/jsee inspect examples/clean-sales/schema.json
+node bin/jsee validate examples/clean-sales/schema.json
+node bin/jsee run examples/clean-sales/schema.json --input - <<'JSON'
+{"csv":"price,quantity\n10,2\n20,1\n,3\n","missing":"drop"}
+JSON
+node bin/jsee serve examples/clean-sales/schema.json --port 3000
+```
+
+For installed Python, use `jsee run examples/clean-sales/schema-python.json --input -` or `jsee serve examples/clean-sales/schema-python.json --port 3000`. The same JSON request works in both runtimes:
+
+```sh
+curl http://127.0.0.1:3000/run -H 'Content-Type: application/json' --data-binary @- <<'JSON'
+{"csv":"price,quantity\n10,2\n20,1\n,3\n","missing":"drop"}
+JSON
+```
+
+The response has `outputs.summary` with the three counts above, `outputs.table`, and `outputs.cleaned_csv.artifact`. Download the CSV using the matching `artifacts[].uri` (relative to the HTTP server); verify its SHA256 against `artifacts[].sha256`. CLI artifact URIs are local `file:` paths and persist in `.jsee-artifacts/`. An agent can inspect the contract and run it through these CLI/HTTP interfaces today. Automatic MCP discovery is not implemented yet.
 
 Build the browser form using the existing CLI:
 

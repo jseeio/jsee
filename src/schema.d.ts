@@ -149,6 +149,7 @@ export interface Page {
 export interface SchemaProperties {
   $schema?: string
   schemaVersion?: 1
+  id?: string
   title?: string
   description?: string
   model?: Models

@@ -1,3 +1,16 @@
 #!/usr/bin/env node
 const gen = require('../src/cli.js')
-gen(process.argv.slice(2))
+const args = process.argv.slice(2)
+const write = process.stdout.write.bind(process.stdout)
+if (['inspect', 'validate', 'run'].includes(args[0])) {
+  // The command owns this process: model diagnostics must never corrupt JSON stdout.
+  process.stdout.write = process.stderr.write.bind(process.stderr)
+  gen.command(args).then(({ body, exitCode }) => {
+    write(JSON.stringify(body) + '\n')
+    process.exitCode = exitCode
+  }).catch(error => { console.error(error.message); process.exitCode = 1 })
+} else gen(args).then(server => {
+  if (args[0] === 'serve' && server) {
+    for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => server.close(() => process.exit(0)))
+  }
+}).catch(error => { console.error(error.message); process.exitCode = 1 })

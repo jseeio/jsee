@@ -202,6 +202,7 @@ JSEE takes a schema object that contains three main blocks:
 
 Extra blocks can be provided for further customization:
 
+- `id` — optional stable computation identifier for discovery and OpenAPI, independent of the display title. Use 1–128 ASCII letters, digits, `_`, `.`, or `-`, starting with a letter. Defaults to `computation`
 - `schemaVersion` — optional descriptor format version. Use the number `1`; omitting it retains the same behavior. Unsupported explicit versions are rejected before model loading. This is independent of JS/Python package versions
 - `render` / `view` — visualization part (optional). Defines custom rendering code
 - `design` — overall appearance (optional). Defines how the app looks overwriting defaults
@@ -891,7 +892,7 @@ Shared version numbers identify tested contracts, with these runtime differences
 |---|---|---|---|
 | Groups, defaults, options, numeric constraints | Shared fixtures | Shared fixtures | Shared fixtures |
 | Custom input expressions and nonempty controls | UI validation | Not evaluated | Not evaluated |
-| Pipeline execution | Browser orchestrates stages | `invokeSchema` and CLI `--run` execute JS pipelines; HTTP exposes stages | `invoke_schema` executes Python pipelines; HTTP/WSGI expose stages |
+| Pipeline execution | Browser orchestrates stages | `invokeSchema`, JSON CLI and canonical HTTP execute JS pipelines; legacy stages remain | `invoke_schema`, JSON CLI and canonical HTTP/WSGI execute Python pipelines; legacy stages remain |
 | Python callable selection | Pyodide `entry` | Not a native Python runtime | `entry`, with a separate endpoint `name` |
 | Interruption | Worker termination; cooperative main-thread and fetch cancellation | No OS containment | Stream cleanup; no forced interruption of arbitrary model code |
 
@@ -905,7 +906,39 @@ Results retain accumulated pipeline data, including intermediate values. Only re
 
 This initial interface supports local JS functions/classes/async initializers and native Python sync/async functions in files. Python uses keyword binding by default and schema input order for `container: 'args'`. Python stages retain the loader's unique-name requirement. Schema imports, remote models, and streaming are rejected explicitly; normal imports inside model source remain usable. Calls execute on the caller's thread without forced interruption, worker isolation, or enforcement of browser timeout/security flags.
 
-The whole-pipeline server operation, artifact handles, and MCP adapter remain future work. Existing security flags gate JSEE-managed operations and do not provide an OS sandbox.
+### JSON commands and canonical HTTP
+
+The Node and Python CLIs accept the same descriptor commands. Use a JS model descriptor with Node and a Python model descriptor with Python:
+
+```sh
+jsee inspect schema.json --json
+jsee validate schema.json
+jsee run schema.json --input input.json --json
+jsee serve schema.json --port 3000
+```
+
+`inspect` reports input/output JSON Schemas and runtime capabilities without importing models. `validate` checks computation structure, names, known field types, numeric constraints and defaults. It requires a model; render-only descriptors remain valid for the browser. Neither command tests model availability, executes custom browser validation expressions, or validates every UI extension. The full authoring vocabulary remains available in `schema.json`.
+
+`run` reads UTF-8 JSON from stdin by default (`--input -`), or from the selected file. It writes one JSON envelope to stdout; model diagnostics go to stderr. Successful calls return `{runId, status: "succeeded", outputs, artifacts}`. Failed calls return `{runId, status: "failed", error: {code, message}}`. Exit codes are 0 for success, 2 for descriptor/JSON-request errors, and 1 for invocation or output failures.
+
+`outputs` contains declared, flattened output names, using existing alias lookup. Accumulated inputs and undeclared intermediates are omitted. Missing outputs and non-JSON values fail with `JSEE_OUTPUT_INVALID`; non-finite numbers become null. This checks output presence and transport encoding, not every renderer-specific value shape. An `object` output accepts any JSON value. Declare binary data as `type: "file"`.
+
+File outputs accept text or bytes, directly or in a descriptor with `content`, `value`, or `data`, plus optional `filename` and `mime`. A file output becomes `{artifact: "<runId>/<index>"}`. The corresponding `artifacts` entry contains `id`, `output`, `name`, `mime`, `size` in bytes, `sha256`, and `uri`. Model-provided paths and URLs are never read or fetched by this adapter. CLI files persist under `.jsee-artifacts/` in the working directory (change with `--artifact-dir`) and use `file:` URIs.
+
+Canonical serving adds these routes to the existing UI and per-stage endpoints:
+
+| Route | Result |
+|---|---|
+| `GET /schema` | Computation descriptor retaining local model references |
+| `GET /openapi.json` | Whole-pipeline request, response and artifact descriptions |
+| `POST /run` | Execute the entire pipeline with a JSON input object |
+| `GET /__jsee/artifacts/<runId>/<index>` | Download the referenced file as an attachment |
+
+A stage named `run` conflicts with canonical `/run` and is rejected before loading. Rename that stage or retain the legacy serving command. Existing `jsee schema.json --run`, `--serve`, and `-o index.html -f` forms keep their behavior. Python also accepts `serve(path, canonical=True)` and `create_app(path, canonical=True)`; call the WSGI application's `close()` when retiring it.
+
+Requests default to a 50 MiB limit (`--max-body-bytes`). Artifact storage defaults to 64 MiB and 1,024 files per server, or per CLI invocation (`--max-artifact-bytes` changes the byte limit). A batch exceeding the quota fails without publishing partial artifacts. HTTP files live in a private temporary directory until server shutdown; a killed process can leave temporary files for host cleanup. HTTP URIs are relative to that server and do not survive a restart. Quotas do not bound model allocations or computation time.
+
+Canonical `/run` accepts JSON only, returns 400 for invalid inputs, 413 for excessive bodies, 415 for other content types, 422 for unsupported execution capabilities, 500 for model/output errors, and 507 for artifact quota failures. It omits wildcard CORS headers. Legacy routes retain their existing CORS policy. Servers default to localhost; authentication and configurable host-wide policy remain pending. Existing security flags gate JSEE-managed operations and do not provide an OS sandbox. MCP, streaming/cancellation through the canonical operation, and multi-descriptor serving remain future work.
 
 ## Changelog
 

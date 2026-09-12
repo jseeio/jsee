@@ -10,6 +10,17 @@ import sys
 import jsee
 from jsee.jsee import DEFAULT_MAX_BODY_BYTES
 
+if len(sys.argv) > 1 and sys.argv[1] in ('inspect', 'validate', 'run', 'serve'):
+  from jsee.transport import command
+  output = sys.stdout
+  if sys.argv[1] != 'serve':
+    # Keep prints from model imports/functions off the machine-readable output channel.
+    sys.stdout = sys.stderr
+  result, exit_code = command(sys.argv[1:])
+  if result is not None:
+    output.write(json.dumps(result, allow_nan=False) + '\n')
+  sys.exit(exit_code)
+
 
 # ── jsee init <template> ────────────────────────────────────────────
 if len(sys.argv) >= 2 and sys.argv[1] == 'init':

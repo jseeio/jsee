@@ -54,7 +54,28 @@ The result is `{'runId': ..., 'status': 'succeeded', 'result': ...}` or a failed
 
 Local sync/async Python functions are supported, with keyword binding by default and schema input order for `container: 'args'`. Source imports work normally. Schema imports, remote models, and streams fail with `JSEE_CAPABILITY_UNSUPPORTED`. Other codes distinguish invalid schema prerequisites, invalid inputs, and execution failure. Synchronous code runs on the calling thread; browser timeout/security settings do not provide containment here.
 
-The [clean sales example](../examples/clean-sales/README.md) has shared JS/Python cases and a browser form. Canonical CLI/HTTP/MCP adapters and remote artifact handles remain subsequent work.
+The [clean sales example](../examples/clean-sales/README.md) has shared JS/Python cases and a browser form. JSON CLI/HTTP adapters and retrievable file artifacts are available below; MCP remains subsequent work.
+
+## JSON commands and canonical HTTP
+
+```sh
+jsee inspect schema.json --json
+jsee validate schema.json
+jsee run schema.json --input input.json --json
+jsee serve schema.json --port 5050
+```
+
+Use a descriptor with local Python files, optional stable `id`, declared inputs and outputs. Inspection and validation do not import the models. JSON execution reads stdin by default (`--input -`) and sends model prints to stderr. Success is `{runId, status: "succeeded", outputs, artifacts}`; failures contain `error: {code, message}`. CLI exit codes are 0 for success, 2 for descriptor/request errors, and 1 for invocation/output failures.
+
+Only declared outputs are returned; groups flatten and aliases retain their existing lookup order. Outputs must be JSON-compatible. Missing values and unsupported objects fail; non-finite numbers become null. Renderer-specific output shapes are not fully validated. For `file` outputs, return text, `bytes`, `bytearray` or `memoryview`, optionally inside `{content, filename, mime}`. `value` and `data` are accepted content aliases. Paths and URLs are never read or fetched as file content.
+
+A file output becomes `{artifact: "<runId>/<index>"}`. Its `artifacts` entry provides `id`, `output`, `name`, `mime`, `size`, `sha256` and `uri`. CLI artifacts persist in `.jsee-artifacts/` or `--artifact-dir`, with `file:` URIs. HTTP artifacts use relative download URIs, remain available until server shutdown, and are removed on orderly close. Abrupt termination can leave temporary files for host cleanup.
+
+`serve` exposes `GET /schema`, `GET /openapi.json`, JSON `POST /run`, and `GET /__jsee/artifacts/<runId>/<index>`, alongside the UI and legacy stage routes. Programmatic equivalents are `jsee.serve(path, canonical=True)` and `jsee.create_app(path, canonical=True)`. Call `app.close()` when retiring a canonical WSGI application. Canonical serving requires a file-backed descriptor; existing callable-based serving remains available. A stage named `run` must be renamed to avoid the reserved endpoint.
+
+Limits are 50 MiB per JSON request (`--max-body-bytes`) and 64 MiB/1,024 artifacts per server or CLI invocation (`--max-artifact-bytes` changes bytes). Programmatic options use underscores. Limit failures publish no partial file batch. Invalid inputs return 400; excessive bodies 413; non-JSON content 415; unsupported capabilities 422; model/output errors 500; artifact quotas 507. The new routes omit wildcard CORS. Existing routes retain their CORS policy. Authentication, forced interruption and canonical streaming remain pending; these servers do not sandbox model code.
+
+The [main README](../README.md#json-commands-and-canonical-http) describes the common transport contract and validation scope. Existing Python CLI forms and stdlib/WSGI APIs retain their behavior.
 
 ## How it works
 

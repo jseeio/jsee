@@ -612,7 +612,7 @@ def jsee_output_to_json_schema(output):
         {'type': 'array', 'items': {'type': 'object', 'additionalProperties': True}},
       ]
     }
-  if t in ('chart', 'map', '3d', 'gallery', 'object'):
+  if t in ('chart', 'map', '3d', 'gallery'):
     return {
       'oneOf': [
         {'type': 'object', 'additionalProperties': True},
@@ -824,7 +824,22 @@ def _call_model_func(func, data):
   return result
 
 
-async def invoke_schema(schema, data, *, cwd='.'):
+def _invocation_unsupported_reason(schema):
+  models = schema.get('model', [])
+  if isinstance(models, dict):
+    models = [models]
+  if not models:
+    return 'Invocation requires a model'
+  for model in models:
+    url = model.get('url')
+    if (model.get('type') not in (None, 'py') or not isinstance(url, str)
+        or not url.endswith('.py') or urllib.parse.urlparse(url).scheme
+        or model.get('code') or model.get('stream') or model.get('imports') or schema.get('imports')):
+      return 'invoke_schema supports local Python files without schema imports or streaming'
+  return None
+
+
+async def invoke_schema(schema, data, *, cwd='.', _model_funcs=None):
   """Execute a local Python pipeline; keep terminal status separate from model data.
 
   Accepts decoded inputs, not file paths/URLs to fetch. Synchronous model code runs
@@ -847,14 +862,11 @@ async def invoke_schema(schema, data, *, cwd='.'):
     # Validation precedes module initialization. JSON input containers belong to this invocation.
     result = _prepare_inputs(schema.get('inputs'), copy.deepcopy(data))
     code = 'JSEE_CAPABILITY_UNSUPPORTED'
-    for model in models:
-      url = model.get('url')
-      if (model.get('type') not in (None, 'py') or not isinstance(url, str)
-          or not url.endswith('.py') or urllib.parse.urlparse(url).scheme
-          or model.get('code') or model.get('stream') or model.get('imports') or schema.get('imports')):
-        raise ValueError('invoke_schema supports local Python files without schema imports or streaming')
+    unsupported = _invocation_unsupported_reason(schema)
+    if unsupported:
+      raise ValueError(unsupported)
     code = 'JSEE_EXECUTION_FAILED'
-    funcs = _load_model_func(schema, cwd)
+    funcs = _load_model_func(schema, cwd) if _model_funcs is None else _model_funcs
     input_names = list(jsee_inputs_to_json_schema(schema.get('inputs', []))['properties'])
     for model in models:
       # Match JS truthiness for the legacy stop field, including empty arrays/objects.
@@ -1029,7 +1041,9 @@ def _check_body_limit(limit):
   return limit
 
 
-def _read_request_inputs(inputs, stream, content_type, content_length, limit):
+def _read_request_inputs(inputs, stream, content_type, content_length, limit, *, json_only=False, validate_inputs=True):
+  if json_only and content_type.split(';')[0].strip().lower() != 'application/json':
+    raise _RequestError('Canonical /run accepts application/json', 415)
   length_text = str(content_length or '0').strip()
   if not length_text.isascii() or not length_text.isdigit():
     raise _RequestError('Content-Length must be a nonnegative integer')
@@ -1044,8 +1058,13 @@ def _read_request_inputs(inputs, stream, content_type, content_length, limit):
   if len(body) != length:
     raise _RequestError('Body is shorter than Content-Length')
   try:
-    data = _parse_multipart(content_type, body) if 'multipart/form-data' in content_type else json.loads(body or b'{}')
-    return _prepare_inputs(inputs, data)
+    if json_only:
+      def reject_constant(value):
+        raise ValueError('Non-finite JSON number: ' + value)
+      data = json.loads(body.decode('utf-8') or '{}', parse_constant=reject_constant)
+    else:
+      data = _parse_multipart(content_type, body) if 'multipart/form-data' in content_type else json.loads(body or b'{}')
+    return _prepare_inputs(inputs, data) if validate_inputs else data
   except ValueError as error:
     raise _RequestError(str(error)) from error
 
@@ -1143,10 +1162,8 @@ def _prepare_app(target, host, port, options):
     schema_cwd = os.path.dirname(os.path.abspath(target))
     with open(target, 'r') as f:
       schema = json.load(f)
-    funcs = _load_model_func(schema, schema_cwd)
   elif isinstance(target, dict):
     schema = copy.deepcopy(target)
-    funcs = _load_model_func(schema, schema_cwd)
   elif callable(target):
     schema = generate_schema(target, host, port, **options)
     if options.get('chat'):
@@ -1167,6 +1184,21 @@ def _prepare_app(target, host, port, options):
   if not callable(target):
     _apply_input_defaults(schema.get('inputs', []), options.get('defaults', {}),
                          options.get('extra_positional', []))
+    if options.get('canonical'):
+      from .transport import inspect_schema
+      description = inspect_schema(schema)
+      if not description['capabilities']['invoke']:
+        raise ValueError(description['capabilities']['reason'])
+      stage_models = schema.get('model', [])
+      stage_models = [stage_models] if isinstance(stage_models, dict) else stage_models
+      if any(model.get('name', 'model') == 'run' for model in stage_models):
+        raise ValueError('Model endpoint /run conflicts with canonical /run; rename the model or use legacy serving')
+    funcs = _load_model_func(schema, schema_cwd)
+  elif options.get('canonical'):
+    raise ValueError('Canonical serving requires a descriptor with local model files')
+
+  # The callable contract retains source URLs; the GUI copy points to per-stage HTTP endpoints.
+  source_schema = copy.deepcopy(schema)
 
   # Normalize model to list for internal iteration, keep original for client
   models = schema.get('model', {})
@@ -1183,7 +1215,7 @@ def _prepare_app(target, host, port, options):
     m['url'] = '/{}'.format(name)
     m['worker'] = False
 
-  return schema, funcs, models, schema_cwd
+  return schema, funcs, models, schema_cwd, source_schema
 
 
 def serve(target, host='127.0.0.1', port=5050, max_body_bytes=DEFAULT_MAX_BODY_BYTES, **kwargs):
@@ -1200,7 +1232,12 @@ def serve(target, host='127.0.0.1', port=5050, max_body_bytes=DEFAULT_MAX_BODY_B
   max_body_bytes limits JSON and multipart request bodies (default: 50 MiB).
   """
   max_body_bytes = _check_body_limit(max_body_bytes)
-  schema, funcs, models, schema_cwd = _prepare_app(target, host, port, kwargs)
+  schema, funcs, models, schema_cwd, source_schema = _prepare_app(target, host, port, kwargs)
+  computation = None
+  if kwargs.get('canonical'):
+    from .transport import ComputationService, ARTIFACT_LIMIT
+    computation = ComputationService(source_schema, funcs, schema_cwd, max_body_bytes,
+                                     kwargs.get('max_artifact_bytes', ARTIFACT_LIMIT))
 
   runtime_path = _find_runtime(schema)
   runtime_code = None
@@ -1242,7 +1279,26 @@ def serve(target, host='127.0.0.1', port=5050, max_body_bytes=DEFAULT_MAX_BODY_B
     def _send_error(self, msg, status=400):
       self._send_json({'error': msg}, status)
 
+    def _canonical(self):
+      if computation is None:
+        return False
+      response = computation.dispatch(self.command, urllib.parse.urlparse(self.path).path,
+          self.headers.get('Content-Type', ''), self.headers.get('Content-Length'), self.rfile)
+      if response is None:
+        return False
+      status, headers, body = response
+      if status >= 400:
+        self.close_connection = True
+      self.send_response(status)
+      for key, value in headers:
+        self.send_header(key, value)
+      self.end_headers()
+      self.wfile.write(body)
+      return True
+
     def do_OPTIONS(self):
+      if self._canonical():
+        return
       self.send_response(204)
       self.send_header('Access-Control-Allow-Origin', '*')
       self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
@@ -1250,6 +1306,8 @@ def serve(target, host='127.0.0.1', port=5050, max_body_bytes=DEFAULT_MAX_BODY_B
       self.end_headers()
 
     def do_GET(self):
+      if self._canonical():
+        return
       parsed = urllib.parse.urlparse(self.path)
       pathname = parsed.path.rstrip('/')
 
@@ -1299,6 +1357,8 @@ def serve(target, host='127.0.0.1', port=5050, max_body_bytes=DEFAULT_MAX_BODY_B
       self.send_error(404)
 
     def do_POST(self):
+      if self._canonical():
+        return
       parsed = urllib.parse.urlparse(self.path)
       pathname = parsed.path.rstrip('/')
       model_name = pathname.lstrip('/')
@@ -1345,6 +1405,10 @@ def serve(target, host='127.0.0.1', port=5050, max_body_bytes=DEFAULT_MAX_BODY_B
     server.serve_forever()
   except KeyboardInterrupt:
     pass
+  finally:
+    server.server_close()
+    if computation:
+      computation.close()
 
 
 def create_app(target, **kwargs):
@@ -1371,7 +1435,12 @@ def create_app(target, **kwargs):
   host = kwargs.pop('host', '127.0.0.1')
   port = kwargs.pop('port', 5050)
   max_body_bytes = _check_body_limit(kwargs.pop('max_body_bytes', DEFAULT_MAX_BODY_BYTES))
-  schema, funcs, models, schema_cwd = _prepare_app(target, host, port, kwargs)
+  schema, funcs, models, schema_cwd, source_schema = _prepare_app(target, host, port, kwargs)
+  computation = None
+  if kwargs.get('canonical'):
+    from .transport import ComputationService, ARTIFACT_LIMIT
+    computation = ComputationService(source_schema, funcs, schema_cwd, max_body_bytes,
+                                     kwargs.get('max_artifact_bytes', ARTIFACT_LIMIT))
 
   runtime_path = _find_runtime(schema)
   runtime_code = None
@@ -1399,6 +1468,14 @@ def create_app(target, **kwargs):
   def app(environ, start_response):
     method = environ.get('REQUEST_METHOD', 'GET')
     path_info = environ.get('PATH_INFO', '/').rstrip('/') or '/'
+    if computation:
+      response = computation.dispatch(method, path_info, environ.get('CONTENT_TYPE', ''),
+                                      environ.get('CONTENT_LENGTH'), environ.get('wsgi.input'))
+      if response is not None:
+        from http import HTTPStatus
+        status, headers, body = response
+        start_response('{} {}'.format(status, HTTPStatus(status).phrase), headers)
+        return [body]
 
     if method == 'OPTIONS':
       start_response('204 No Content', [
@@ -1517,4 +1594,6 @@ def create_app(target, **kwargs):
     start_response('405 Method Not Allowed', [('Content-Type', 'text/plain')])
     return [b'Method Not Allowed']
 
+  if computation:
+    app.close = computation.close
   return app

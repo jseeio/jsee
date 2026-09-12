@@ -1,6 +1,6 @@
 const { collectInputValues, getInputDefaultValue, prepareInputs, cloneSchema } = require('./schema')
 const { runPipeline } = require('./pipeline')
-const { outputLookupNames, cleanOutputMetadata } = require('./utils')
+const { outputLookupNames, cleanOutputMetadata, invocationUnsupportedReason } = require('./utils')
 const fs = require('fs')
 const path = require('path')
 const os = require('os')
@@ -1326,7 +1326,7 @@ async function runSchemaOnce (schema, data, schemaPath, cwd=process.cwd(), log=(
   return runPipeline(stages, inputs)
 }
 
-async function invokeSchema (schema, data, { schemaPath, cwd=process.cwd(), log=() => {} }={}) {
+async function invokeSchema (schema, data, { schemaPath, cwd=process.cwd(), log=() => {}, _modelFunctions }={}) {
   const runId = crypto.randomUUID()
   let code = 'JSEE_SCHEMA_INVALID'
   try {
@@ -1341,17 +1341,12 @@ async function invokeSchema (schema, data, { schemaPath, cwd=process.cwd(), log=
     // Validate before imports/initializers can have effects. Models own a copy of JSON input containers.
     const inputs = prepareInputs(schema.inputs, cloneSchema(data))
     code = 'JSEE_CAPABILITY_UNSUPPORTED'
-    for (const model of models) {
-      if (!['function', 'async-function', 'class', 'async-init', undefined].includes(model.type) ||
-          model.stream || toArray(model.imports).length || toArray(schema.imports).length ||
-          (typeof model.code !== 'function' && typeof model.code !== 'string' && (!model.url || isNetworkUrl(model.url)))) {
-        throw new Error('invokeSchema supports local JavaScript models without schema imports or streaming')
-      }
-    }
+    const unsupported = invocationUnsupportedReason(schema)
+    if (unsupported) throw new Error(unsupported)
     code = 'JSEE_EXECUTION_FAILED'
     // Both entry points use the same loader and transitions; terminal calls cannot leave a stream open.
     const stages = models.map(model => async values => {
-      const func = await loadCliModelFunction(model, schemaPath, cwd, log, schema.inputs)
+      const func = _modelFunctions ? _modelFunctions[model.name] : await loadCliModelFunction(model, schemaPath, cwd, log, schema.inputs)
       const result = await func(values)
       if (isStreamResult(result)) {
         if (typeof result.return === 'function') await result.return()
@@ -2289,7 +2284,51 @@ function template(schema, blocks) {
 </html>`
 }
 
+async function command (pargv) {
+  const { inspectSchema, validateDescriptor, ArtifactStore, formatRun, failedRun, BODY_LIMIT, ARTIFACT_LIMIT } = require('./transport')
+  const argv = minimist(pargv.slice(1), { boolean: ['json'], string: ['input', 'artifact-dir'], default: { input: '-', 'max-body-bytes': BODY_LIMIT, 'max-artifact-bytes': ARTIFACT_LIMIT } })
+  let schema, schemaPath
+  try {
+    if (argv._.length !== 1) throw new Error('Usage: jsee ' + pargv[0] + ' schema.json [--input -] [--json]')
+    schemaPath = path.resolve(String(argv._[0]))
+    schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'))
+    if (pargv[0] === 'validate') {
+      const body = validateDescriptor(schema)
+      return { body, exitCode: body.valid ? 0 : 2 }
+    }
+    const description = inspectSchema(schema)
+    if (pargv[0] === 'inspect') return { body: description, exitCode: 0 }
+  } catch (error) { return { body: failedRun('JSEE_SCHEMA_INVALID', error.message), exitCode: 2 } }
+  let data
+  try {
+    const limit = argv['max-body-bytes']
+    if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('max-body-bytes must be a positive integer')
+    const source = argv.input === '-' ? process.stdin : fs.createReadStream(path.resolve(argv.input))
+    const chunks = []
+    let size = 0
+    for await (const chunk of source) {
+      size += chunk.length
+      if (size > limit) throw Object.assign(new Error('Input exceeds ' + limit + ' bytes'), { code: 'JSEE_BODY_TOO_LARGE' })
+      chunks.push(chunk)
+    }
+    data = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)) || '{}')
+  } catch (error) { return { body: failedRun(error.code === 'JSEE_BODY_TOO_LARGE' ? error.code : 'JSEE_REQUEST_INVALID', error.message), exitCode: 2 } }
+  const run = await invokeSchema(schema, data, { schemaPath, log: console.error })
+  let store
+  try {
+    if (run.status !== 'succeeded') return { body: run, exitCode: 1 }
+    store = new ArtifactStore({ directory: argv['artifact-dir'] || path.resolve('.jsee-artifacts'), maxBytes: argv['max-artifact-bytes'] })
+    const body = formatRun(schema, run, store)
+    return { body, exitCode: body.status === 'succeeded' ? 0 : 1 }
+  } catch (error) { return { body: failedRun('JSEE_OUTPUT_INVALID', error.message, run.runId), exitCode: 1 } }
+}
+
 async function gen (pargv, returnHtml=false) {
+  const canonical = pargv[0] === 'serve'
+  if (canonical) {
+    if (!pargv[1] || pargv[1].startsWith('-')) throw new Error('Usage: jsee serve schema.json [--port 3000]')
+    pargv = ['--inputs', pargv[1], '--serve', ...pargv.slice(2)]
+  }
   // Determine if JSEE CLI is imported or run directly
   const mainPath = require.main && require.main.path ? require.main.path : process.cwd()
   const mainFilename = require.main && require.main.filename ? require.main.filename : ''
@@ -2468,6 +2507,14 @@ Usage: jsee [schema.json|package] [data...] [options]
        jsee init [template] [--html]
 
 Commands:
+  inspect schema.json      Describe inputs, outputs and capabilities without loading models
+  validate schema.json     Check computation structure and input defaults
+  run schema.json          Execute the whole pipeline; JSON stdin/stdout by default
+    --input <file|->        Read JSON from a file or stdin
+    --artifact-dir <dir>    Persist output files (default: .jsee-artifacts)
+  serve schema.json        Serve UI, POST /run, GET /schema and /openapi.json
+    --max-body-bytes <n>    JSON request limit (default: 52428800)
+    --max-artifact-bytes <n> Artifact quota (default: 67108864)
   init [template]           Scaffold a new JSEE project (templates: minimal, chat)
     --html                  Generate a single index.html instead of separate files
 
@@ -2708,6 +2755,17 @@ Documentation: https://jsee.org
   }
 
   // Store original models before execute/CDN mutations (for client-side toggle)
+  let computationSchema
+  if (canonical) {
+    const { inspectSchema } = require('./transport')
+    const description = inspectSchema(schema)
+    if (!description.capabilities.invoke) throw new Error(description.capabilities.reason)
+    schema.model.forEach(model => { if (!model.name) model.name = getModelExportName(model) })
+    inspectSchema(schema) // Inferred endpoint names must also be unique before any model loads.
+    if (schema.model.some(model => model.name === 'run')) throw new Error('Model endpoint /run conflicts with canonical /run; rename the model or use legacy --serve')
+    computationSchema = cloneSchema(schema)
+    shouldExecute = true
+  }
   const originalModels = JSON.parse(JSON.stringify(schema.model))
 
   // Server-side execution
@@ -3026,6 +3084,44 @@ Documentation: https://jsee.org
     const endpointRoots = [appRoot]
     if (identityResult && identityResult.serveDir) endpointRoots.push(identityResult.serveDir)
     if (identityResult && identityResult.serveFile) endpointRoots.push(path.dirname(identityResult.serveFile.resolved))
+    let artifactStore
+    if (canonical) {
+      const { ArtifactStore, formatRun, failedRun, responseStatus, canonicalOpenAPI, BODY_LIMIT } = require('./transport')
+      const limit = argv['max-body-bytes'] === undefined ? BODY_LIMIT : argv['max-body-bytes']
+      if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('max-body-bytes must be a positive integer')
+      artifactStore = new ArtifactStore({ http: true, maxBytes: argv['max-artifact-bytes'] })
+      app.get('/schema', (req, res) => res.json(computationSchema))
+      app.get('/openapi.json', (req, res) => res.json(canonicalOpenAPI(computationSchema)))
+      app.get('/__jsee/artifacts/:run/:index', (req, res) => {
+        const id = req.params.run + '/' + req.params.index
+        const artifact = artifactStore.get(id)
+        if (!artifact) return res.status(404).json({ error: 'Unknown artifact' })
+        try {
+          const filename = resolveInside(artifactStore.root, id)
+          const encoded = encodeURIComponent(artifact.name).replace(/['()*]/g, char => '%' + char.charCodeAt(0).toString(16))
+          res.set({ 'Content-Type': artifact.mime, 'Content-Disposition': "attachment; filename*=UTF-8''" + encoded, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' })
+          res.sendFile(filename)
+        } catch (error) { sendEndpointError(res, error) }
+      })
+      app.post('/run', (req, res, next) => {
+        if (!req.is('application/json')) return res.status(415).json(failedRun('JSEE_UNSUPPORTED_MEDIA', 'Canonical /run accepts application/json'))
+        next()
+      }, express.raw({ type: 'application/json', limit }), async (req, res) => {
+        let data
+        try { data = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(req.body) || '{}') } catch (error) {
+          return res.status(400).json(failedRun('JSEE_REQUEST_INVALID', error.message))
+        }
+        const run = await invokeSchema(computationSchema, data, { schemaPath, cwd, log, _modelFunctions: modelFuncs })
+        const response = formatRun(computationSchema, run, artifactStore)
+        res.status(responseStatus(response)).json(response)
+      })
+      app.use('/run', (error, req, res, next) => {
+        if (!error) return next()
+        const run = failedRun(error.type === 'entity.too.large' ? 'JSEE_BODY_TOO_LARGE' : 'JSEE_REQUEST_INVALID', error.message)
+        res.status(responseStatus(run)).json(run)
+      })
+      app.all('/run', (req, res) => res.status(405).json({ error: 'Use POST /run' }))
+    }
     // CORS
     app.use((req, res, next) => {
       res.header('Access-Control-Allow-Origin', '*')
@@ -3138,13 +3234,22 @@ Documentation: https://jsee.org
     // app.use(express.static(require.main.path)) // Serve static files from the main module path
     // app.use(express.static(path.join(require.main.path, '..'))) // Serve static files from the parent directory of the main module path
     app.use(containedStatic(appRoot)) // Serve static files from the app root
-    app.listen(argv.port, argv.host, () => {
+    const server = app.listen(argv.port, argv.host, () => {
       console.log(`JSEE app is running: http://${getDisplayHost(argv.host)}:${argv.port}`)
     })
+    if (artifactStore) {
+      server.on('close', () => artifactStore.close())
+      server.on('error', () => artifactStore.close())
+      const cleanup = () => artifactStore.close()
+      process.once('exit', cleanup)
+      server.once('close', () => process.removeListener('exit', cleanup))
+    }
+    return server
   }
 }
 
 module.exports = gen
+module.exports.command = command
 module.exports.collectFetchBundleBlocks = collectFetchBundleBlocks
 module.exports.resolveLocalImportFile = resolveLocalImportFile
 module.exports.resolveFetchImport = resolveFetchImport

@@ -101,6 +101,35 @@ invocation = asyncio.run(invoke_schema({'model': [
     {'name': 'first', 'url': 'pipeline.py'}, {'name': 'second', 'url': 'pipeline.py'}]}, {'x': 2}))
 assert invocation['status'] == 'succeeded', invocation
 assert invocation['result'] == {'x': 2, 'y': 3, 'z': 6}, invocation
+from jsee.transport import command
+import subprocess, sys
+Path('artifact.py').write_text('def artifact(x):\n    return {"answer": x * 2, "csv": {"content": "a,b\\n1,2\\n", "filename": "data.csv", "mime": "text/csv"}}\n')
+Path('schema.json').write_text(json.dumps({'id': 'installed', 'model': {'name': 'artifact', 'url': 'artifact.py'},
+    'inputs': [{'name': 'x', 'type': 'int'}], 'outputs': [{'name': 'answer', 'type': 'number'}, {'name': 'csv', 'type': 'file'}]}))
+Path('input.json').write_text('{"x": 3}')
+assert command(['validate', 'schema.json'])[1] == 0
+assert command(['inspect', 'schema.json'])[0]['id'] == 'installed'
+cli = subprocess.run([sys.executable, str(Path(os.environ['PYTHONPATH']) / 'bin/jsee'), 'inspect', 'schema.json'], capture_output=True, text=True)
+assert cli.returncode == 0 and json.loads(cli.stdout)['id'] == 'installed', cli.stderr
+run, code = command(['run', 'schema.json', '--input', 'input.json'])
+assert code == 0 and run['outputs']['answer'] == 6, run
+assert Path('.jsee-artifacts', run['artifacts'][0]['id']).read_bytes() == b'a,b\n1,2\n'
+app = create_app(str(Path('schema.json')), canonical=True)
+def call(path, method='GET', body=b''):
+    statuses = []
+    result = b''.join(app({'PATH_INFO': path, 'REQUEST_METHOD': method, 'CONTENT_LENGTH': str(len(body)),
+        'CONTENT_TYPE': 'application/json', 'wsgi.input': io.BytesIO(body)}, lambda status, headers: statuses.append(status)))
+    assert statuses[0].startswith('200'), (statuses, result)
+    return result
+try:
+    assert json.loads(call('/schema'))['model']['url'] == 'artifact.py'
+    run = json.loads(call('/run', 'POST', b'{"x":3}'))
+    assert run['outputs']['answer'] == 6
+    data = call(run['artifacts'][0]['uri'])
+    assert data == b'a,b\n1,2\n'
+    assert run['artifacts'][0]['sha256'] == hashlib.sha256(data).hexdigest()
+finally:
+    app.close()
 expected = json.loads(os.environ['JSEE_EXPECTED_ASSETS'])
 descriptor = files('jsee').joinpath('static/schema.json').read_bytes()
 assert hashlib.sha256(descriptor).hexdigest() == expected['schema.json']

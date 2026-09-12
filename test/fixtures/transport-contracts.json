@@ -1,0 +1,13 @@
+[
+  {"name":"only declared outputs escape the pipeline","outputs":[{"name":"answer","type":"number"}],"result":{"secret":"input","intermediate":[1,2],"answer":42},"expected":{"answer":42}},
+  {"name":"aliases and nested output groups","outputs":[{"type":"group","elements":[{"name":"Display Name","type":"string","alias":["alias"]},{"name":"zero","type":"number"}]}],"result":{"display_name":"normalized","alias":"fallback","zero":0},"expected":{"Display Name":"normalized","zero":0}},
+  {"name":"metadata-shaped output remains data","outputs":[{"name":"status","type":"string"},{"name":"runId","type":"string"}],"result":{"status":"business","runId":"model"},"expected":{"status":"business","runId":"model"}},
+  {"name":"scalar binds one output","outputs":[{"name":"answer","type":"bool"}],"result":false,"expected":{"answer":false}},
+  {"name":"null binds one output","outputs":[{"name":"answer","type":"object"}],"result":null,"expected":{"answer":null}},
+  {"name":"missing output fails","outputs":[{"name":"answer","type":"number"}],"result":{"other":42},"error":"JSEE_OUTPUT_INVALID"},
+  {"name":"ambiguous scalar fails","outputs":[{"name":"a","type":"number"},{"name":"b","type":"number"}],"result":42,"error":"JSEE_OUTPUT_INVALID"},
+  {"name":"file URL is never fetched","outputs":[{"name":"file","type":"file"}],"result":{"file":{"url":"https://example.com/private"}},"error":"JSEE_OUTPUT_INVALID"},
+  {"name":"all outputs checked before file commit","outputs":[{"name":"file","type":"file"},{"name":"missing","type":"number"}],"result":{"file":{"content":"secret"}},"error":"JSEE_OUTPUT_INVALID"},
+  {"name":"prototype names remain JSON properties","outputs":[{"name":"__proto__","type":"string"}],"result":{"__proto__":"data"},"expected":{"__proto__":"data"}},
+  {"name":"no output declarations disclose no data","outputs":[],"result":{"secret":"input"},"expected":{}}
+]
