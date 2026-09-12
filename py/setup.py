@@ -35,6 +35,7 @@ setup(
     package_data={'jsee': ['static/*']},
     cmdclass={'build_py': BuildWithRuntime, 'sdist': SdistWithRuntime},
     scripts=['bin/jsee'],
+    extras_require={'server': ['mcp==2.2.0']},
     license='MIT',
     description='Turn Python functions into web apps with auto-generated GUI and REST API',
     long_description=long_description,

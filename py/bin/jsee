@@ -16,7 +16,11 @@ if len(sys.argv) > 1 and sys.argv[1] in ('inspect', 'validate', 'run', 'serve'):
   if sys.argv[1] != 'serve':
     # Keep prints from model imports/functions off the machine-readable output channel.
     sys.stdout = sys.stderr
-  result, exit_code = command(sys.argv[1:])
+  try:
+    result, exit_code = command(sys.argv[1:])
+  except (RuntimeError, ValueError, OSError) as error:
+    print(str(error), file=sys.stderr)
+    sys.exit(1)
   if result is not None:
     output.write(json.dumps(result, allow_nan=False) + '\n')
   sys.exit(exit_code)

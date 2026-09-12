@@ -23,12 +23,7 @@ test.each(contracts)('$name', fixture => {
       expect(result).toMatchObject({ status: 'succeeded', outputs: fixture.expected, artifacts: [] })
       const description = inspectSchema({ model: { code: 'function model() {}' }, outputs: fixture.outputs })
       const ajv = new Ajv({ strict: false })
-      if (Object.hasOwn(result.outputs, '__proto__')) {
-        // Ajv 8 deliberately omits __proto__ in schema maps (vocabularies/code.js).
-        // Check its own-property schema directly, alongside the exact output assertion above.
-        expect(Object.hasOwn(description.outputSchema.properties, '__proto__')).toBe(true)
-        expect(ajv.compile(description.outputSchema.properties.__proto__)(result.outputs.__proto__)).toBe(true)
-      } else expect(ajv.compile(description.outputSchema)(result.outputs)).toBe(true)
+      expect(ajv.compile(description.outputSchema)(result.outputs)).toBe(true)
     }
     expect(fs.readdirSync(store.root)).toEqual([])
   } finally { store.close() }

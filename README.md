@@ -2,14 +2,14 @@
 
 Portable, schema-driven web apps for local computation.
 
-JSEE turns a model function plus a small JSON schema into a reactive browser app, CLI-served tool, offline HTML bundle and API surface. It is meant for computations that should be easy to share, inspect, rerun and keep on the user's machine.
+JSEE turns a model function plus a small JSON schema into a reactive browser app, CLI-served tool, offline HTML bundle, HTTP API and MCP tool. It is meant for computations that should be easy to share, inspect, rerun and keep on the user's machine.
 
 Use JSEE when you want:
 
 - a self-contained UI around a JavaScript, Python, API, or WASM computation
 - typed inputs, output rendering, file/folder handling, progress, and cancellation without writing app plumbing
 - browser-first execution with optional Worker isolation and offline bundling
-- the same computation exposed to humans through a UI and to tools through HTTP/API routes
+- the same computation exposed to humans through a UI and to tools through HTTP or MCP
 
 Smallest browser example:
 
@@ -872,7 +872,7 @@ Python stages from the same source file share one module instance within an appl
 
 ## Repository verification
 
-`npm run build` builds browser assets, copies them into the maintained Python package, and runs types, unit tests, and the standard Playwright suite. `npm run test:python-native` checks the native runtime and builds/installs packages outside the checkout.
+`npm run build` builds browser assets, copies them into the maintained Python package, and runs types, unit tests, and the standard Playwright suite. `npm run test:python-native` checks the native runtime and builds/installs packages outside the checkout. After installing `./py[server]`, run `npm run test:mcp` for independent SDK client/server checks. Set `JSEE_MCP_PYTHON` to use a separate Python executable.
 
 The additional app suites exercise real computation:
 
@@ -892,7 +892,7 @@ Shared version numbers identify tested contracts, with these runtime differences
 |---|---|---|---|
 | Groups, defaults, options, numeric constraints | Shared fixtures | Shared fixtures | Shared fixtures |
 | Custom input expressions and nonempty controls | UI validation | Not evaluated | Not evaluated |
-| Pipeline execution | Browser orchestrates stages | `invokeSchema`, JSON CLI and canonical HTTP execute JS pipelines; legacy stages remain | `invoke_schema`, JSON CLI and canonical HTTP/WSGI execute Python pipelines; legacy stages remain |
+| Pipeline execution | Browser orchestrates stages | `invokeSchema`, JSON CLI, canonical HTTP and MCP execute JS pipelines; legacy stages remain | `invoke_schema`, JSON CLI, canonical HTTP/WSGI and MCP execute Python pipelines; legacy stages remain |
 | Python callable selection | Pyodide `entry` | Not a native Python runtime | `entry`, with a separate endpoint `name` |
 | Interruption | Worker termination; cooperative main-thread and fetch cancellation | No OS containment | Stream cleanup; no forced interruption of arbitrary model code |
 
@@ -921,7 +921,7 @@ jsee serve schema.json --port 3000
 
 `run` reads UTF-8 JSON from stdin by default (`--input -`), or from the selected file. It writes one JSON envelope to stdout; model diagnostics go to stderr. Successful calls return `{runId, status: "succeeded", outputs, artifacts}`. Failed calls return `{runId, status: "failed", error: {code, message}}`. Exit codes are 0 for success, 2 for descriptor/JSON-request errors, and 1 for invocation or output failures.
 
-`outputs` contains declared, flattened output names, using existing alias lookup. Accumulated inputs and undeclared intermediates are omitted. Missing outputs and non-JSON values fail with `JSEE_OUTPUT_INVALID`; non-finite numbers become null. This checks output presence and transport encoding, not every renderer-specific value shape. An `object` output accepts any JSON value. Declare binary data as `type: "file"`.
+`outputs` contains declared, flattened output names, using existing alias lookup. Accumulated inputs and undeclared intermediates are omitted. Missing outputs and non-JSON values fail with `JSEE_OUTPUT_INVALID`; non-finite numbers become null. Canonical CLI/HTTP/MCP results are checked against the generated output schema before files are stored: numeric/string/boolean types, table containers, and declared media fields. Non-finite values therefore fail numeric output declarations after becoming null. This validates the built-in schema shapes, not chart semantics or arbitrary custom JSON Schema. An `object` output accepts any JSON value. Declare binary data as `type: "file"`.
 
 File outputs accept text or bytes, directly or in a descriptor with `content`, `value`, or `data`, plus optional `filename` and `mime`. A file output becomes `{artifact: "<runId>/<index>"}`. The corresponding `artifacts` entry contains `id`, `output`, `name`, `mime`, `size` in bytes, `sha256`, and `uri`. Model-provided paths and URLs are never read or fetched by this adapter. CLI files persist under `.jsee-artifacts/` in the working directory (change with `--artifact-dir`) and use `file:` URIs.
 
@@ -938,7 +938,21 @@ A stage named `run` conflicts with canonical `/run` and is rejected before loadi
 
 Requests default to a 50 MiB limit (`--max-body-bytes`). Artifact storage defaults to 64 MiB and 1,024 files per server, or per CLI invocation (`--max-artifact-bytes` changes the byte limit). A batch exceeding the quota fails without publishing partial artifacts. HTTP files live in a private temporary directory until server shutdown; a killed process can leave temporary files for host cleanup. HTTP URIs are relative to that server and do not survive a restart. Quotas do not bound model allocations or computation time.
 
-Canonical `/run` accepts JSON only, returns 400 for invalid inputs, 413 for excessive bodies, 415 for other content types, 422 for unsupported execution capabilities, 500 for model/output errors, and 507 for artifact quota failures. It omits wildcard CORS headers. Legacy routes retain their existing CORS policy. Servers default to localhost; authentication and configurable host-wide policy remain pending. Existing security flags gate JSEE-managed operations and do not provide an OS sandbox. MCP, streaming/cancellation through the canonical operation, and multi-descriptor serving remain future work.
+Canonical `/run` accepts JSON only, returns 400 for invalid inputs, 413 for excessive bodies, 415 for other content types, 422 for unsupported execution capabilities, 500 for model/output errors, and 507 for artifact quota failures. It omits wildcard CORS headers. Legacy routes retain their existing CORS policy. Servers default to localhost; authentication and configurable host-wide policy remain pending. Existing security flags gate JSEE-managed operations and do not provide an OS sandbox. Remote MCP, streaming/cancellation through the canonical operation, and multi-descriptor serving remain future work.
+
+### MCP over stdio
+
+Start one descriptor as an MCP tool with `jsee serve schema.json --mcp-only`. This mode uses stdin/stdout for MCP and stderr for model diagnostics; it opens no HTTP listener. Node requires Node.js 20+ and uses the official `@modelcontextprotocol/server` SDK (2.0.0). Native Python requires Python 3.10+ and the optional `server` extra (`mcp` 2.2.0); install the checkout with `python -m pip install './py[server]'` after the runtime build. Python's base installation remains stdlib-only.
+
+Configure an MCP client to launch the installed `jsee` executable with arguments `['serve', '/absolute/path/schema.json', '--mcp-only']`. Use the executable belonging to the descriptor's language. For a Node checkout, use command `node` and prepend `/absolute/path/jsee/bin/jsee` to those arguments.
+
+`tools/list` derives one tool from the descriptor's stable `id`, title, description and input schema without importing model code. `tools/call` executes the same whole-pipeline invocation as JSON CLI/HTTP. Success returns the complete `{runId, status, outputs, artifacts}` envelope as `structuredContent` and JSON text, with its generated `outputSchema`. Invalid inputs, execution/output failures and artifact quota failures return `isError: true` and the failed envelope as text. Unknown tools or artifact URIs produce protocol errors.
+
+File results include `resource_link` entries with session-scoped `jsee-artifact:` URIs. `resources/list` exposes metadata; `resources/read` returns exact bytes as a base64 blob only when requested. Verify the decoded bytes against `size` and `sha256` in the run envelope. Store limits remain 64 MiB/1,024 files per session (`--max-artifact-bytes` changes bytes); rejected batches expose no files. Files disappear on orderly close or SIGTERM and cannot be retrieved by another session. SIGKILL or a crash can leave temporary files.
+
+`--max-body-bytes` bounds decoded arguments (50 MiB by default); Node also applies that limit to its incoming wire buffer, including protocol overhead. Python's SDK reads a message before JSEE checks its arguments. These limits do not bound model memory. A resource read returns the entire file: base64 adds overhead, and the client's message limit may be lower than the store quota. Large-file chunking is not implemented.
+
+Independent Node and Python SDK clients test both servers in legacy negotiation and protocol 2026-07-28 mode, including the [clean sales workflow](examples/clean-sales/README.md). MCP calls use the existing programmatic invocation lifecycle; persistent model state across calls is not a portable contract. This adapter supports terminal calls for one descriptor. Remote MCP, authentication, streams, forced cancellation and binary input transport remain pending. Model source is trusted code; stdio separation is not a sandbox.
 
 ## Changelog
 

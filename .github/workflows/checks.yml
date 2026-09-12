@@ -24,6 +24,8 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm run test:python-native
+      - run: python -m pip install './py[server]'
+      - run: npm run test:mcp
       - run: npm run test:python
       - run: python -m pip install -r test/python/requirements.txt
       - run: npm run test:python-apps-native

@@ -2646,8 +2646,13 @@ function fileLikeOutputJsonSchema () {
 function jseeOutputToJsonSchema (output) {
   const type = output && output.type
   switch (type) {
+    case 'int':
+      return { type: 'integer' }
+    case 'float':
     case 'number':
       return { type: 'number' }
+    case 'bool':
+      return { type: 'boolean' }
     case 'gauge':
       return {
         oneOf: [
@@ -2664,6 +2669,8 @@ function jseeOutputToJsonSchema (output) {
     case 'pdf':
     case 'viewer':
       return fileLikeOutputJsonSchema()
+    case 'text':
+    case 'string':
     case 'markdown':
     case 'html':
     case 'svg':

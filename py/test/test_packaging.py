@@ -12,6 +12,7 @@ import tarfile
 import zipfile
 
 import pytest
+from packaging.requirements import Requirement
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -79,6 +80,10 @@ def test_sdist_rebuild_and_installed_gui_api(tmp_path):
         metadata = Parser().parsestr(archive.read(metadata_path).decode())
         js_version = json.loads((ROOT / 'package.json').read_text())['version']
         assert metadata['Version'].split('.')[:2] == js_version.split('.')[:2]
+        requirements = [Requirement(item) for item in metadata.get_all('Requires-Dist', [])]
+        assert requirements and all(item.marker and not item.marker.evaluate({'extra': ''})
+                                    and item.marker.evaluate({'extra': 'server'}) for item in requirements)
+        assert any(item.name == 'mcp' and str(item.specifier) == '==2.2.0' for item in requirements)
         for name in PACKAGE_ASSETS:
             expected[name] = hashlib.sha256(asset_source(name).read_bytes()).hexdigest()
             assert hashlib.sha256(archive.read('jsee/static/' + name)).hexdigest() == expected[name]
@@ -111,6 +116,11 @@ assert command(['validate', 'schema.json'])[1] == 0
 assert command(['inspect', 'schema.json'])[0]['id'] == 'installed'
 cli = subprocess.run([sys.executable, str(Path(os.environ['PYTHONPATH']) / 'bin/jsee'), 'inspect', 'schema.json'], capture_output=True, text=True)
 assert cli.returncode == 0 and json.loads(cli.stdout)['id'] == 'installed', cli.stderr
+# Disable site packages to prove the base distribution works without the optional SDK.
+mcp = subprocess.run([sys.executable, '-S', str(Path(os.environ['PYTHONPATH']) / 'bin/jsee'),
+    'serve', 'schema.json', '--mcp-only'], capture_output=True, text=True, timeout=10)
+assert mcp.returncode == 1 and 'optional jsee[server]' in mcp.stderr, (mcp.returncode, mcp.stderr)
+assert mcp.stdout == '', mcp.stdout
 run, code = command(['run', 'schema.json', '--input', 'input.json'])
 assert code == 0 and run['outputs']['answer'] == 6, run
 assert Path('.jsee-artifacts', run['artifacts'][0]['id']).read_bytes() == b'a,b\n1,2\n'

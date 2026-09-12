@@ -54,7 +54,7 @@ The result is `{'runId': ..., 'status': 'succeeded', 'result': ...}` or a failed
 
 Local sync/async Python functions are supported, with keyword binding by default and schema input order for `container: 'args'`. Source imports work normally. Schema imports, remote models, and streams fail with `JSEE_CAPABILITY_UNSUPPORTED`. Other codes distinguish invalid schema prerequisites, invalid inputs, and execution failure. Synchronous code runs on the calling thread; browser timeout/security settings do not provide containment here.
 
-The [clean sales example](../examples/clean-sales/README.md) has shared JS/Python cases and a browser form. JSON CLI/HTTP adapters and retrievable file artifacts are available below; MCP remains subsequent work.
+The [clean sales example](../examples/clean-sales/README.md) has shared JS/Python cases and a browser form. JSON CLI/HTTP adapters and retrievable file artifacts are available below; MCP stdio is available with the optional server extra.
 
 ## JSON commands and canonical HTTP
 
@@ -67,7 +67,7 @@ jsee serve schema.json --port 5050
 
 Use a descriptor with local Python files, optional stable `id`, declared inputs and outputs. Inspection and validation do not import the models. JSON execution reads stdin by default (`--input -`) and sends model prints to stderr. Success is `{runId, status: "succeeded", outputs, artifacts}`; failures contain `error: {code, message}`. CLI exit codes are 0 for success, 2 for descriptor/request errors, and 1 for invocation/output failures.
 
-Only declared outputs are returned; groups flatten and aliases retain their existing lookup order. Outputs must be JSON-compatible. Missing values and unsupported objects fail; non-finite numbers become null. Renderer-specific output shapes are not fully validated. For `file` outputs, return text, `bytes`, `bytearray` or `memoryview`, optionally inside `{content, filename, mime}`. `value` and `data` are accepted content aliases. Paths and URLs are never read or fetched as file content.
+Only declared outputs are returned; groups flatten and aliases retain their existing lookup order. Outputs must be JSON-compatible. Missing values and unsupported objects fail; non-finite numbers become null. Canonical results must match the generated built-in output schema before files are stored, including numeric/string/boolean types, table containers and declared media fields. Null is rejected for numeric declarations; chart semantics and custom JSON Schemas are not validated. For `file` outputs, return text, `bytes`, `bytearray` or `memoryview`, optionally inside `{content, filename, mime}`. `value` and `data` are accepted content aliases. Paths and URLs are never read or fetched as file content.
 
 A file output becomes `{artifact: "<runId>/<index>"}`. Its `artifacts` entry provides `id`, `output`, `name`, `mime`, `size`, `sha256` and `uri`. CLI artifacts persist in `.jsee-artifacts/` or `--artifact-dir`, with `file:` URIs. HTTP artifacts use relative download URIs, remain available until server shutdown, and are removed on orderly close. Abrupt termination can leave temporary files for host cleanup.
 
@@ -76,6 +76,14 @@ A file output becomes `{artifact: "<runId>/<index>"}`. Its `artifacts` entry pro
 Limits are 50 MiB per JSON request (`--max-body-bytes`) and 64 MiB/1,024 artifacts per server or CLI invocation (`--max-artifact-bytes` changes bytes). Programmatic options use underscores. Limit failures publish no partial file batch. Invalid inputs return 400; excessive bodies 413; non-JSON content 415; unsupported capabilities 422; model/output errors 500; artifact quotas 507. The new routes omit wildcard CORS. Existing routes retain their CORS policy. Authentication, forced interruption and canonical streaming remain pending; these servers do not sandbox model code.
 
 The [main README](../README.md#json-commands-and-canonical-http) describes the common transport contract and validation scope. Existing Python CLI forms and stdlib/WSGI APIs retain their behavior.
+
+## MCP over stdio
+
+After building the checkout, install `python -m pip install './py[server]'` with Python 3.10+ (base Python support remains 3.9+). The extra pins the official `mcp` SDK to 2.2.0. Launch `jsee serve schema.json --mcp-only` from an MCP client to expose one Python descriptor as a tool without opening an HTTP listener.
+
+Discovery does not import model code. Calls return the same validated output/artifact envelope as JSON CLI/HTTP in `structuredContent` and JSON text. Failures set `isError` and return the failed envelope as text. File outputs include MCP resource links; read them through `resources/read` and verify the decoded blob against the envelope's size and SHA256. Artifact storage defaults to 64 MiB/1,024 files per session and cleans up on orderly close or SIGTERM; a crash can leave files. Reads return entire files, subject to the client's message limits.
+
+Model prints go to stderr. Calls follow `invoke_schema`'s loading lifecycle; persistent model state is not a portable contract. The SDK parses messages before JSEE applies the decoded-argument limit. Remote MCP, auth, streams, forced cancellation and binary input transport remain pending. See the [common MCP contract](../README.md#mcp-over-stdio) for client setup and limits.
 
 ## How it works
 

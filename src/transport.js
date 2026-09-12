@@ -1,9 +1,10 @@
-// Contract inspection and terminal output handling shared by the CLI and HTTP adapters.
+// Contract inspection and terminal output handling shared by CLI, HTTP and MCP.
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const crypto = require('crypto')
 const { pathToFileURL } = require('url')
+const { resolveInside, makeHttpError } = require('./files')
 const { assertSchemaVersion, prepareInputs, jseeInputsToJsonSchema } = require('./schema')
 const { isRecordObject, outputLookupNames, normalizeFileOutputValue, flattenJseeOutputs,
   jseeOutputsToJsonSchema, invocationUnsupportedReason } = require('./utils')
@@ -77,16 +78,23 @@ function validateDescriptor (schema) {
   return { valid: !errors.length, errors, warnings }
 }
 
-function inspectSchema (schema) {
-  const validation = validateDescriptor(schema)
-  if (!validation.valid) throw Object.assign(new Error(validation.errors.join('; ')), { code: 'JSEE_SCHEMA_INVALID' })
-  const outputSchema = jseeOutputsToJsonSchema(schema.outputs)
+function canonicalOutputSchema (outputs) {
+  const outputSchema = jseeOutputsToJsonSchema(outputs)
   outputSchema.additionalProperties = false
   outputSchema.required = []
-  for (const output of flattenJseeOutputs(schema.outputs)) {
+  for (const output of flattenJseeOutputs(outputs)) {
     outputSchema.required.push(output.name)
     if (output.type === 'file') outputSchema.properties[output.name] = { type: 'object', properties: { artifact: { type: 'string' } }, required: ['artifact'], additionalProperties: false }
   }
+  // Ajv-based clients skip __proto__ in properties; the exact-name pattern preserves its contract.
+  if (Object.hasOwn(outputSchema.properties || {}, '__proto__')) outputSchema.patternProperties = { '^__proto__$': outputSchema.properties.__proto__ }
+  return outputSchema
+}
+
+function inspectSchema (schema) {
+  const validation = validateDescriptor(schema)
+  if (!validation.valid) throw Object.assign(new Error(validation.errors.join('; ')), { code: 'JSEE_SCHEMA_INVALID' })
+  const outputSchema = canonicalOutputSchema(schema.outputs)
   const reason = invocationUnsupportedReason(schema)
   return { id: schema.id || 'computation', schemaVersion: schema.schemaVersion || 1,
     title: schema.title || schema.id || 'Computation', description: schema.description || '',
@@ -115,14 +123,50 @@ function jsonValue (value, seen=new Set()) {
   return result
 }
 
+// Validate only the JSON Schema vocabulary emitted by our built-in output mappings.
+// This is not an author-supplied JSON Schema interpreter. Fail closed if mappings grow.
+function outputShapeError (value, schema, at='outputs') {
+  const supported = ['type', 'oneOf', 'properties', 'required', 'items', 'additionalProperties', 'patternProperties']
+  for (const key of Object.keys(schema)) if (!supported.includes(key)) return at + ': unsupported output schema keyword ' + key
+  if (schema.oneOf && schema.oneOf.filter(option => !outputShapeError(value, option, at)).length !== 1) return at + ': does not match the declared output shape'
+  const matches = { object: isRecordObject(value), array: Array.isArray(value), string: typeof value === 'string',
+    number: typeof value === 'number' && Number.isFinite(value), integer: Number.isInteger(value), boolean: typeof value === 'boolean' }
+  if (schema.type && !matches[schema.type]) return at + ': expected ' + schema.type
+  if (Array.isArray(value) && schema.items) {
+    for (let index = 0; index < value.length; index++) {
+      const error = outputShapeError(value[index], schema.items, `${at}[${index}]`)
+      if (error) return error
+    }
+  }
+  if (isRecordObject(value)) {
+    for (const name of schema.required || []) if (!Object.hasOwn(value, name)) return at + '.' + name + ': required'
+    for (const name of Object.keys(value)) {
+      const properties = schema.properties || {}
+      let declared = Object.hasOwn(properties, name)
+      for (const [pattern, rule] of Object.entries(schema.patternProperties || {})) {
+        if (!new RegExp(pattern).test(name)) continue
+        declared = true
+        const error = outputShapeError(value[name], rule, at + '.' + name)
+        if (error) return error
+      }
+      if (Object.hasOwn(properties, name)) {
+        const error = outputShapeError(value[name], properties[name], at + '.' + name)
+        if (error) return error
+      } else if (!declared && schema.additionalProperties === false) return at + '.' + name + ': undeclared output'
+    }
+  }
+  return null
+}
+
 class ArtifactStore {
-  constructor ({ directory, maxBytes=ARTIFACT_LIMIT, http=false }={}) {
+  constructor ({ directory, maxBytes=ARTIFACT_LIMIT, http=false, uriPrefix }={}) {
     if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error('max-artifact-bytes must be a positive integer')
     this.temporary = !directory
     this.root = directory ? path.resolve(directory) : fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-artifacts-'))
     fs.mkdirSync(this.root, { recursive: true, mode: 0o700 })
     this.maxBytes = maxBytes
     this.http = http
+    this.uriPrefix = uriPrefix
     this.bytes = 0
     this.entries = new Map()
   }
@@ -143,7 +187,7 @@ class ArtifactStore {
         fs.writeFileSync(filename, file.bytes, { flag: 'wx', mode: 0o600 })
         return { id, output: file.output, name: file.name, mime: file.mime, size: file.bytes.length,
           sha256: crypto.createHash('sha256').update(file.bytes).digest('hex'),
-          uri: this.http ? '/__jsee/artifacts/' + id : pathToFileURL(filename).href }
+          uri: this.uriPrefix ? this.uriPrefix + id : this.http ? '/__jsee/artifacts/' + id : pathToFileURL(filename).href }
       })
       result.forEach((artifact, index) => this.entries.set(artifact.id, { ...artifact, path: path.join(directory, String(index)) }))
       this.bytes += size
@@ -155,6 +199,11 @@ class ArtifactStore {
   }
 
   get (id) { return this.entries.get(id) }
+  pathFor (id) {
+    if (!this.entries.has(id)) throw makeHttpError('Unknown artifact', 404)
+    return resolveInside(this.root, id)
+  }
+  read (id) { return fs.readFileSync(this.pathFor(id)) }
   close () { if (this.temporary) fs.rmSync(this.root, { recursive: true, force: true }) }
 }
 
@@ -187,8 +236,27 @@ function formatRun (schema, run, store) {
       } else entries.push([output.name, jsonValue(value)])
     }
     // Validate every output before persisting any file or exposing an artifact handle.
-    return { runId: run.runId, status: 'succeeded', outputs: Object.fromEntries(entries), artifacts: store.commit(run.runId, files) }
+    const projected = Object.fromEntries(entries)
+    const error = outputShapeError(projected, canonicalOutputSchema(schema.outputs))
+    if (error) throw new Error(error)
+    return { runId: run.runId, status: 'succeeded', outputs: projected, artifacts: store.commit(run.runId, files) }
   } catch (error) { return failedRun(error.code || 'JSEE_OUTPUT_INVALID', error.message, run.runId) }
+}
+
+function runResultSchema (schema) {
+  return {
+    type: 'object', required: ['runId', 'status', 'outputs', 'artifacts'],
+    properties: {
+      runId: { type: 'string' }, status: { const: 'succeeded' }, outputs: canonicalOutputSchema(schema.outputs),
+      artifacts: { type: 'array', items: {
+        type: 'object', required: ['id', 'output', 'name', 'mime', 'size', 'sha256', 'uri'],
+        properties: {
+          ...Object.fromEntries(['id', 'output', 'name', 'mime', 'sha256', 'uri'].map(name => [name, { type: 'string' }])),
+          size: { type: 'integer', minimum: 0 }
+        }
+      } }
+    }
+  }
 }
 
 function canonicalOpenAPI (schema) {
@@ -200,16 +268,8 @@ function canonicalOpenAPI (schema) {
       responses: { 200: { description: 'Artifact bytes; Content-Type and attachment name come from artifact metadata' }, 403: { description: 'Access denied' }, 404: { description: 'Unknown artifact' } }
     } },
     '/run': { post: { operationId: description.id, requestBody: { required: true, content: { 'application/json': { schema: description.inputSchema } } },
-      responses: { 200: { description: 'Declared outputs and artifact references', content: { 'application/json': { schema: {
-        type: 'object', required: ['runId', 'status', 'outputs', 'artifacts'], properties: {
-          runId: { type: 'string' }, status: { const: 'succeeded' }, outputs: description.outputSchema, artifacts: { type: 'array', items: {
-            type: 'object', required: ['id', 'output', 'name', 'mime', 'size', 'sha256', 'uri'], properties: {
-              ...Object.fromEntries(['id', 'output', 'name', 'mime', 'sha256', 'uri'].map(name => [name, { type: 'string' }])),
-              size: { type: 'integer', minimum: 0 }
-            }
-          } }
-        } } } } }, 400: { description: 'Invalid input' }, 413: { description: 'Body limit exceeded' }, 415: { description: 'JSON content type required' }, 422: { description: 'Unsupported capability' }, 500: { description: 'Execution or output error' }, 507: { description: 'Artifact limit exceeded' } } } }
+      responses: { 200: { description: 'Declared outputs and artifact references', content: { 'application/json': { schema: runResultSchema(schema) } } }, 400: { description: 'Invalid input' }, 413: { description: 'Body limit exceeded' }, 415: { description: 'JSON content type required' }, 422: { description: 'Unsupported capability' }, 500: { description: 'Execution or output error' }, 507: { description: 'Artifact limit exceeded' } } } }
   } }
 }
 
-module.exports = { validateDescriptor, inspectSchema, ArtifactStore, formatRun, failedRun, responseStatus, canonicalOpenAPI, BODY_LIMIT, ARTIFACT_LIMIT }
+module.exports = { validateDescriptor, inspectSchema, ArtifactStore, formatRun, failedRun, responseStatus, canonicalOpenAPI, runResultSchema, outputShapeError, BODY_LIMIT, ARTIFACT_LIMIT }

@@ -42,6 +42,19 @@ def test_output_contract(fixture):
         store.close()
 
 
+@pytest.mark.parametrize('kind', ['object', 'number', 'int'])
+def test_output_validation_preserves_native_integer_range(kind):
+    value = 10 ** 400
+    store = ArtifactStore()
+    try:
+        run = format_run({'outputs': [{'name': 'answer', 'type': kind}]},
+                         {'runId': str(uuid.uuid4()), 'status': 'succeeded', 'result': value}, store)
+        assert run['status'] == 'succeeded', run
+        assert json.loads(json.dumps(run))['outputs']['answer'] == value
+    finally:
+        store.close()
+
+
 def test_artifact_bytes_quota_cleanup():
     store = ArtifactStore(max_bytes=3, http=True)
     directory = store.root

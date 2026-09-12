@@ -125,18 +125,26 @@ def validate_descriptor(schema):
     return {'valid': not errors, 'errors': errors, 'warnings': warnings}
 
 
-def inspect_schema(schema):
-    validation = validate_descriptor(schema)
-    if not validation['valid']:
-        raise ValueError('; '.join(validation['errors']))
-    output_schema = jsee_outputs_to_json_schema(schema.get('outputs'))
+def canonical_output_schema(outputs):
+    output_schema = jsee_outputs_to_json_schema(outputs)
     output_schema['additionalProperties'] = False
     output_schema['required'] = []
-    for output in _flatten_outputs(schema.get('outputs')):
+    for output in _flatten_outputs(outputs):
         output_schema['required'].append(output['name'])
         if output.get('type') == 'file':
             output_schema['properties'][output['name']] = {'type': 'object', 'properties': {'artifact': {'type': 'string'}},
                                                           'required': ['artifact'], 'additionalProperties': False}
+    # Match the exact-name encoding used for Ajv-based MCP clients.
+    if '__proto__' in output_schema.get('properties', {}):
+        output_schema['patternProperties'] = {'^__proto__$': output_schema['properties']['__proto__']}
+    return output_schema
+
+
+def inspect_schema(schema):
+    validation = validate_descriptor(schema)
+    if not validation['valid']:
+        raise ValueError('; '.join(validation['errors']))
+    output_schema = canonical_output_schema(schema.get('outputs'))
     reason = _invocation_unsupported_reason(schema)
     return {'id': schema.get('id', 'computation'), 'schemaVersion': schema.get('schemaVersion', 1),
             'title': schema.get('title') or schema.get('id') or 'Computation', 'description': schema.get('description', ''),
@@ -172,14 +180,55 @@ def json_value(value, seen=None):
     return result
 
 
+def output_shape_error(value, schema, at='outputs'):
+    # Only generated built-in output schemas enter here; fail closed on new vocabulary.
+    supported = ('type', 'oneOf', 'properties', 'required', 'items', 'additionalProperties', 'patternProperties')
+    for key in schema:
+        if key not in supported:
+            return at + ': unsupported output schema keyword ' + key
+    if 'oneOf' in schema and sum(output_shape_error(value, option, at) is None for option in schema['oneOf']) != 1:
+        return at + ': does not match the declared output shape'
+    # Python integers are already finite; converting them to float can overflow.
+    numeric = type(value) is int or type(value) is float and math.isfinite(value)
+    matches = {'object': isinstance(value, dict), 'array': isinstance(value, list), 'string': isinstance(value, str),
+               'number': numeric, 'integer': numeric and value == int(value), 'boolean': isinstance(value, bool)}
+    if schema.get('type') and not matches.get(schema['type']):
+        return at + ': expected ' + schema['type']
+    if isinstance(value, list) and 'items' in schema:
+        for index, item in enumerate(value):
+            error = output_shape_error(item, schema['items'], '{}[{}]'.format(at, index))
+            if error:
+                return error
+    if isinstance(value, dict):
+        for name in schema.get('required', []):
+            if name not in value:
+                return at + '.' + name + ': required'
+        for name, item in value.items():
+            declared = name in schema.get('properties', {})
+            for pattern, rule in schema.get('patternProperties', {}).items():
+                if re.search(pattern, name):
+                    declared = True
+                    error = output_shape_error(item, rule, at + '.' + name)
+                    if error:
+                        return error
+            if name in schema.get('properties', {}):
+                error = output_shape_error(item, schema['properties'][name], at + '.' + name)
+                if error:
+                    return error
+            elif not declared and schema.get('additionalProperties') is False:
+                return at + '.' + name + ': undeclared output'
+    return None
+
+
 class ArtifactStore:
-    def __init__(self, directory=None, max_bytes=ARTIFACT_LIMIT, http=False):
+    def __init__(self, directory=None, max_bytes=ARTIFACT_LIMIT, http=False, uri_prefix=None):
         if type(max_bytes) is not int or max_bytes <= 0:
             raise ValueError('max-artifact-bytes must be a positive integer')
         self.temporary = directory is None
         self.root = Path(directory).resolve() if directory else Path(tempfile.mkdtemp(prefix='jsee-artifacts-'))
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.max_bytes, self.http = max_bytes, http
+        self.uri_prefix = uri_prefix
         self.bytes = 0
         self.entries = {}
         self.lock = threading.RLock()
@@ -208,7 +257,7 @@ class ArtifactStore:
                         output.write(file['bytes'])
                     result.append({'id': identifier, 'output': file['output'], 'name': file['name'], 'mime': file['mime'],
                                    'size': len(file['bytes']), 'sha256': hashlib.sha256(file['bytes']).hexdigest(),
-                                   'uri': '/__jsee/artifacts/' + identifier if self.http else filename.as_uri()})
+                                   'uri': self.uri_prefix + identifier if self.uri_prefix else '/__jsee/artifacts/' + identifier if self.http else filename.as_uri()})
                 for index, artifact in enumerate(result):
                     self.entries[artifact['id']] = {**artifact, 'path': directory / str(index)}
                 self.bytes += size
@@ -220,6 +269,15 @@ class ArtifactStore:
     def get(self, identifier):
         with self.lock:
             return self.entries.get(identifier)
+
+    def read(self, identifier):
+        with self.lock:
+            if identifier not in self.entries:
+                raise FileNotFoundError('Unknown artifact')
+            filename = _resolve_static_file(str(self.root), identifier)
+            if filename is None:
+                raise FileNotFoundError('Unknown artifact')
+            return Path(filename).read_bytes()
 
     def close(self):
         with self.lock:
@@ -267,9 +325,29 @@ def format_run(schema, run, store):
                 files.append({'output': output['name'], 'bytes': data, 'name': name, 'mime': mime})
             else:
                 entries[output['name']] = json_value(value)
+        error = output_shape_error(entries, canonical_output_schema(schema.get('outputs')))
+        if error:
+            raise ValueError(error)
         return {'runId': run['runId'], 'status': 'succeeded', 'outputs': entries, 'artifacts': store.commit(run['runId'], files)}
     except Exception as error:
         return failed_run(getattr(error, 'code', 'JSEE_OUTPUT_INVALID'), str(error), run['runId'])
+
+
+def run_result_schema(schema):
+    return {
+        'type': 'object', 'required': ['runId', 'status', 'outputs', 'artifacts'],
+        'properties': {
+            'runId': {'type': 'string'}, 'status': {'const': 'succeeded'},
+            'outputs': canonical_output_schema(schema.get('outputs')),
+            'artifacts': {'type': 'array', 'items': {
+                'type': 'object', 'required': ['id', 'output', 'name', 'mime', 'size', 'sha256', 'uri'],
+                'properties': {
+                    **{name: {'type': 'string'} for name in ('id', 'output', 'name', 'mime', 'sha256', 'uri')},
+                    'size': {'type': 'integer', 'minimum': 0}
+                }
+            }}
+        }
+    }
 
 
 def canonical_openapi(schema):
@@ -281,12 +359,7 @@ def canonical_openapi(schema):
             'responses': {'200': {'description': 'Artifact bytes; Content-Type and attachment name come from artifact metadata'},
                           '403': {'description': 'Access denied'}, '404': {'description': 'Unknown artifact'}}}},
         '/run': {'post': {'operationId': description['id'], 'requestBody': {'required': True, 'content': {'application/json': {'schema': description['inputSchema']}}},
-            'responses': {'200': {'description': 'Declared outputs and artifact references', 'content': {'application/json': {'schema': {
-                'type': 'object', 'required': ['runId', 'status', 'outputs', 'artifacts'], 'properties': {
-                    'runId': {'type': 'string'}, 'status': {'const': 'succeeded'}, 'outputs': description['outputSchema'], 'artifacts': {'type': 'array', 'items': {
-                        'type': 'object', 'required': ['id', 'output', 'name', 'mime', 'size', 'sha256', 'uri'], 'properties': {
-                            **{name: {'type': 'string'} for name in ('id', 'output', 'name', 'mime', 'sha256', 'uri')},
-                            'size': {'type': 'integer', 'minimum': 0}}}}}}}}},
+            'responses': {'200': {'description': 'Declared outputs and artifact references', 'content': {'application/json': {'schema': run_result_schema(schema)}}},
                 '400': {'description': 'Invalid input'}, '413': {'description': 'Body limit exceeded'}, '415': {'description': 'JSON content type required'}, '422': {'description': 'Unsupported capability'},
                 '500': {'description': 'Execution or output error'}, '507': {'description': 'Artifact limit exceeded'}}}}
     }}
@@ -318,10 +391,9 @@ class ComputationService:
             if artifact is None:
                 return response({'error': 'Unknown artifact'}, 404)
             try:
-                filename = _resolve_static_file(str(self.store.root), identifier)
-                if filename is None:
-                    return response({'error': 'Unknown artifact'}, 404)
-                body = Path(filename).read_bytes()
+                body = self.store.read(identifier)
+            except FileNotFoundError:
+                return response({'error': 'Unknown artifact'}, 404)
             except PermissionError:
                 return response({'error': 'Artifact access denied'}, 403)
             headers = [('Content-Type', artifact['mime']), ('Content-Length', str(len(body))),
@@ -354,6 +426,7 @@ def command(arguments):
     parser = argparse.ArgumentParser(description='Inspect or invoke a JSEE computation descriptor')
     parser.add_argument('command', choices=['inspect', 'validate', 'run', 'serve'])
     parser.add_argument('schema')
+    parser.add_argument('--mcp-only', action='store_true', help='Serve MCP over stdio (requires jsee[server])')
     parser.add_argument('--json', action='store_true', help='JSON output (also the default)')
     parser.add_argument('--input', default='-', help='JSON input file, or - for stdin')
     parser.add_argument('--artifact-dir', default='.jsee-artifacts', help='Persistent CLI artifact directory')
@@ -373,6 +446,10 @@ def command(arguments):
             return description, 0
     except (OSError, ValueError) as error:
         return failed_run('JSEE_SCHEMA_INVALID', str(error)), 2
+    if args.command == 'serve' and args.mcp_only:
+        from .mcp import serve as serve_mcp
+        asyncio.run(serve_mcp(str(schema_path), max_body_bytes=args.max_body_bytes, max_artifact_bytes=args.max_artifact_bytes))
+        return None, 0
     if args.command == 'serve':
         serve(str(schema_path), host=args.host, port=args.port, canonical=True,
               max_body_bytes=args.max_body_bytes, max_artifact_bytes=args.max_artifact_bytes)

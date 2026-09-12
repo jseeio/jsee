@@ -9,5 +9,20 @@
   {"name":"file URL is never fetched","outputs":[{"name":"file","type":"file"}],"result":{"file":{"url":"https://example.com/private"}},"error":"JSEE_OUTPUT_INVALID"},
   {"name":"all outputs checked before file commit","outputs":[{"name":"file","type":"file"},{"name":"missing","type":"number"}],"result":{"file":{"content":"secret"}},"error":"JSEE_OUTPUT_INVALID"},
   {"name":"prototype names remain JSON properties","outputs":[{"name":"__proto__","type":"string"}],"result":{"__proto__":"data"},"expected":{"__proto__":"data"}},
-  {"name":"no output declarations disclose no data","outputs":[],"result":{"secret":"input"},"expected":{}}
+  {"name":"no output declarations disclose no data","outputs":[],"result":{"secret":"input"},"expected":{}},
+  {"name":"number rejects string","outputs":[{"name":"answer","type":"number"}],"result":{"answer":"42"},"error":"JSEE_OUTPUT_INVALID"},
+  {"name":"integer rejects fraction","outputs":[{"name":"answer","type":"int"}],"result":{"answer":1.5},"error":"JSEE_OUTPUT_INVALID"},
+  {"name":"float rejects string","outputs":[{"name":"answer","type":"float"}],"result":{"answer":"2"},"error":"JSEE_OUTPUT_INVALID"},
+  {"name":"boolean rejects number","outputs":[{"name":"answer","type":"bool"}],"result":{"answer":1},"error":"JSEE_OUTPUT_INVALID"},
+  {"name":"text rejects object","outputs":[{"name":"answer","type":"text"}],"result":{"answer":{}},"error":"JSEE_OUTPUT_INVALID"},
+  {"name":"markdown rejects number","outputs":[{"name":"answer","type":"markdown"}],"result":{"answer":4},"error":"JSEE_OUTPUT_INVALID"},
+  {"name":"table rejects scalar columns","outputs":[{"name":"answer","type":"table"}],"result":{"answer":{"columns":[3],"rows":[[1]]}},"error":"JSEE_OUTPUT_INVALID"},
+  {"name":"table rejects nonarray rows","outputs":[{"name":"answer","type":"table"}],"result":{"answer":{"columns":["x"],"rows":[{}]}},"error":"JSEE_OUTPUT_INVALID"},
+  {"name":"media rejects invalid metadata","outputs":[{"name":"answer","type":"image"}],"result":{"answer":{"filename":42}},"error":"JSEE_OUTPUT_INVALID"},
+  {"name":"gallery rejects scalar","outputs":[{"name":"answer","type":"gallery"}],"result":{"answer":5},"error":"JSEE_OUTPUT_INVALID"},
+  {"name":"prototype output validates its declared type","outputs":[{"name":"__proto__","type":"number"}],"result":{"__proto__":"wrong"},"error":"JSEE_OUTPUT_INVALID"},
+  {"name":"typed failure commits no file","outputs":[{"name":"file","type":"file"},{"name":"answer","type":"number"}],"result":{"file":"data","answer":{}},"error":"JSEE_OUTPUT_INVALID"},
+  {"name":"table accepts records","outputs":[{"name":"answer","type":"table"}],"result":{"answer":[{"x":1}]},"expected":{"answer":[{"x":1}]}},
+  {"name":"table accepts columns and rows","outputs":[{"name":"answer","type":"table"}],"result":{"answer":{"columns":["x"],"rows":[[1],[null]]}},"expected":{"answer":{"columns":["x"],"rows":[[1],[null]]}}},
+  {"name":"gauge accepts a descriptor","outputs":[{"name":"answer","type":"gauge"}],"result":{"answer":{"value":3,"label":"items"}},"expected":{"answer":{"value":3,"label":"items"}}}
 ]

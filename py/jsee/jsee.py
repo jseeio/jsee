@@ -589,8 +589,12 @@ def _file_like_output_json_schema():
 
 def jsee_output_to_json_schema(output):
   t = (output or {}).get('type')
-  if t == 'number':
+  if t == 'int':
+    return {'type': 'integer'}
+  if t in ('number', 'float'):
     return {'type': 'number'}
+  if t == 'bool':
+    return {'type': 'boolean'}
   if t == 'gauge':
     return {
       'oneOf': [
@@ -602,7 +606,7 @@ def jsee_output_to_json_schema(output):
     return _table_output_json_schema()
   if t in ('file', 'image', 'audio', 'video', 'pdf', 'viewer'):
     return _file_like_output_json_schema()
-  if t in ('markdown', 'html', 'svg', 'code', 'highlight'):
+  if t in ('text', 'string', 'markdown', 'html', 'svg', 'code', 'highlight'):
     return {'type': 'string'}
   if t in ('alert', 'chat'):
     return {

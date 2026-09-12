@@ -26,7 +26,7 @@ run = asyncio.run(invoke_schema(schema, {'csv': 'price,quantity\n10,2\n20,1\n,3\
 print(run['result']['summary'] if run['status'] == 'succeeded' else run['error'])
 ```
 
-Both return `rows_read: 3`, `rows_kept: 2`, `total_revenue: 40`. `result.cleaned_csv` contains `filename`, `mime`, and the exact CSV `content`. These programmatic calls receive decoded CSV text; they do not interpret that text as a file path or URL. The result includes accumulated pipeline intermediates. The JSON CLI/HTTP adapters below project declared outputs and store the CSV as a retrievable artifact. MCP remains subsequent work.
+Both return `rows_read: 3`, `rows_kept: 2`, `total_revenue: 40`. `result.cleaned_csv` contains `filename`, `mime`, and the exact CSV `content`. These programmatic calls receive decoded CSV text; they do not interpret that text as a file path or URL. The result includes accumulated pipeline intermediates. The JSON CLI/HTTP adapters below project declared outputs and store the CSV as a retrievable artifact. MCP uses the same output and artifact contract.
 
 Use the JSON adapters from the repository root:
 
@@ -47,7 +47,13 @@ curl http://127.0.0.1:3000/run -H 'Content-Type: application/json' --data-binary
 JSON
 ```
 
-The response has `outputs.summary` with the three counts above, `outputs.table`, and `outputs.cleaned_csv.artifact`. Download the CSV using the matching `artifacts[].uri` (relative to the HTTP server); verify its SHA256 against `artifacts[].sha256`. CLI artifact URIs are local `file:` paths and persist in `.jsee-artifacts/`. An agent can inspect the contract and run it through these CLI/HTTP interfaces today. Automatic MCP discovery is not implemented yet.
+The response has `outputs.summary` with the three counts above, `outputs.table`, and `outputs.cleaned_csv.artifact`. Download the CSV using the matching `artifacts[].uri` (relative to the HTTP server); verify its SHA256 against `artifacts[].sha256`. CLI artifact URIs are local `file:` paths and persist in `.jsee-artifacts/`. An agent can inspect the contract and run it through these CLI/HTTP interfaces today. MCP clients can discover and invoke the same descriptor.
+
+For MCP, configure your client to launch `node` with arguments `['/absolute/path/jsee/bin/jsee', 'serve', '/absolute/path/schema.json', '--mcp-only']`. Use this example's JS descriptor. For Python, install the checkout's `./py[server]` extra, launch that environment's `jsee` with `['serve', '/absolute/path/schema-python.json', '--mcp-only']`.
+
+The client discovers `clean_sales` through `tools/list`, then calls it with `{"csv":"price,quantity\n10,2\n20,1\n,3\n","missing":"drop"}`. `structuredContent.outputs.summary` contains the counts above. The result also includes the table and a `resource_link`; `resources/read` retrieves the cleaned CSV as a base64 blob. Decode it and verify the run's size/SHA256. An invalid policy returns `isError: true` with `JSEE_INPUT_INVALID` before model execution. No separate tool handler or form is needed in the example.
+
+`npm run test:mcp` runs independent Node/Python SDK clients against both servers and all 13 shared CSV cases, including exact file bytes and invalid values. See the [MCP contract and limits](../../README.md#mcp-over-stdio).
 
 Build the browser form using the existing CLI:
 
