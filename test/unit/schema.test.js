@@ -24,7 +24,7 @@ const ${type}Equal: [${type}] extends [typeof ${type}Values[number]] ? [typeof $
     fs.writeFileSync(source, `import type { InputType, ModelType, OutputType } from ${JSON.stringify(declarations)}\n${checks.join('\n')}\n`)
     try {
       const compilerRoot = path.dirname(require.resolve('typescript/package.json'))
-      execFileSync(process.execPath, [path.join(compilerRoot, 'bin/tsc'), '--strict', '--noEmit', '--skipLibCheck', '--target', 'ES2020', '--module', 'NodeNext', source], { stdio: 'pipe' })
+      execFileSync(process.execPath, [path.join(compilerRoot, 'lib/tsc.js'), '--strict', '--noEmit', '--skipLibCheck', '--target', 'ES2020', '--module', 'NodeNext', source], { stdio: 'pipe' })
     } finally {
       fs.rmSync(directory, { recursive: true, force: true })
     }

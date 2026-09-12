@@ -86,7 +86,7 @@
     "test-head": "HEADLESS=false npm test",
     "lint": "eslint src/ test/",
     "copy-runtime-py": "mkdir -p py/jsee/static && cp dist/jsee.core.js py/jsee/static/jsee.core.js && cp dist/jsee.full.js py/jsee/static/jsee.full.js && cp schema.json py/jsee/static/schema.json",
-    "test:types": "tsc --project test/types/tsconfig.json",
+    "test:types": "node node_modules/typescript/lib/tsc.js --project test/types/tsconfig.json",
     "test:mcp": "node --test test/mcp/*.test.js"
   },
   "bin": {
