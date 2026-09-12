@@ -1235,6 +1235,8 @@ def serve(target, host='127.0.0.1', port=5050, max_body_bytes=DEFAULT_MAX_BODY_B
 
   max_body_bytes limits JSON and multipart request bodies (default: 50 MiB).
   """
+  from .host_policy import from_options
+  policy = from_options(kwargs)
   max_body_bytes = _check_body_limit(max_body_bytes)
   schema, funcs, models, schema_cwd, source_schema = _prepare_app(target, host, port, kwargs)
   computation = None
@@ -1242,6 +1244,7 @@ def serve(target, host='127.0.0.1', port=5050, max_body_bytes=DEFAULT_MAX_BODY_B
     from .transport import ComputationService, ARTIFACT_LIMIT
     computation = ComputationService(source_schema, funcs, schema_cwd, max_body_bytes,
                                      kwargs.get('max_artifact_bytes', ARTIFACT_LIMIT))
+    computation.openapi = policy.openapi(computation.openapi)
 
   runtime_path = _find_runtime(schema)
   runtime_code = None
@@ -1268,6 +1271,29 @@ def serve(target, host='127.0.0.1', port=5050, max_body_bytes=DEFAULT_MAX_BODY_B
   }
 
   class Handler(BaseHTTPRequestHandler):
+    def parse_request(self):
+      if not super().parse_request():
+        return False
+      status, self.policy_headers, error = policy.evaluate(self.command, {k.lower(): v for k, v in self.headers.items()})
+      if status is None:
+        return True
+      self.close_connection = True  # Rejected bodies remain unread; never reuse this connection.
+      if status == 204:
+        self.send_response(status)
+        self.end_headers()
+      else:
+        self._send_json({'error': error}, status)
+      return False
+
+    def send_header(self, name, value):
+      if name.lower() not in {k.lower() for k in getattr(self, 'policy_headers', {})}:
+        super().send_header(name, value)
+
+    def end_headers(self):
+      for name, value in getattr(self, 'policy_headers', {}).items():
+        super().send_header(name, value)
+      super().end_headers()
+
     def log_message(self, format, *args):
       pass
 
@@ -1275,10 +1301,10 @@ def serve(target, host='127.0.0.1', port=5050, max_body_bytes=DEFAULT_MAX_BODY_B
       body = json.dumps(data).encode('utf-8')
       self.send_response(status)
       self.send_header('Content-Type', 'application/json; charset=utf-8')
-      self.send_header('Access-Control-Allow-Origin', '*')
       self.send_header('Content-Length', str(len(body)))
       self.end_headers()
-      self.wfile.write(body)
+      if self.command != 'HEAD':
+        self.wfile.write(body)
 
     def _send_error(self, msg, status=400):
       self._send_json({'error': msg}, status)
@@ -1300,15 +1326,6 @@ def serve(target, host='127.0.0.1', port=5050, max_body_bytes=DEFAULT_MAX_BODY_B
       self.wfile.write(body)
       return True
 
-    def do_OPTIONS(self):
-      if self._canonical():
-        return
-      self.send_response(204)
-      self.send_header('Access-Control-Allow-Origin', '*')
-      self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-      self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-      self.end_headers()
-
     def do_GET(self):
       if self._canonical():
         return
@@ -1328,7 +1345,7 @@ def serve(target, host='127.0.0.1', port=5050, max_body_bytes=DEFAULT_MAX_BODY_B
         return self._send_json({'schema': schema, 'models': api_models})
 
       if pathname == '/api/openapi.json':
-        return self._send_json(generate_openapi_spec(schema))
+        return self._send_json(policy.openapi(generate_openapi_spec(schema)))
 
       if pathname == '/static/jsee.js' and runtime_code:
         body = runtime_code.encode('utf-8')
@@ -1385,7 +1402,6 @@ def serve(target, host='127.0.0.1', port=5050, max_body_bytes=DEFAULT_MAX_BODY_B
           self.send_response(200)
           self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
           self.send_header('Cache-Control', 'no-cache')
-          self.send_header('Access-Control-Allow-Origin', '*')
           self.end_headers()
           try:
             def _write_frame(frame):
@@ -1436,6 +1452,8 @@ def create_app(target, **kwargs):
       app = jsee.create_app(lambda x=5: {'result': x * 2})
       # gunicorn app:app
   """
+  from .host_policy import from_options
+  policy = from_options(kwargs)
   host = kwargs.pop('host', '127.0.0.1')
   port = kwargs.pop('port', 5050)
   max_body_bytes = _check_body_limit(kwargs.pop('max_body_bytes', DEFAULT_MAX_BODY_BYTES))
@@ -1445,6 +1463,7 @@ def create_app(target, **kwargs):
     from .transport import ComputationService, ARTIFACT_LIMIT
     computation = ComputationService(source_schema, funcs, schema_cwd, max_body_bytes,
                                      kwargs.get('max_artifact_bytes', ARTIFACT_LIMIT))
+    computation.openapi = policy.openapi(computation.openapi)
 
   runtime_path = _find_runtime(schema)
   runtime_code = None
@@ -1470,6 +1489,21 @@ def create_app(target, **kwargs):
   }
 
   def app(environ, start_response):
+    incoming = {k[5:].lower().replace('_', '-'): v for k, v in environ.items() if k.startswith('HTTP_')}
+    status, policy_headers, error = policy.evaluate(environ.get('REQUEST_METHOD', 'GET'), incoming,
+                                                    environ.get('wsgi.url_scheme', 'http'))
+    original_start = start_response
+    def start_response(code, headers, exc_info=None):
+      # One owner overrides route/cache headers without wrapping the response iterable.
+      owned = {k.lower() for k in policy_headers}
+      combined = [(k, v) for k, v in headers if k.lower() not in owned] + list(policy_headers.items())
+      return original_start(code, combined, exc_info) if exc_info is not None else original_start(code, combined)
+    if status is not None:
+      from http import HTTPStatus
+      body = b'' if status == 204 else json.dumps({'error': error}).encode('utf-8')
+      start_response('{} {}'.format(status, HTTPStatus(status).phrase),
+                     [('Content-Type', 'application/json'), ('Content-Length', str(len(body)))])
+      return [b'' if environ.get('REQUEST_METHOD') == 'HEAD' else body]
     method = environ.get('REQUEST_METHOD', 'GET')
     path_info = environ.get('PATH_INFO', '/').rstrip('/') or '/'
     if computation:
@@ -1480,14 +1514,6 @@ def create_app(target, **kwargs):
         status, headers, body = response
         start_response('{} {}'.format(status, HTTPStatus(status).phrase), headers)
         return [body]
-
-    if method == 'OPTIONS':
-      start_response('204 No Content', [
-        ('Access-Control-Allow-Origin', '*'),
-        ('Access-Control-Allow-Methods', 'GET, POST, OPTIONS'),
-        ('Access-Control-Allow-Headers', 'Content-Type'),
-      ])
-      return [b'']
 
     if method == 'GET':
       if path_info == '/':
@@ -1503,16 +1529,14 @@ def create_app(target, **kwargs):
         start_response('200 OK', [
           ('Content-Type', 'application/json; charset=utf-8'),
           ('Content-Length', str(len(body))),
-          ('Access-Control-Allow-Origin', '*'),
         ])
         return [body]
 
       if path_info == '/api/openapi.json':
-        body = json.dumps(generate_openapi_spec(schema)).encode('utf-8')
+        body = json.dumps(policy.openapi(generate_openapi_spec(schema))).encode('utf-8')
         start_response('200 OK', [
           ('Content-Type', 'application/json; charset=utf-8'),
           ('Content-Length', str(len(body))),
-          ('Access-Control-Allow-Origin', '*'),
         ])
         return [body]
 
@@ -1552,7 +1576,6 @@ def create_app(target, **kwargs):
         start_response('404 Not Found', [
           ('Content-Type', 'application/json; charset=utf-8'),
           ('Content-Length', str(len(body))),
-          ('Access-Control-Allow-Origin', '*'),
         ])
         return [body]
 
@@ -1566,7 +1589,6 @@ def create_app(target, **kwargs):
         start_response(status, [
           ('Content-Type', 'application/json; charset=utf-8'),
           ('Content-Length', str(len(body))),
-          ('Access-Control-Allow-Origin', '*'),
         ])
         return [body]
 
@@ -1576,14 +1598,12 @@ def create_app(target, **kwargs):
           start_response('200 OK', [
             ('Content-Type', 'text/event-stream; charset=utf-8'),
             ('Cache-Control', 'no-cache'),
-            ('Access-Control-Allow-Origin', '*'),
           ])
           return _sse_frames(result)
         body = json.dumps(_serialize_result(result)).encode('utf-8')
         start_response('200 OK', [
           ('Content-Type', 'application/json; charset=utf-8'),
           ('Content-Length', str(len(body))),
-          ('Access-Control-Allow-Origin', '*'),
         ])
         return [body]
       except Exception as e:
@@ -1591,7 +1611,6 @@ def create_app(target, **kwargs):
         start_response('500 Internal Server Error', [
           ('Content-Type', 'application/json; charset=utf-8'),
           ('Content-Length', str(len(body))),
-          ('Access-Control-Allow-Origin', '*'),
         ])
         return [body]
 

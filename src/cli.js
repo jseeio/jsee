@@ -194,7 +194,7 @@ function writeSseFrame (res, payload, eventName) {
 async function writeSseStream (res, result) {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
-    'Cache-Control': 'no-cache',
+    'Cache-Control': res.getHeader && res.getHeader('Cache-Control') || 'no-cache',
     'Connection': 'keep-alive',
     'X-Accel-Buffering': 'no'
   })
@@ -2251,6 +2251,7 @@ function template(schema, blocks) {
 async function command (pargv) {
   const { inspectSchema, validateDescriptor, ArtifactStore, formatRun, failedRun, BODY_LIMIT, ARTIFACT_LIMIT } = require('./transport')
   const argv = minimist(pargv.slice(1), { boolean: ['json'], string: ['input', 'artifact-dir'], default: { input: '-', 'max-body-bytes': BODY_LIMIT, 'max-artifact-bytes': ARTIFACT_LIMIT } })
+  if (['auth-token', 'auth-token-env', 'cors-origin'].some(name => Object.hasOwn(argv, name))) throw new Error('HTTP host options require serving')
   let schema, schemaPath
   try {
     if (argv._.length !== 1) throw new Error('Usage: jsee ' + pargv[0] + ' schema.json [--input -] [--json]')
@@ -2293,6 +2294,10 @@ async function gen (pargv, returnHtml=false) {
     if (!pargv[1] || pargv[1].startsWith('-')) throw new Error('Usage: jsee serve schema.json [--port 3000]')
     pargv = ['--inputs', pargv[1], '--serve', ...pargv.slice(2)]
   }
+  const { HostPolicy, takeHostOptions } = require('./host-policy')
+  const hostOptions = takeHostOptions(pargv)
+  const hostPolicy = new HostPolicy({ ...hostOptions.options, canonical })
+  pargv = hostOptions.args
   // Determine if JSEE CLI is imported or run directly
   const mainPath = require.main && require.main.path ? require.main.path : process.cwd()
   const mainFilename = require.main && require.main.filename ? require.main.filename : ''
@@ -2331,6 +2336,7 @@ async function gen (pargv, returnHtml=false) {
     default: argvDefault,
     boolean: booleanArgs,
   })
+  if (Object.values(hostOptions.options).some(value => value !== undefined) && (argv.run || argv.outputs && !argv.serve || returnHtml)) throw new Error('HTTP host options require serving')
 
   // ── jsee init <template> ──────────────────────────────────────────
   if (argv._[0] === 'init') {
@@ -2498,6 +2504,9 @@ Options:
       --client              Force client-side execution (disable auto server-side)
   -c, --cdn <url|bool>      Rewrite model URLs for CDN deployment
   -r, --runtime <mode>      Runtime: auto|local|cdn|inline or a custom URL/path (default: auto)
+      --auth-token <token>    Protect every HTTP route (Bearer or browser login)
+      --auth-token-env <name> Read the token from an environment variable
+      --cors-origin <origin>  Allow this HTTP(S) origin (repeat); none or *
       --verbose             Enable verbose logging
 
 Data inputs:
@@ -2921,7 +2930,7 @@ Documentation: https://jsee.org
       jseeHtml = `<script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@${escapeAttr(argv.version)}/dist/${bundle}"></script>`
     } else if (runtimeMode === 'local') {
       const bundle = getBundleFilename(schema)
-      jseeHtml = `<script src="http://${escapeAttr(getDisplayHost(argv.host))}:${argv.port}/dist/${bundle}"></script>`
+      jseeHtml = hasOutputs ? `<script src="http://${escapeAttr(getDisplayHost(argv.host))}:${argv.port}/dist/${bundle}"></script>` : `<script src="/dist/${bundle}"></script>`
     } else {
       // Custom path/URL passed via --runtime (e.g. ./node_modules/.../jsee.js)
       jseeHtml = `<script src="${escapeAttr(runtimeMode)}"></script>`
@@ -3044,6 +3053,7 @@ Documentation: https://jsee.org
     // Serve the html
     const express = require('express')
     const app = express()
+    app.use(hostPolicy.middleware())
     const appRoot = path.resolve(schemaPath ? path.dirname(schemaPath) : cwd)
     const endpointRoots = [appRoot]
     if (identityResult && identityResult.serveDir) endpointRoots.push(identityResult.serveDir)
@@ -3055,7 +3065,7 @@ Documentation: https://jsee.org
       if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('max-body-bytes must be a positive integer')
       artifactStore = new ArtifactStore({ http: true, maxBytes: argv['max-artifact-bytes'] })
       app.get('/schema', (req, res) => res.json(computationSchema))
-      app.get('/openapi.json', (req, res) => res.json(canonicalOpenAPI(computationSchema)))
+      app.get('/openapi.json', (req, res) => res.json(hostPolicy.openapi(canonicalOpenAPI(computationSchema))))
       app.get('/__jsee/artifacts/:run/:index', (req, res) => {
         const id = req.params.run + '/' + req.params.index
         const artifact = artifactStore.get(id)
@@ -3086,14 +3096,6 @@ Documentation: https://jsee.org
       })
       app.all('/run', (req, res) => res.status(405).json({ error: 'Use POST /run' }))
     }
-    // CORS
-    app.use((req, res, next) => {
-      res.header('Access-Control-Allow-Origin', '*')
-      res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-      res.header('Access-Control-Allow-Headers', 'Content-Type')
-      if (req.method === 'OPTIONS') return res.sendStatus(204)
-      next()
-    })
     app.use(express.json({ limit: API_BODY_LIMIT }))
     app.use(express.raw({ type: 'multipart/form-data', limit: API_BODY_LIMIT }))
     app.use((error, req, res, next) => {
@@ -3115,7 +3117,7 @@ Documentation: https://jsee.org
     })
     // OpenAPI spec
     app.get('/api/openapi.json', (req, res) => {
-      res.json(generateOpenAPISpec(schema))
+      res.json(hostPolicy.openapi(generateOpenAPISpec(schema)))
     })
     if (shouldExecute) {
       // Create post endpoint for executing the model

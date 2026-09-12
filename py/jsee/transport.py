@@ -370,6 +370,7 @@ class ComputationService:
     def __init__(self, schema, funcs, cwd, max_body_bytes=BODY_LIMIT, max_artifact_bytes=ARTIFACT_LIMIT):
         self.schema, self.funcs, self.cwd = schema, funcs, cwd
         self.max_body_bytes = max_body_bytes
+        self.openapi = canonical_openapi(schema)
         self.store = ArtifactStore(max_bytes=max_artifact_bytes, http=True)
         self._cleanup = weakref.finalize(self, self.store.close)
 
@@ -382,7 +383,7 @@ class ComputationService:
         if method == 'GET' and pathname == '/schema':
             return response(self.schema)
         if method == 'GET' and pathname == '/openapi.json':
-            return response(canonical_openapi(self.schema))
+            return response(self.openapi)
         if pathname.startswith('/__jsee/artifacts/'):
             if method != 'GET':
                 return response({'error': 'Use GET for artifacts'}, 405)
@@ -424,6 +425,8 @@ def command(arguments):
     import sys
     from .jsee import serve
     parser = argparse.ArgumentParser(description='Inspect or invoke a JSEE computation descriptor')
+    from .host_policy import add_cli_options
+    add_cli_options(parser)
     parser.add_argument('command', choices=['inspect', 'validate', 'run', 'serve'])
     parser.add_argument('schema')
     parser.add_argument('--mcp-only', action='store_true', help='Serve MCP over stdio (requires jsee[server])')
@@ -435,6 +438,8 @@ def command(arguments):
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=5050)
     args = parser.parse_args(arguments)
+    if any(value is not None for value in (args.auth_token, args.auth_token_env, args.cors_origins)) and (args.command != 'serve' or args.mcp_only):
+        raise ValueError('HTTP host options require serve without --mcp-only')
     try:
         schema_path = Path(args.schema).resolve()
         schema = json.loads(schema_path.read_text(encoding='utf-8'))
@@ -452,7 +457,8 @@ def command(arguments):
         return None, 0
     if args.command == 'serve':
         serve(str(schema_path), host=args.host, port=args.port, canonical=True,
-              max_body_bytes=args.max_body_bytes, max_artifact_bytes=args.max_artifact_bytes)
+              max_body_bytes=args.max_body_bytes, max_artifact_bytes=args.max_artifact_bytes,
+              auth_token=args.auth_token, auth_token_env=args.auth_token_env, cors_origins=args.cors_origins)
         return None, 0
     try:
         if args.max_body_bytes <= 0:

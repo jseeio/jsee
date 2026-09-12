@@ -140,6 +140,8 @@ parser.add_argument('--port', type=int, default=5050, help='Port to listen on (d
 parser.add_argument('--max-body-bytes', type=int, default=DEFAULT_MAX_BODY_BYTES,
                     help='Maximum request body size in bytes (default: 52428800)')
 
+from jsee.host_policy import add_cli_options
+add_cli_options(parser)
 args, extra = parser.parse_known_args()
 
 # Parse extra --key=value args into defaults dict
@@ -162,7 +164,8 @@ if args.target.endswith('.json'):
     extra_positional.insert(0, detect_arg_value(args.function))
   # Keep the descriptor path so model and static URLs retain their app root.
   jsee.serve(args.target, args.host, args.port, defaults=defaults,
-             extra_positional=extra_positional, max_body_bytes=args.max_body_bytes)
+             extra_positional=extra_positional, max_body_bytes=args.max_body_bytes, auth_token=args.auth_token,
+             auth_token_env=args.auth_token_env, cors_origins=args.cors_origins)
 elif args.target.endswith('.py'):
   # Function mode
   if not args.function:
@@ -175,14 +178,16 @@ elif args.target.endswith('.py'):
   spec.loader.exec_module(module)
   target = getattr(module, args.function)
   jsee.serve(target, args.host, args.port, defaults=defaults,
-             extra_positional=extra_positional, max_body_bytes=args.max_body_bytes)
+             extra_positional=extra_positional, max_body_bytes=args.max_body_bytes, auth_token=args.auth_token,
+             auth_token_env=args.auth_token_env, cors_origins=args.cors_origins)
 else:
   # Try as module name (legacy compat)
   module = importlib.import_module(args.target.split('.')[0])
   if args.function:
     target = getattr(module, args.function)
     jsee.serve(target, args.host, args.port, defaults=defaults,
-               extra_positional=extra_positional, max_body_bytes=args.max_body_bytes)
+               extra_positional=extra_positional, max_body_bytes=args.max_body_bytes, auth_token=args.auth_token,
+               auth_token_env=args.auth_token_env, cors_origins=args.cors_origins)
   else:
     print('Error: function name required', file=sys.stderr)
     sys.exit(1)

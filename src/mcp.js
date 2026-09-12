@@ -16,6 +16,7 @@ function resource (artifact) {
 
 function serve (args, stdout) {
   const argv = minimist(args.slice(1), { boolean: ['mcp-only'], default: { 'max-body-bytes': BODY_LIMIT, 'max-artifact-bytes': ARTIFACT_LIMIT } })
+  if (['auth-token', 'auth-token-env', 'cors-origin'].some(name => Object.hasOwn(argv, name))) throw new Error('HTTP host options require serve without --mcp-only')
   if (argv._.length !== 1) throw new Error('Usage: jsee serve schema.json --mcp-only')
   const schemaPath = path.resolve(String(argv._[0]))
   const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'))

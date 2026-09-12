@@ -73,9 +73,17 @@ A file output becomes `{artifact: "<runId>/<index>"}`. Its `artifacts` entry pro
 
 `serve` exposes `GET /schema`, `GET /openapi.json`, JSON `POST /run`, and `GET /__jsee/artifacts/<runId>/<index>`, alongside the UI and legacy stage routes. Programmatic equivalents are `jsee.serve(path, canonical=True)` and `jsee.create_app(path, canonical=True)`. Call `app.close()` when retiring a canonical WSGI application. Canonical serving requires a file-backed descriptor; existing callable-based serving remains available. A stage named `run` must be renamed to avoid the reserved endpoint.
 
-Limits are 50 MiB per JSON request (`--max-body-bytes`) and 64 MiB/1,024 artifacts per server or CLI invocation (`--max-artifact-bytes` changes bytes). Programmatic options use underscores. Limit failures publish no partial file batch. Invalid inputs return 400; excessive bodies 413; non-JSON content 415; unsupported capabilities 422; model/output errors 500; artifact quotas 507. The new routes omit wildcard CORS. Existing routes retain their CORS policy. Authentication, forced interruption and canonical streaming remain pending; these servers do not sandbox model code.
+Limits are 50 MiB per JSON request (`--max-body-bytes`) and 64 MiB/1,024 artifacts per server or CLI invocation (`--max-artifact-bytes` changes bytes). Programmatic options use underscores. Limit failures publish no partial file batch. Invalid inputs return 400; excessive bodies 413; non-JSON content 415; unsupported capabilities 422; model/output errors 500; artifact quotas 507. Canonical serving applies same-origin policy across all routes; legacy commands retain wildcard CORS until configured. Forced interruption and canonical streaming remain pending; these servers do not sandbox model code.
 
 The [main README](../README.md#json-commands-and-canonical-http) describes the common transport contract and validation scope. Existing Python CLI forms and stdlib/WSGI APIs retain their behavior.
+
+## HTTP authentication and CORS
+
+Use `jsee serve schema.json --auth-token-env APP_TOKEN` to read a shared token from an existing environment variable, or `--auth-token TOKEN`. Add repeated `--cors-origin https://client.example` flags for allowed browser origins. These options also work with legacy Python serving commands. Programmatic `serve()` and `create_app()` accept `auth_token`, `auth_token_env` and `cors_origins` (list).
+
+Bearer clients send `Authorization: Bearer TOKEN`; the browser login uses username `jsee` and the token as password. All routes require authentication, including the UI, scripts, static files, API descriptions, streams, artifacts and errors. No token is embedded in HTML/schema or passed to computation inputs. Use HTTPS via a trusted TLS proxy or an SSH tunnel; explicitly allow a TLS proxy's public HTTPS origin. Forwarded headers are not trusted automatically.
+
+Canonical serving defaults to same-origin requests. Legacy serving keeps public wildcard CORS until a token or origin list is configured. `cors_origins=[]` / `--cors-origin none` keeps same-origin access; `['*']` is public and cannot be combined with authentication. Allowed preflights do not require credentials; actual requests do. Invalid credentials return 401; denied origins/preflights return 403 before body reads. OpenAPI describes both authentication schemes, and authenticated responses use `Cache-Control: no-store`, including SSE. See the [common host policy](../README.md#http-authentication-and-cors) for details and limits.
 
 ## MCP over stdio
 
@@ -83,7 +91,7 @@ After building the checkout, install `python -m pip install './py[server]'` with
 
 Discovery does not import model code. Calls return the same validated output/artifact envelope as JSON CLI/HTTP in `structuredContent` and JSON text. Failures set `isError` and return the failed envelope as text. File outputs include MCP resource links; read them through `resources/read` and verify the decoded blob against the envelope's size and SHA256. Artifact storage defaults to 64 MiB/1,024 files per session and cleans up on orderly close or SIGTERM; a crash can leave files. Reads return entire files, subject to the client's message limits.
 
-Model prints go to stderr. Calls follow `invoke_schema`'s loading lifecycle; persistent model state is not a portable contract. The SDK parses messages before JSEE applies the decoded-argument limit. Remote MCP, auth, streams, forced cancellation and binary input transport remain pending. See the [common MCP contract](../README.md#mcp-over-stdio) for client setup and limits.
+Model prints go to stderr. Calls follow `invoke_schema`'s loading lifecycle; persistent model state is not a portable contract. The SDK parses messages before JSEE applies the decoded-argument limit. Remote MCP, streams, forced cancellation and binary input transport remain pending; HTTP auth options do not apply to stdio. See the [common MCP contract](../README.md#mcp-over-stdio) for client setup and limits.
 
 ## How it works
 

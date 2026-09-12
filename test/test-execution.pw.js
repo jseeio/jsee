@@ -1069,3 +1069,62 @@ test.describe('pinned real applications', () => {
     expect(result.after).toBeGreaterThan(result.before)
   })
 })
+
+for (const runtime of ['node', 'python']) {
+  test(`${runtime} authenticated UI and browser CORS use the host policy`, async ({ browser }) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-auth-browser-'))
+    const token = 'browser-test-token'
+    const model = runtime === 'node' ? 'model.js' : 'model.py'
+    fs.writeFileSync(path.join(directory, model), runtime === 'node' ? 'module.exports = ({x}) => ({answer:x * 2})' : 'def compute(x):\n    return {"answer": x * 2}\n')
+    const filename = path.join(directory, 'schema.json')
+    fs.writeFileSync(filename, JSON.stringify({ model: { name: 'compute', url: model, autorun: false }, inputs: [{ name: 'x', type: 'int', default: 3 }], outputs: [{ name: 'answer', type: 'number' }] }))
+    const clientOrigin = http.createServer((req, res) => res.end('<!doctype html><title>Client</title>'))
+    await new Promise(resolve => clientOrigin.listen(0, '127.0.0.1', resolve))
+    const allowed = 'http://127.0.0.1:' + clientOrigin.address().port
+    let server, child, context
+    try {
+      let base
+      if (runtime === 'node') {
+        server = await gen(['serve', filename, '--port', '0', '--auth-token', token, '--cors-origin', allowed])
+        if (!server.listening) await new Promise(resolve => server.once('listening', resolve))
+        base = 'http://127.0.0.1:' + server.address().port
+      } else {
+        const { spawn } = require('child_process')
+        const source = 'import importlib,sys,signal\nr=importlib.import_module("jsee.jsee")\noriginal=r.ThreadingHTTPServer\ndef factory(*a,**k):\n    server=original(*a,**k)\n    print("PORT="+str(server.server_port),flush=True)\n    return server\nr.ThreadingHTTPServer=factory\ndef stop(*a):\n    raise KeyboardInterrupt\nsignal.signal(signal.SIGTERM,stop)\nr.serve(sys.argv[1],port=0,canonical=True,auth_token=sys.argv[2],cors_origins=[sys.argv[3]])\n'
+        child = spawn('python', ['-u', '-c', source, filename, token, allowed], { env: { ...process.env, PYTHONPATH: path.resolve(__dirname, '../py'), TMPDIR: directory }, stdio: ['ignore', 'pipe', 'pipe'] })
+        base = await new Promise((resolve, reject) => {
+          let log = ''
+          child.stdout.on('data', data => { log += data; const match = /PORT=(\d+)/.exec(log); if (match) resolve('http://127.0.0.1:' + match[1]) })
+          child.stderr.on('data', data => { log += data })
+          child.once('exit', () => reject(new Error(log)))
+          child.once('error', reject)
+        })
+      }
+      // Browser credentials authenticate navigation, runtime scripts and same-origin calls.
+      context = await browser.newContext({ httpCredentials: { username: 'jsee', password: token, origin: base } })
+      const page = await context.newPage()
+      expect((await page.goto(base)).status()).toBe(200)
+      await page.evaluate(() => window.env._initPromise)
+      await page.evaluate(() => window.env.run())
+      await expect.poll(() => page.evaluate(() => window.env.data.outputs[0].value)).toBe(6)
+      expect(await page.content()).not.toContain(token)
+      await page.goto(allowed)
+      const result = await page.evaluate(async ({ base, token }) => {
+        const response = await fetch(base + '/run', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: '{"x":4}' })
+        return { status: response.status, run: await response.json() }
+      }, { base, token })
+      expect(result.status).toBe(200)
+      expect(result.run.outputs.answer).toBe(8)
+      const error = await page.evaluate(async ({ base, token }) => {
+        try { await fetch(base + '/compute', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'X-Not-Allowed': 'yes' }, body: '{}' }); return null } catch (error) { return error.name }
+      }, { base, token })
+      expect(error).toBe('TypeError')
+    } finally {
+      if (context) await context.close()
+      if (server) await new Promise(resolve => server.close(resolve))
+      if (child && child.exitCode === null) { const exited = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGTERM'); await exited }
+      await new Promise(resolve => clientOrigin.close(resolve))
+      fs.rmSync(directory, { recursive: true, force: true })
+    }
+  })
+}

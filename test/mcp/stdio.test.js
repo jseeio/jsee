@@ -154,3 +154,15 @@ for (const runtime of ['node', 'python']) {
     }
   })
 }
+
+for (const runtime of ['node', 'python']) {
+  test(`${runtime}: stdio rejects HTTP-only policy flags`, async () => {
+    const config = command(runtime, 'unused.json', os.tmpdir(), ['--auth-token-env', 'JSEE_TEST_MISSING_HOST_TOKEN'])
+    await assert.rejects(runFile(config.command, config.args, { env: config.env, cwd: config.cwd, timeout: 10000 }), error => {
+      assert.equal(error.code, 1)
+      assert.equal(error.stdout, '')
+      assert.match(error.stderr, /HTTP host options require/)
+      return true
+    })
+  })
+}

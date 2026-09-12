@@ -938,7 +938,36 @@ A stage named `run` conflicts with canonical `/run` and is rejected before loadi
 
 Requests default to a 50 MiB limit (`--max-body-bytes`). Artifact storage defaults to 64 MiB and 1,024 files per server, or per CLI invocation (`--max-artifact-bytes` changes the byte limit). A batch exceeding the quota fails without publishing partial artifacts. HTTP files live in a private temporary directory until server shutdown; a killed process can leave temporary files for host cleanup. HTTP URIs are relative to that server and do not survive a restart. Quotas do not bound model allocations or computation time.
 
-Canonical `/run` accepts JSON only, returns 400 for invalid inputs, 413 for excessive bodies, 415 for other content types, 422 for unsupported execution capabilities, 500 for model/output errors, and 507 for artifact quota failures. It omits wildcard CORS headers. Legacy routes retain their existing CORS policy. Servers default to localhost; authentication and configurable host-wide policy remain pending. Existing security flags gate JSEE-managed operations and do not provide an OS sandbox. Remote MCP, streaming/cancellation through the canonical operation, and multi-descriptor serving remain future work.
+Canonical `/run` accepts JSON only, returns 400 for invalid inputs, 413 for excessive bodies, 415 for other content types, 422 for unsupported execution capabilities, 500 for model/output errors, and 507 for artifact quota failures. Canonical serving applies same-origin access to every route by default, including legacy endpoints and static files. Legacy serving commands retain wildcard CORS until host policy is explicitly configured. Servers default to localhost. Authentication and CORS are configured for the whole host as described below. Existing security flags gate JSEE-managed operations and do not provide an OS sandbox. Remote MCP, streaming/cancellation through the canonical operation, and multi-descriptor serving remain future work.
+
+### HTTP authentication and CORS
+
+The same host policy covers the UI, runtime/model files, discovery, canonical and legacy API routes, streams, artifacts, and error responses. Configure it with either CLI:
+
+```sh
+# Read an existing shared token from APP_TOKEN; its value stays out of argv.
+jsee serve schema.json --auth-token-env APP_TOKEN
+jsee serve schema.json --auth-token-env APP_TOKEN --cors-origin https://client.example
+```
+
+Alternatively use `--auth-token TOKEN`. The options also work with legacy serving commands. Python `serve()` and `create_app()` accept `auth_token`, `auth_token_env`, and `cors_origins` (a list). Token configuration is validated before importing descriptor models; missing/empty environment values fail startup. Auth/CORS flags are server-only and cannot become schema defaults, model inputs or verbose argv output. They are rejected in MCP stdio and JSON command modes.
+
+Clients send `Authorization: Bearer TOKEN`. Browsers use the built-in HTTP login prompt: username `jsee`, password the same token. Both authenticate every actual request; there are no public UI, asset or discovery bypasses. Tokens are never embedded in generated HTML or schemas. Missing/invalid credentials return JSON 401 with authentication challenges. Authenticated responses use `Cache-Control: no-store`, including streams and downloads. OpenAPI declares Bearer and Basic as alternatives.
+
+| Setting | Origin policy |
+|---|---|
+| `jsee serve schema.json` | Same-origin browser requests and requests without Origin; external origins return 403 |
+| Legacy serving, no policy options | Wildcard CORS retained for compatibility, now applied consistently to all routes |
+| Any authentication option | Same-origin by default, including legacy serving |
+| `--cors-origin https://client.example` | Also allow that exact origin; repeat for more origins |
+| `--cors-origin none` / Python `cors_origins=[]` | Same-origin only |
+| `--cors-origin '*'` | Public cross-origin access; incompatible with authentication |
+
+Origins must use their serialized HTTP(S) form, without paths, trailing slashes, user info or explicit default ports. Authenticated/explicit-origin policies reject opaque `null` origins. Requests without Origin still require authentication when configured. CORS controls browser access; it does not authenticate callers.
+
+Allowed preflights return 204 without credentials and permit `Authorization`/`Content-Type` for GET, HEAD, POST and OPTIONS. The actual request still needs credentials. Disallowed origins, requested methods or headers fail before routing/body parsing. CORS headers also cover authorized-origin error responses; `Vary: Origin` prevents mixing origins in caches. File attachment names are exposed through `Content-Disposition`.
+
+Serve credentials over HTTPS through a trusted TLS proxy, or use an SSH tunnel. For a TLS proxy, explicitly allow its public HTTPS origin; JSEE does not trust forwarded headers. Runtime URLs in served Node pages are relative, so they retain the browser's host, scheme and authentication. This is shared-token access control, with no user accounts, OAuth, per-tool permissions or execution sandbox. See the [Bearer](https://www.rfc-editor.org/rfc/rfc6750.html#section-2.1), [Basic](https://www.rfc-editor.org/rfc/rfc7617.html) and [CORS](https://fetch.spec.whatwg.org/#http-cors-protocol) standards.
 
 ### MCP over stdio
 
@@ -952,7 +981,7 @@ File results include `resource_link` entries with session-scoped `jsee-artifact:
 
 `--max-body-bytes` bounds decoded arguments (50 MiB by default); Node also applies that limit to its incoming wire buffer, including protocol overhead. Python's SDK reads a message before JSEE checks its arguments. These limits do not bound model memory. A resource read returns the entire file: base64 adds overhead, and the client's message limit may be lower than the store quota. Large-file chunking is not implemented.
 
-Independent Node and Python SDK clients test both servers in legacy negotiation and protocol 2026-07-28 mode, including the [clean sales workflow](examples/clean-sales/README.md). MCP calls use the existing programmatic invocation lifecycle; persistent model state across calls is not a portable contract. This adapter supports terminal calls for one descriptor. Remote MCP, authentication, streams, forced cancellation and binary input transport remain pending. Model source is trusted code; stdio separation is not a sandbox.
+Independent Node and Python SDK clients test both servers in legacy negotiation and protocol 2026-07-28 mode, including the [clean sales workflow](examples/clean-sales/README.md). MCP calls use the existing programmatic invocation lifecycle; persistent model state across calls is not a portable contract. This adapter supports terminal calls for one descriptor. Remote MCP, streams, forced cancellation and binary input transport remain pending; HTTP authentication is separate from stdio process access. Model source is trusted code; stdio separation is not a sandbox.
 
 ## Changelog
 
