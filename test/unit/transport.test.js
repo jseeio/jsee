@@ -29,6 +29,35 @@ test.each(contracts)('$name', fixture => {
   } finally { store.close() }
 })
 
+test.each([
+  [undefined, 'undefined'], [() => {}, 'function'], [1n, 'bigint'],
+  [Symbol('x'), 'symbol'], [NaN, 'NaN'], [Infinity, 'Infinity'], [-Infinity, '-Infinity'],
+  [new Date(0), 'Date'], [Buffer.from([1]), 'bytes'], [new ArrayBuffer(1), 'bytes']
+])('output reports the invalid value kind and path (%s)', (value, kind) => {
+  const store = new ArtifactStore()
+  try {
+    const run = formatRun({ outputs: [{ name: 'info', type: 'object' }] },
+      { runId: crypto.randomUUID(), status: 'succeeded', result: { info: { rows: [{ 'a.b': value }] } } }, store)
+    const hint = kind === 'bytes' ? '; declare binary output as type file' : ''
+    expect(run).toMatchObject({ status: 'failed', error: { code: 'JSEE_OUTPUT_INVALID',
+      message: 'info.rows[0]["a.b"]: ' + kind + ' is not a JSON value' + hint } })
+    expect(store.entries.size).toBe(0)
+  } finally { store.close() }
+})
+
+test('output rejects cycles and sparse arrays but allows shared JSON values', () => {
+  const store = new ArtifactStore()
+  const format = info => formatRun({ outputs: [{ name: 'info', type: 'object' }] },
+    { runId: crypto.randomUUID(), status: 'succeeded', result: { info } }, store)
+  try {
+    const shared = { a: null, b: 1 }
+    expect(format([shared, shared]).outputs.info).toEqual([shared, shared])
+    const cycle = {}; cycle.self = cycle
+    expect(format(cycle).error.message).toBe('info.self: circular reference is not a JSON value')
+    expect(format(new Array(1)).error.message).toBe('info[0]: undefined is not a JSON value')
+  } finally { store.close() }
+})
+
 test('artifact bytes, name sanitization, quotas and cleanup', () => {
   const store = new ArtifactStore({ maxBytes: 3, http: true })
   const directory = store.root

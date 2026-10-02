@@ -42,6 +42,42 @@ def test_output_contract(fixture):
         store.close()
 
 
+@pytest.mark.parametrize('value,kind', [
+    (float('nan'), 'NaN'), (float('inf'), 'Infinity'), (float('-inf'), '-Infinity'),
+    (lambda: None, 'function'), ((1,), 'tuple'), (b'x', 'bytes'),
+    (bytearray(b'x'), 'bytes'), (memoryview(b'x'), 'bytes'),
+])
+def test_output_error_reports_path_and_kind(value, kind):
+    store = ArtifactStore()
+    try:
+        run = format_run({'outputs': [{'name': 'info', 'type': 'object'}]},
+                         {'runId': str(uuid.uuid4()), 'status': 'succeeded',
+                          'result': {'info': {'rows': [{'a.b': value}]}}}, store)
+        hint = '; declare binary output as type file' if kind == 'bytes' else ''
+        assert run['status'] == 'failed'
+        assert run['error'] == {'code': 'JSEE_OUTPUT_INVALID',
+                                'message': 'info.rows[0]["a.b"]: ' + kind + ' is not a JSON value' + hint}
+        assert not store.entries
+    finally:
+        store.close()
+
+
+def test_output_cycles_and_shared_values():
+    store = ArtifactStore()
+    def format_info(info):
+        return format_run({'outputs': [{'name': 'info', 'type': 'object'}]},
+                          {'runId': str(uuid.uuid4()), 'status': 'succeeded', 'result': {'info': info}}, store)
+    try:
+        shared = {'a': None, 'b': 1}
+        assert format_info([shared, shared])['outputs']['info'] == [shared, shared]
+        cycle = {}
+        cycle['self'] = cycle
+        assert format_info(cycle)['error']['message'] == 'info.self: circular reference is not a JSON value'
+        assert format_info({'row': {1: 'x'}})['error']['message'] == 'info.row: int key is not a JSON object key; keys must be strings'
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize('kind', ['object', 'number', 'int'])
 def test_output_validation_preserves_native_integer_range(kind):
     value = 10 ** 400

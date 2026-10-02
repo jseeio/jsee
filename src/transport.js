@@ -126,12 +126,27 @@ function responseStatus (run) {
     JSEE_BODY_TOO_LARGE: 413, JSEE_CAPABILITY_UNSUPPORTED: 422, JSEE_ARTIFACT_LIMIT: 507 }[run.error.code] || 500
 }
 
-function jsonValue (value, seen=new Set()) {
+function jsonPath (at, key) {
+  return /^[A-Za-z_$][\w$]*$/.test(key) ? (at ? at + '.' : '') + key : at + '[' + JSON.stringify(key) + ']'
+}
+
+function jsonValue (value, at, seen=new Set()) {
   if (value === null || ['string', 'boolean'].includes(typeof value)) return value
-  if (typeof value === 'number') return Number.isFinite(value) ? value : null
-  if ((!Array.isArray(value) && !isRecordObject(value)) || seen.has(value)) throw new Error('Outputs must be JSON values; declare binary output as type file')
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  const binary = isBinaryLike(value)
+  let kind
+  if (binary) kind = 'bytes'
+  else if (typeof value === 'number') kind = String(value)
+  else if (seen.has(value)) kind = 'circular reference'
+  else if (!Array.isArray(value) && !isRecordObject(value)) {
+    kind = typeof value === 'object' ? Object.prototype.toString.call(value).slice(8, -1) : typeof value
+  }
+  if (kind) throw new Error(at + ': ' + kind + ' is not a JSON value' + (binary ? '; declare binary output as type file' : ''))
   seen.add(value)
-  const result = Array.isArray(value) ? value.map(v => jsonValue(v, seen)) : Object.fromEntries(Object.entries(value).map(([k, v]) => [k, jsonValue(v, seen)]))
+  // Array.from visits holes too: otherwise JSON serialization silently turns them into null.
+  const result = Array.isArray(value)
+    ? Array.from(value, (v, index) => jsonValue(v, `${at}[${index}]`, seen))
+    : Object.fromEntries(Object.entries(value).map(([k, v]) => [k, jsonValue(v, jsonPath(at, k), seen)]))
   seen.delete(value)
   return result
 }
@@ -357,7 +372,7 @@ function formatRun (schema, run, store) {
         if (typeof mime !== 'string' || !/^[\w.+-]+\/[\w.+-]+(?:;[^\r\n]*)?$/.test(mime)) throw new Error('Invalid file MIME type')
         entries.push([output.name, { artifact: run.runId + '/' + files.length }])
         files.push({ output: output.name, bytes, name, mime })
-      } else entries.push([output.name, jsonValue(value)])
+      } else entries.push([output.name, jsonValue(value, jsonPath('', output.name))])
     }
     // Validate every output before persisting any file or exposing an artifact handle.
     const projected = Object.fromEntries(entries)

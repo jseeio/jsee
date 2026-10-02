@@ -178,18 +178,39 @@ def response_status(run):
             'JSEE_BODY_TOO_LARGE': 413, 'JSEE_CAPABILITY_UNSUPPORTED': 422, 'JSEE_ARTIFACT_LIMIT': 507}.get(run['error']['code'], 500)
 
 
-def json_value(value, seen=None):
+def json_path(at, key):
+    if re.fullmatch(r'[A-Za-z_$][\w$]*', key, re.ASCII):
+        return (at + '.' if at else '') + key
+    return at + '[' + json.dumps(key, ensure_ascii=False) + ']'
+
+
+def json_value(value, at, seen=None):
     seen = set() if seen is None else seen
     if value is None or isinstance(value, (str, bool, int)):
         return value
-    if isinstance(value, float):
-        return value if math.isfinite(value) else None
-    if not isinstance(value, (list, dict)) or id(value) in seen:
-        raise ValueError('Outputs must be JSON values; declare binary output as type file')
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    binary = isinstance(value, (bytes, bytearray, memoryview))
+    kind = None
+    if binary:
+        kind = 'bytes'
+    elif isinstance(value, float):
+        kind = 'NaN' if math.isnan(value) else 'Infinity' if value > 0 else '-Infinity'
+    elif id(value) in seen:
+        kind = 'circular reference'
+    elif not isinstance(value, (list, dict)):
+        kind = type(value).__name__
+    if kind:
+        hint = '; declare binary output as type file' if binary else ''
+        raise ValueError(at + ': ' + kind + ' is not a JSON value' + hint)
     seen.add(id(value))
-    if isinstance(value, dict) and any(not isinstance(key, str) for key in value):
-        raise ValueError('JSON object keys must be strings')
-    result = [json_value(v, seen) for v in value] if isinstance(value, list) else {k: json_value(v, seen) for k, v in value.items()}
+    if isinstance(value, dict):
+        for key in value:
+            if not isinstance(key, str):
+                raise ValueError(at + ': ' + type(key).__name__ + ' key is not a JSON object key; keys must be strings')
+        result = {k: json_value(v, json_path(at, k), seen) for k, v in value.items()}
+    else:
+        result = [json_value(v, f'{at}[{index}]', seen) for index, v in enumerate(value)]
     seen.remove(id(value))
     return result
 
@@ -485,7 +506,7 @@ def format_run(schema, run, store):
                 entries[output['name']] = {'artifact': run['runId'] + '/' + str(len(files))}
                 files.append({'output': output['name'], 'bytes': data, 'name': name, 'mime': mime})
             else:
-                entries[output['name']] = json_value(value)
+                entries[output['name']] = json_value(value, json_path('', output['name']))
         error = output_shape_error(entries, canonical_output_schema(schema.get('outputs')))
         if error:
             raise ValueError(error)
