@@ -176,6 +176,14 @@ JSEE turns a JSON schema into a working web app. Instead of writing HTML, event 
 - **`jsee --bundle`** bundles everything into a single HTML file: the JSEE runtime, model/view/render code, and all imports are stored in hidden `<script data-src="..." data-encoding="base64">` elements. The result works with no network
 - **`jsee.download(title)`** does the same at runtime — exports the current app as a self-contained HTML file
 
+## Structured and media inputs
+
+`object` accepts JSON values, including nested objects and variable-length lists. Its editor reports invalid JSON and blocks execution until corrected. `table` accepts the same values as table outputs: an array of row objects or `{ "columns": ["name"], "rows": [["Ada"]] }`. The table editor supports adding/removing rows, adding columns and editing JSON. Cells preserve JSON types: `0`, `false`, `null` and `""` are distinct. Column-specific validation is not inferred. Named groups remain useful for fixed nested forms.
+
+`image`, `audio` and `video` provide file selection and previews. Declare `accept`, such as `"image/png"` or `"audio/*"`, to restrict selection; the media type also requires its own MIME family. Browser JS models receive an ArrayBuffer; native Python models receive bytes. Pyodide models can use `bytes(value)` on the received buffer. Canonical CLI/HTTP/MCP inputs use `{ "artifact": "<runId>/<index>" }`, rather than encoded media strings. MIME describes supplied metadata; it does not prove that a codec can decode the content. JSEE does not implicitly convert images to PIL/NumPy or audio to sample arrays.
+
+Media outputs may return bytes (with `mime` in the output descriptor), or `{content: bytes, mime: "image/png"}`. Canonical hosts store these as reusable artifacts. Existing media URL strings remain URLs. The canonical served UI uploads selected media, invokes the whole pipeline through `/run`, and displays its artifacts. Standalone browser apps keep local file data on the device. The new editors support `disabled` and `readonly`.
+
 ## Schema blocks
 
 The package includes a [JSON Schema for descriptor authoring](schema.json) (draft-07). Editors can use `"$schema": "./node_modules/@jseeio/jsee/schema.json"`; validators can load it with `require('@jseeio/jsee/schema.json')`. It checks known fields and nested groups without loading model code, and permits extension metadata. Runtime initialization retains its existing advisory checks for unknown options; authoring validation does not prove that a model or dependency can execute.
@@ -377,6 +385,9 @@ Use `columns` on inputs/outputs for dashboard-style layouts:
       - `blocks` (default) — flat list of child inputs
       - `accordion` — collapsible section (also triggered by `collapsed` or `label` props)
       - `tabs` — tabbed view where each child element becomes a tab (child groups use their `name`/`label` as tab label)
+    - `object` — JSON editor for nested objects, lists or other JSON values
+    - `table` — Editable table using row objects or `{columns, rows}`
+    - `image`, `audio`, `video` — Typed media selection and preview; models receive bytes
     - `file` — File Input
     - `folder` — Directory input. Shows a file listing with optional selection. In the browser, uses `<input webkitdirectory>` or drag-drop. On the server, reads from a directory path. Returns array of `{name, path, size, type, selected}` objects. Props:
       - `select` (boolean) — Show checkboxes for file selection (default: all files passed)
@@ -388,11 +399,13 @@ Use `columns` on inputs/outputs for dashboard-style layouts:
   - `display` (string) — Filtrex expression to conditionally show/hide this input. Evaluated against current input values. E.g. `"display": "mode == 'advanced'"` shows the input only when `mode` is `"advanced"`. Supports `len()` for string length
   - `reactive` (boolean) — Trigger a model run when this input changes (see **Execution triggers** below)
   - `disabled` (boolean) — Disables the input in the UI. Built-in input controls, selectors, folder selection checkboxes, and action buttons honor this flag. When combined with `reactive: true`, triggers an initial model run on page load (useful for server-populated values)
+  - `readonly` (boolean) — Prevent editing in the table/JSON/media controls while retaining the current value
+  - `accept` (string) — File/media MIME types, wildcards or extensions, separated by commas; checked against file selection and stored artifact metadata
   - `enter` (boolean) — If `true` on a `string` input, pressing Enter triggers a model run (useful for chat or search inputs)
   - `raw` (boolean, file input only) — If `true`, pass the raw source to the model instead of reading text in the UI (`File` object for disk files or `{ kind: 'url', url: '...' }` for URL input)
   - `stream` (boolean, file input only) — If `true`, pass an async iterable `ChunkedReader` to the model instead of raw source handles. Supports `for await (const chunk of reader)`, `await reader.text()`, `await reader.bytes()`, and `for await (const line of reader.lines())`. Works in both main-thread and worker execution. Reader metadata (`reader.name`, `reader.size`, `reader.type`) is preserved and remains available in downstream pipeline models
   - `validate` (string) — Browser control validation using Filtrex. The variable `value` holds the current input value. Expression must return truthy for valid input. E.g. `"validate": "value >= 0 and value <= 150"`. Runs on input changes (debounced) and before browser execution, including programmatic `jsee.run()` calls. Nested groups are traversed; group expressions receive their collected field values. Invalid controls show errors and block execution
-  - `required` (boolean) — Browser controls reject empty strings, null, undefined, and empty arrays, including when a `validate` expression is also present. HTTP/CLI contracts use it for required field presence; portable value constraints come from declared types, options, and numeric bounds
+  - `required` (boolean) — Ordinary browser controls reject empty strings, null, undefined, and empty arrays, including when a `validate` expression is also present. Table/JSON controls use field-presence semantics and permit empty collections as values. HTTP/CLI contracts use it for required field presence; portable value constraints come from declared types, options, and numeric bounds
   - `error` (string) — Custom error message for `validate` or `required` failures (default: `"Invalid value"` / `"Required"`)
   - `columns` (number, 1-12) — Grid column span for this input. When any input has `columns`, the inputs section switches to a 12-column CSS grid. E.g. `"columns": 6` makes the input take half width
   - URL params for file inputs (e.g. `?file=https://...`) auto-load on init, so bookmarkable links run without an extra Load click
@@ -932,13 +945,25 @@ Canonical serving adds these routes to the existing UI and per-stage endpoints:
 | `GET /schema` | Computation descriptor retaining local model references |
 | `GET /openapi.json` | Whole-pipeline request, response and artifact descriptions |
 | `POST /run` | Execute the entire pipeline with a JSON input object |
+| `POST /__jsee/artifacts?name=data.csv` | Upload raw bytes; Content-Type declares MIME; returns `{artifact, metadata}` |
 | `GET /__jsee/artifacts/<runId>/<index>` | Download the referenced file as an attachment |
 
 A stage named `run` conflicts with canonical `/run` and is rejected before loading. Rename that stage or retain the legacy serving command. Existing `jsee schema.json --run`, `--serve`, and `-o index.html -f` forms keep their behavior. Python also accepts `serve(path, canonical=True)` and `create_app(path, canonical=True)`; call the WSGI application's `close()` when retiring it.
 
-Requests default to a 50 MiB limit (`--max-body-bytes`). Artifact storage defaults to 64 MiB and 1,024 files per server, or per CLI invocation (`--max-artifact-bytes` changes the byte limit). A batch exceeding the quota fails without publishing partial artifacts. HTTP files live in a private temporary directory until server shutdown; a killed process can leave temporary files for host cleanup. HTTP URIs are relative to that server and do not survive a restart. Quotas do not bound model allocations or computation time.
+Requests default to a 50 MiB limit (`--max-body-bytes`). Artifact storage defaults to 64 MiB and 1,024 files per server or persistent CLI artifact directory (`--max-artifact-bytes` changes the byte limit). A batch exceeding the quota fails without publishing partial artifacts. Artifact downloads verify size/SHA256 and return 409 if stored bytes changed. HTTP files live in a private temporary directory until server shutdown; a killed process can leave temporary files for host cleanup. HTTP URIs are relative to that server and do not survive a restart. Retained input/output artifacts and pending uploads share the quota; a transform retaining both a large input and output may need a larger store. Quotas do not bound model allocations or computation time.
 
-Ordinary `type: "file"` inputs currently accept inline text in canonical JSON CLI/HTTP/MCP calls. Output handles such as `{ "artifact": "<runId>/<index>" }` cannot yet be passed back as inputs, and canonical calls have no binary upload endpoint. Existing raw/stream URL handles and legacy multipart endpoints have separate semantics; they do not resolve artifact references. File-reference inputs and byte ingestion are planned.
+Ordinary `type: "file"` inputs accept inline text or an existing `{ "artifact": "<runId>/<index>" }` handle. References resolve in the current store before model execution: ordinary files become strict UTF-8 text, while `arrayBuffer: true` becomes ArrayBuffer in JS or bytes in native Python. Legacy inline numeric arrays keep their existing meaning. Raw/stream file modes retain their separate semantics and do not accept artifact references.
+
+An output reference can be passed unchanged to the next run. The ID is scoped to the store; SHA256 is integrity metadata, not an access key. Invalid, foreign or unavailable IDs, changed file bytes and MIME mismatches fail as invalid inputs. Strings are never implicitly opened as paths or URLs. In-process `invokeSchema(..., {artifactStore})` and `invoke_schema(..., artifact_store=...)` can use the existing transport module's ArtifactStore; calls without a store reject references.
+
+```sh
+# Both Node and Python CLIs; output is {artifact, metadata}.
+jsee artifact-import sales.csv --mime text/csv --artifact-dir .jsee-artifacts
+# Put {"csv":{"artifact":"<returned ID>"},"missing":"drop"} in input.json.
+jsee run schema.json --input input.json --artifact-dir .jsee-artifacts
+```
+
+CLI registrations persist alongside bytes, so subsequent invocations can reuse handles. Registrations created before this feature cannot be recovered from old bare files. Writers serialize publication with `.write-lock`; after an interrupted CLI write, verify that no writer remains before removing that lock. HTTP registrations last until host shutdown; MCP registrations last for the session. Moving a file to another host/session requires explicit download/upload. The JSON request and raw HTTP upload limits are both controlled by `--max-body-bytes`; ingestion does not remove store quotas.
 
 Canonical `/run` accepts JSON only, returns 400 for invalid inputs, 413 for excessive bodies, 415 for other content types, 422 for unsupported execution capabilities, 500 for model/output errors, and 507 for artifact quota failures. Canonical serving applies same-origin access to every route by default, including legacy endpoints and static files. Legacy serving commands retain wildcard CORS until host policy is explicitly configured. Servers default to localhost. Authentication and CORS are configured for the whole host as described below. Existing security flags gate JSEE-managed operations and do not provide an OS sandbox. Remote MCP, streaming/cancellation through the canonical operation, and multi-descriptor serving remain future work.
 
@@ -977,13 +1002,15 @@ Start one descriptor as an MCP tool with `jsee serve schema.json --mcp-only`. Th
 
 Configure an MCP client to launch the installed `jsee` executable with arguments `['serve', '/absolute/path/schema.json', '--mcp-only']`. Use the executable belonging to the descriptor's language. For a Node checkout, use command `node` and prepend `/absolute/path/jsee/bin/jsee` to those arguments.
 
-`tools/list` derives one tool from the descriptor's stable `id`, title, description and input schema without importing model code. `tools/call` executes the same whole-pipeline invocation as JSON CLI/HTTP. Success returns the complete `{runId, status, outputs, artifacts}` envelope as `structuredContent` and JSON text, with its generated `outputSchema`. Invalid inputs, execution/output failures and artifact quota failures return `isError: true` and the failed envelope as text. Unknown tools or artifact URIs produce protocol errors.
+`tools/list` derives a computation tool from the descriptor's stable `id`, title, description and input schema without importing model code. `tools/call` executes the same whole-pipeline invocation as JSON CLI/HTTP. Success returns the complete `{runId, status, outputs, artifacts}` envelope as `structuredContent` and JSON text, with its generated `outputSchema`. Invalid inputs, execution/output failures and artifact quota failures return `isError: true` and the failed envelope as text. Unknown tools or artifact URIs produce protocol errors.
 
 File results include `resource_link` entries with session-scoped `jsee-artifact:` URIs. `resources/list` exposes metadata; `resources/read` returns exact bytes as a base64 blob only when requested. Verify the decoded bytes against `size` and `sha256` in the run envelope. Store limits remain 64 MiB/1,024 files per session (`--max-artifact-bytes` changes bytes); rejected batches expose no files. Files disappear on orderly close or SIGTERM and cannot be retrieved by another session. SIGKILL or a crash can leave temporary files.
 
 `--max-body-bytes` bounds decoded arguments (50 MiB by default); Node also applies that limit to its incoming wire buffer, including protocol overhead. Python's SDK reads a message before JSEE checks its arguments. These limits do not bound model memory. A resource read returns the entire file: base64 adds overhead, and the client's message limit may be lower than the store quota. Large-file chunking is not implemented.
 
-Independent Node and Python SDK clients test both servers in legacy negotiation and protocol 2026-07-28 mode, including the [clean sales workflow](examples/clean-sales/README.md). MCP calls use the existing programmatic invocation lifecycle; persistent model state across calls is not a portable contract. This adapter supports terminal calls for one descriptor. Remote MCP, streams, forced cancellation and binary input transport remain pending; HTTP authentication is separate from stdio process access. Model source is trusted code; stdio separation is not a sandbox.
+`tools/list` also advertises `upload_artifact` (`jsee_upload_artifact` if that name is already the computation ID). Send `{data: "<base64>", name: "data.csv", mime: "text/csv", offset: 0}` to start; continue with the returned `upload` ID and `offset`. Each chunk is at most 262,144 decoded bytes. Set `final: true` to publish `{artifact, metadata}`, then pass `{artifact: result.artifact}` to a compatible input. Set `{upload: id, cancel: true}` to discard an incomplete upload. Up to 16 incomplete uploads share the store byte quota; incomplete bytes are never listed as resources. The client transfers file chunks, so the model need not include file contents in its computation arguments. Configure client/server message limits to fit the base64 chunk plus protocol overhead.
+
+Independent Node and Python SDK clients test both servers in legacy negotiation and protocol 2026-07-28 mode, including the [clean sales workflow](examples/clean-sales/README.md). MCP calls use the existing programmatic invocation lifecycle; persistent model state across calls is not a portable contract. This adapter supports terminal calls for one descriptor. Remote MCP, streams and forced cancellation remain pending; HTTP authentication is separate from stdio process access. Model source is trusted code; stdio separation is not a sandbox.
 
 ## Changelog
 

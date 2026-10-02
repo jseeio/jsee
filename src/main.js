@@ -126,7 +126,7 @@ function applySecurityToInputs (inputs, security) {
       applySecurityToInputs(input.elements, options)
       return
     }
-    if (options.allowFileViewer === false && (input.type === 'file' || input.type === 'folder')) {
+    if (options.allowFileViewer === false && ['file', 'folder', 'image', 'audio', 'video'].includes(input.type)) {
       input.disabled = true
       input._securityBlocked = 'security.allowFileViewer'
     }
@@ -289,6 +289,11 @@ export default class JSEE {
     this.log('Destroying JSEE instance')
     // Cancel any running computation
     this.cancelCurrentRun()
+    const releaseOutputs = outputs => (outputs || []).forEach(output => {
+      if (output._objectUrl) { URL.revokeObjectURL(output._objectUrl); output._objectUrl = null }
+      if (output.elements) releaseOutputs(output.elements)
+    })
+    releaseOutputs(this.data && this.data.outputs)
     // Unmount Vue app
     if (this.app && this.app.__vueApp) {
       this.app.__vueApp.unmount()
@@ -1042,7 +1047,7 @@ export default class JSEE {
       // Worker:
       this.worker.postMessage(model)
     } else {
-      const request = utils.getModelFuncAPI(model, this.log, undefined, this.security)
+      const request = utils.getModelFuncAPI(model, this.log, undefined, this.security, this.schema.outputs)
       return async data => {
         const runToken = this._runToken
         const controller = new AbortController()
@@ -1168,6 +1173,8 @@ export default class JSEE {
       // Collect input values
       let inputValues = collectInputValues(data.inputs)
       inputValues = prepareInputs(schema.inputs, inputValues)
+      inputValues = await utils.prepareBrowserFiles(schema.inputs, inputValues, this.model.some(model => model._jseeCanonical))
+      checkCancelled()
       // For folder inputs with select mode, filter to selected files
       data.inputs.forEach(input => {
         if (input.type === 'folder' && input.select && Array.isArray(inputValues[input.name])) {
@@ -1287,13 +1294,20 @@ export default class JSEE {
             output.value = fileValue.value
             return
           }
+          if (output._objectUrl) { URL.revokeObjectURL(output._objectUrl); output._objectUrl = null }
+          if (['image', 'audio', 'video'].includes(output.type)) {
+            const media = utils.normalizeFileOutputValue(output, r)
+            if (utils.isBinaryLike(media.value) || typeof Blob !== 'undefined' && media.value instanceof Blob) {
+              const mime = media.mime || media.value.type || ''
+              if (!require('./schema').matchesFileAccept(output.type + '/*', '', mime)) throw new Error('Media bytes require a matching declared MIME type')
+              output._objectUrl = URL.createObjectURL(new Blob([media.value], { type: mime }))
+              output.value = output._objectUrl
+              return
+            }
+          }
           // Convert large base64 image data URLs to blob URLs for efficiency
           if (output.type === 'image' && typeof r === 'string'
               && r.startsWith('data:') && r.length > 50000) {
-            // Revoke previous blob URL
-            if (output._objectUrl) {
-              URL.revokeObjectURL(output._objectUrl)
-            }
             try {
               const [header, b64] = r.split(',')
               const mime = header.match(/data:([^;]+)/)[1]

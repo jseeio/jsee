@@ -115,6 +115,12 @@ def test_cli_inputs_artifacts_and_diagnostics(tmp_path):
             assert run['outputs']['summary'] == fixture['summary']
             artifact = Path(unquote(urlparse(run['artifacts'][0]['uri']).path))
             assert artifact.read_bytes() == fixture['csv'].encode()
+    (tmp_path / 'sales.csv').write_text('price,quantity\n10,2\n')
+    uploaded = json.loads(execute(['artifact-import', 'sales.csv', '--mime', 'text/csv']).stdout)
+    first = json.loads(execute(['run', str(SCHEMA_PATH)], json.dumps({'csv': {'artifact': uploaded['artifact']}, 'missing': 'drop'})).stdout)
+    assert first['outputs']['summary']['total_revenue'] == 20
+    second = json.loads(execute(['run', str(SCHEMA_PATH)], json.dumps({'csv': first['outputs']['cleaned_csv'], 'missing': 'drop'})).stdout)
+    assert second['outputs']['summary'] == first['outputs']['summary']
     (tmp_path / 'loud.py').write_text("print('import diagnostic')\ndef loud(x):\n    print('run diagnostic')\n    return {'answer': x}\n")
     (tmp_path / 'schema.json').write_text(json.dumps({'model': {'url': 'loud.py'}, 'inputs': [{'name': 'x', 'type': 'int'}], 'outputs': [{'name': 'answer', 'type': 'number'}]}))
     (tmp_path / 'input.json').write_text('{"x":42}')
@@ -194,6 +200,17 @@ def test_canonical_http_and_wsgi(client):
     status, headers, body = client('/schema')
     assert status == 200
     assert [m['url'] for m in json.loads(body)['model']] == ['model.py'] * 3
+    upload_status, _, upload_body = client('/__jsee/artifacts?name=sales.csv', 'POST', b'price,quantity\n10,2\n', 'text/csv')
+    assert upload_status == 201
+    uploaded = json.loads(upload_body)
+    assert uploaded['metadata']['name'] == 'sales.csv'
+    def run_file(value):
+        status, _, body = client('/run', 'POST', json.dumps({'csv': value, 'missing': 'drop'}).encode())
+        assert status == 200
+        return json.loads(body)
+    first = run_file({'artifact': uploaded['artifact']})
+    assert first['outputs']['summary']['total_revenue'] == 20
+    assert run_file(first['outputs']['cleaned_csv'])['outputs']['summary'] == first['outputs']['summary']
     spec = json.loads(client('/openapi.json')[2])
     assert spec['paths']['/run']['post']['requestBody']['content']['application/json']['schema'] == inspect_schema(SCHEMA)['inputSchema']
     for fixture in SALES:
@@ -238,6 +255,8 @@ def test_canonical_state_and_file_containment(client, computation_path, monkeypa
     outside = computation_path.parent.parent / 'outside.txt'
     outside.write_text('outside-canary')
     stored = stores[-1].get(artifact['id'])['path']
+    stored.write_text('broken')
+    assert client(artifact['uri'])[0] == 409
     stored.unlink()
     stored.symlink_to(outside)
     (computation_path.parent / 'escape.txt').symlink_to(outside)
@@ -251,3 +270,111 @@ def test_canonical_endpoint_conflict_precedes_import(tmp_path):
     (tmp_path / 'run.py').write_text("raise RuntimeError('must not load')\n")
     with pytest.raises(ValueError, match='conflicts'):
         runtime.create_app({'model': {'name': 'run', 'url': str(tmp_path / 'run.py')}}, canonical=True)
+
+
+def test_artifact_inputs(tmp_path):
+    import asyncio
+    model = tmp_path / 'model.py'
+    model.write_text('def model(group):\n    value = group["file"]\n    return {"value": list(value) if isinstance(value, bytes) else value}\n')
+    store = ArtifactStore()
+    try:
+        produced = format_run({'outputs': [{'name': 'file', 'type': 'file', 'mime': 'text/csv'}]},
+                              {'runId': str(uuid.uuid4()), 'status': 'succeeded', 'result': {'file': 'a,b\n'}}, store)
+        field = {'name': 'file', 'type': 'file', 'accept': 'text/*', 'default': produced['outputs']['file']}
+        schema = {'model': {'url': str(model), 'name': 'model'}, 'inputs': [{'name': 'group', 'type': 'group', 'elements': [field]}]}
+        assert asyncio.run(runtime.invoke_schema(schema, {'group': {}}, artifact_store=store))['result']['value'] == 'a,b\n'
+        field['arrayBuffer'] = True
+        assert asyncio.run(runtime.invoke_schema(schema, {'group': {}}, artifact_store=store))['result']['value'] == [97, 44, 98, 10]
+        field['accept'] = 'image/*'
+        assert asyncio.run(runtime.invoke_schema(schema, {'group': {}}, artifact_store=store))['error']['code'] == 'JSEE_INPUT_INVALID'
+        schema['model']['url'] = 'must-not-import.py'
+        assert asyncio.run(runtime.invoke_schema(schema, {'group': {'file': {'artifact': 'unknown'}}}, artifact_store=store))['error']['code'] == 'JSEE_INPUT_INVALID'
+    finally:
+        store.close()
+
+
+def test_persistent_artifact_registrations(tmp_path):
+    first = ArtifactStore(directory=tmp_path)
+    artifact = first.commit(str(uuid.uuid4()), [{'bytes': bytes([0, 255, 128]), 'name': 'test.bin', 'mime': 'application/octet-stream', 'output': 'file'}])[0]
+    first.close()
+    second = ArtifactStore(directory=tmp_path)
+    assert second.read(artifact['id']) == bytes([0, 255, 128])
+    (tmp_path / artifact['id']).write_bytes(bytes([0, 0, 0]))
+    with pytest.raises(ValueError, match='integrity'):
+        second.read(artifact['id'])
+    second.close()
+
+
+def test_bounded_chunk_ingestion():
+    store = ArtifactStore(max_bytes=5)
+    try:
+        part = store.upload({'data': 'AP8=', 'offset': 0, 'name': 'test.bin', 'mime': 'application/octet-stream'})
+        assert not store.entries
+        with pytest.raises(ValueError, match='offset'):
+            store.upload({'upload': part['upload'], 'offset': 0, 'data': 'gA=='})
+        complete = store.upload({'upload': part['upload'], 'offset': 2, 'data': 'gA==', 'final': True})
+        assert store.read(complete['artifact']) == bytes([0, 255, 128])
+        with pytest.raises(ValueError, match='limit'):
+            store.upload({'data': 'AAAA', 'final': True})
+        with pytest.raises(ValueError, match='base64'):
+            store.upload({'data': '!!!!', 'final': True})
+        assert len(store.entries) == 1
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize('fixture', json.loads((ROOT / 'test/fixtures/structured-inputs.json').read_text()), ids=lambda f: f['name'])
+def test_structured_inputs(fixture):
+    inputs = [{'name': 'value', 'type': fixture['type']}]
+    assert validate_descriptor({'model': {'url': 'model.py'}, 'inputs': inputs})['valid']
+    if fixture['valid']:
+        assert runtime._prepare_inputs(inputs, {'value': fixture['value']})['value'] == fixture['value']
+    else:
+        with pytest.raises(ValueError):
+            runtime._prepare_inputs(inputs, {'value': fixture['value']})
+
+
+@pytest.mark.parametrize('kind', ['image', 'audio', 'video'])
+def test_media_artifacts(kind, tmp_path):
+    import asyncio
+    model = tmp_path / 'model.py'
+    model.write_text('def model(value):\n    return list(value)\n')
+    store = ArtifactStore()
+    try:
+        schema = {'outputs': [{'name': 'value', 'type': kind, 'mime': kind + '/example'}]}
+        result = format_run(schema, {'runId': str(uuid.uuid4()), 'status': 'succeeded', 'result': {'value': bytes([0, 255, 128])}}, store)
+        assert result['status'] == 'succeeded'
+        descriptor = {'inputs': [{'name': 'value', 'type': kind}], 'model': {'name': 'model', 'url': str(model)}}
+        assert asyncio.run(runtime.invoke_schema(descriptor, result['outputs'], artifact_store=store))['result'] == [0, 255, 128]
+        url = format_run(schema, {'runId': str(uuid.uuid4()), 'status': 'succeeded', 'result': {'value': 'https://example.test/file'}}, store)
+        assert url['outputs']['value'] == 'https://example.test/file'
+        assert not url['artifacts']
+    finally:
+        store.close()
+
+
+def test_large_uploaded_file_through_wsgi(tmp_path):
+    (tmp_path / 'model.py').write_text('import hashlib\ndef measure(file):\n    return {"size":len(file), "hash":hashlib.sha256(file).hexdigest()}\n')
+    schema = {'model': {'name': 'measure', 'url': 'model.py'}, 'inputs': [{'name': 'file', 'type': 'file', 'arrayBuffer': True}], 'outputs': [{'name': 'size', 'type': 'int'}, {'name': 'hash', 'type': 'string'}]}
+    filename = tmp_path / 'schema.json'
+    filename.write_text(json.dumps(schema))
+    app = runtime.create_app(str(filename), canonical=True)
+    def post(path, body, mime):
+        captured = {}
+        result = b''.join(app({'REQUEST_METHOD': 'POST', 'PATH_INFO': path, 'CONTENT_TYPE': mime, 'CONTENT_LENGTH': str(len(body)), 'wsgi.input': io.BytesIO(body)}, lambda status, headers: captured.update(status=int(status.split()[0]))))
+        assert captured['status'] in (200, 201), result
+        return json.loads(result)
+    try:
+        data = bytes([255]) * (40 * 1024 * 1024)
+        uploaded = post('/__jsee/artifacts', data, 'application/octet-stream')
+        body = json.dumps({'file': {'artifact': uploaded['artifact']}}).encode()
+        assert len(body) < 100
+        assert post('/run', body, 'application/json')['outputs'] == {'size': len(data), 'hash': hashlib.sha256(data).hexdigest()}
+    finally:
+        app.close()
+
+
+@pytest.mark.parametrize('value', [(1, 2), {1: 'non-string key'}, [float('nan')], [object()]])
+def test_non_json_structured_values(value):
+    with pytest.raises(ValueError):
+        runtime._prepare_inputs([{'name': 'value', 'type': 'object'}], {'value': value})

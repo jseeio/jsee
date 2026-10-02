@@ -1290,7 +1290,7 @@ async function runSchemaOnce (schema, data, schemaPath, cwd=process.cwd(), log=(
   return runPipeline(stages, inputs)
 }
 
-async function invokeSchema (schema, data, { schemaPath, cwd=process.cwd(), log=() => {}, _modelFunctions }={}) {
+async function invokeSchema (schema, data, { schemaPath, cwd=process.cwd(), log=() => {}, _modelFunctions, artifactStore }={}) {
   const runId = crypto.randomUUID()
   let code = 'JSEE_SCHEMA_INVALID'
   try {
@@ -1303,7 +1303,7 @@ async function invokeSchema (schema, data, { schemaPath, cwd=process.cwd(), log=
     if (schema.inputs !== undefined && !Array.isArray(schema.inputs)) throw new Error('inputs should be an array')
     code = 'JSEE_INPUT_INVALID'
     // Validate before imports/initializers can have effects. Models own a copy of JSON input containers.
-    const inputs = prepareInputs(schema.inputs, cloneSchema(data))
+    const inputs = require('./transport').resolveArtifactInputs(schema.inputs, prepareInputs(schema.inputs, cloneSchema(data)), artifactStore)
     code = 'JSEE_CAPABILITY_UNSUPPORTED'
     const unsupported = invocationUnsupportedReason(schema)
     if (unsupported) throw new Error(unsupported)
@@ -2252,6 +2252,23 @@ async function command (pargv) {
   const { inspectSchema, validateDescriptor, ArtifactStore, formatRun, failedRun, BODY_LIMIT, ARTIFACT_LIMIT } = require('./transport')
   const argv = minimist(pargv.slice(1), { boolean: ['json'], string: ['input', 'artifact-dir'], default: { input: '-', 'max-body-bytes': BODY_LIMIT, 'max-artifact-bytes': ARTIFACT_LIMIT } })
   if (['auth-token', 'auth-token-env', 'cors-origin'].some(name => Object.hasOwn(argv, name))) throw new Error('HTTP host options require serving')
+  if (pargv[0] === 'artifact-import') {
+    let store
+    try {
+      if (argv._.length !== 1) throw new Error('Usage: jsee artifact-import file [--mime type] [--artifact-dir directory]')
+      store = new ArtifactStore({ directory: argv['artifact-dir'] || path.resolve('.jsee-artifacts'), maxBytes: argv['max-artifact-bytes'] })
+      const filename = path.resolve(String(argv._[0]))
+      const chunks = []
+      let size = 0
+      for await (const chunk of fs.createReadStream(filename)) {
+        size += chunk.length
+        if (size + store.bytes > store.maxBytes) throw Object.assign(new Error('Artifact store limit exceeded'), { code: 'JSEE_ARTIFACT_LIMIT' })
+        chunks.push(chunk)
+      }
+      return { body: store.ingest(Buffer.concat(chunks), { name: argv.name || path.basename(filename), mime: argv.mime }), exitCode: 0 }
+    } catch (error) { return { body: failedRun(error.code || 'JSEE_REQUEST_INVALID', error.message), exitCode: 2 } }
+    finally { if (store) store.close() }
+  }
   let schema, schemaPath
   try {
     if (argv._.length !== 1) throw new Error('Usage: jsee ' + pargv[0] + ' schema.json [--input -] [--json]')
@@ -2278,17 +2295,17 @@ async function command (pargv) {
     }
     data = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)) || '{}')
   } catch (error) { return { body: failedRun(error.code === 'JSEE_BODY_TOO_LARGE' ? error.code : 'JSEE_REQUEST_INVALID', error.message), exitCode: 2 } }
-  const run = await invokeSchema(schema, data, { schemaPath, log: console.error })
-  let store
+  let store, run
   try {
-    if (run.status !== 'succeeded') return { body: run, exitCode: 1 }
     store = new ArtifactStore({ directory: argv['artifact-dir'] || path.resolve('.jsee-artifacts'), maxBytes: argv['max-artifact-bytes'] })
+    run = await invokeSchema(schema, data, { schemaPath, log: console.error, artifactStore: store })
     const body = formatRun(schema, run, store)
     return { body, exitCode: body.status === 'succeeded' ? 0 : 1 }
-  } catch (error) { return { body: failedRun('JSEE_OUTPUT_INVALID', error.message, run.runId), exitCode: 1 } }
+  } catch (error) { return { body: failedRun(error.code || 'JSEE_OUTPUT_INVALID', error.message, run && run.runId), exitCode: 1 } }
 }
 
 async function gen (pargv, returnHtml=false) {
+  const commandArgs = [...pargv]
   const canonical = pargv[0] === 'serve'
   if (canonical) {
     if (!pargv[1] || pargv[1].startsWith('-')) throw new Error('Usage: jsee serve schema.json [--port 3000]')
@@ -2754,6 +2771,9 @@ Documentation: https://jsee.org
     }))
   }
   
+  const serverModels = schema.model
+  if (canonical) schema.model = [{ name: 'computation', type: 'post', url: '/run', worker: false, autorun: false, _jseeCanonical: true }]
+
   // Switch to CDN for model files
   if (argv.cdn) {
     let cdn = ''
@@ -3071,11 +3091,20 @@ Documentation: https://jsee.org
         const artifact = artifactStore.get(id)
         if (!artifact) return res.status(404).json({ error: 'Unknown artifact' })
         try {
-          const filename = artifactStore.pathFor(id)
+          const bytes = artifactStore.read(id)
           const encoded = encodeURIComponent(artifact.name).replace(/['()*]/g, char => '%' + char.charCodeAt(0).toString(16))
           res.set({ 'Content-Type': artifact.mime, 'Content-Disposition': "attachment; filename*=UTF-8''" + encoded, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' })
-          res.sendFile(filename)
+          res.send(bytes)
         } catch (error) { sendEndpointError(res, error) }
+      })
+      app.post('/__jsee/artifacts', express.raw({ type: () => true, limit, inflate: false }), (req, res) => {
+        try {
+          const result = artifactStore.ingest(req.body || Buffer.alloc(0), { name: req.query.name || 'file', mime: req.get('Content-Type') || 'application/octet-stream' })
+          res.status(201).json(result)
+        } catch (error) {
+          const failure = failedRun(error.code || 'JSEE_REQUEST_INVALID', error.message)
+          res.status(responseStatus(failure)).json(failure)
+        }
       })
       app.post('/run', (req, res, next) => {
         if (!req.is('application/json')) return res.status(415).json(failedRun('JSEE_UNSUPPORTED_MEDIA', 'Canonical /run accepts application/json'))
@@ -3085,7 +3114,7 @@ Documentation: https://jsee.org
         try { data = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(req.body) || '{}') } catch (error) {
           return res.status(400).json(failedRun('JSEE_REQUEST_INVALID', error.message))
         }
-        const run = await invokeSchema(computationSchema, data, { schemaPath, cwd, log, _modelFunctions: modelFuncs })
+        const run = await invokeSchema(computationSchema, data, { schemaPath, cwd, log, _modelFunctions: modelFuncs, artifactStore })
         const response = formatRun(computationSchema, run, artifactStore)
         res.status(responseStatus(response)).json(response)
       })
@@ -3108,20 +3137,20 @@ Documentation: https://jsee.org
     })
     // API discovery
     app.get('/api', (req, res) => {
-      const models = schema.model.map(m => ({
+      const models = serverModels.map(m => ({
         name: m.name,
         endpoint: m.url || '/' + m.name,
         method: 'POST'
       }))
-      res.json({ schema, models })
+      res.json({ schema: { ...schema, model: serverModels }, models })
     })
     // OpenAPI spec
     app.get('/api/openapi.json', (req, res) => {
-      res.json(hostPolicy.openapi(generateOpenAPISpec(schema)))
+      res.json(hostPolicy.openapi(generateOpenAPISpec({ ...schema, model: serverModels })))
     })
     if (shouldExecute) {
       // Create post endpoint for executing the model
-      schema.model.forEach(m => {
+      serverModels.forEach(m => {
         app.post(m.url, async (req, res) => {
           log(`Executing model: ${m.name}`)
           if (m.name in modelFuncs) {
@@ -3186,7 +3215,7 @@ Documentation: https://jsee.org
     })
     app.get('/', async (req, res) => {
       log('Serving index.html')
-      res.send(await gen(pargv, true))
+      res.send(await gen(takeHostOptions(commandArgs).args, true))
     })
     // app.get('/dist/jsee.runtime.js', (req, res) => {
     //   // __dirname points to this file location (it's jsee/src/cli.js, likely in node_modules)

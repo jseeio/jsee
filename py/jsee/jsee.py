@@ -374,6 +374,13 @@ def jsee_inputs_to_json_schema(inputs):
     t = inp.get('type', 'string')
     if t == 'group':
       prop.update(jsee_inputs_to_json_schema(inp.get('elements')))
+    elif t == 'table':
+      prop.update(_table_output_json_schema())
+    elif t == 'object':
+      pass
+    elif t in ('image', 'audio', 'video'):
+      prop.update({'type': 'object', 'properties': {'artifact': {'type': 'string', 'minLength': 1}}, 'required': ['artifact'], 'additionalProperties': False})
+      prop['x-jsee-accept'] = inp.get('accept') or t + '/*'
     elif t == 'file':
       prop['type'] = 'string'
       if inp.get('raw') or inp.get('stream'):
@@ -412,6 +419,13 @@ def jsee_inputs_to_json_schema(inputs):
     if inp.get('arrayBuffer') is True:
       prop['type'] = 'array'
       prop['items'] = {'type': 'number'}
+    if t == 'file' and not inp.get('raw') and not inp.get('stream'):
+      legacy = dict(prop)
+      legacy.pop('description', None)
+      prop = {key: value for key, value in prop.items() if key == 'description'}
+      prop['oneOf'] = [legacy, {'type': 'object', 'properties': {'artifact': {'type': 'string', 'minLength': 1}}, 'required': ['artifact'], 'additionalProperties': False}]
+      if inp.get('accept'):
+        prop['x-jsee-accept'] = inp['accept']
     if prop.get('type') in ('integer', 'number'):
       if 'min' in inp:
         prop['minimum'] = inp['min']
@@ -422,14 +436,31 @@ def jsee_inputs_to_json_schema(inputs):
     if 'default' in inp:
       prop['default'] = inp['default']
     if inp.get('nullable') is True or ('default' in inp and inp['default'] is None):
-      kinds = prop['type'] if isinstance(prop['type'], list) else [prop['type']]
-      prop['type'] = list(dict.fromkeys(kinds + ['null']))
+      if 'oneOf' in prop:
+        prop['oneOf'].append({'type': 'null'})
+      elif 'type' in prop:
+        kinds = prop['type'] if isinstance(prop['type'], list) else [prop['type']]
+        prop['type'] = list(dict.fromkeys(kinds + ['null']))
       if 'enum' in prop and None not in prop['enum']:
         prop['enum'].append(None)
     add(inp.get('name'), prop)
     if inp.get('required') is True or (inp.get('required') is not False and 'default' not in inp):
       required.append(inp['name'])
   return {'type': 'object', 'properties': properties, 'required': required}
+
+
+def _assert_json_value(value, seen=None):
+  if value is None or isinstance(value, (str, bool)) or type(value) is int or type(value) is float and math.isfinite(value):
+    return
+  seen = set() if seen is None else seen
+  if not isinstance(value, (list, dict)) or id(value) in seen:
+    raise ValueError('Expected a finite JSON value')
+  if isinstance(value, dict) and any(not isinstance(key, str) for key in value):
+    raise ValueError('JSON object keys must be strings')
+  seen.add(id(value))
+  for item in value.values() if isinstance(value, dict) else value:
+    _assert_json_value(item, seen)
+  seen.remove(id(value))
 
 
 def _prepare_inputs(inputs, data):
@@ -455,6 +486,19 @@ def _prepare_inputs(inputs, data):
     return a == b
 
   def check(value, prop, path):
+    if 'oneOf' in prop:
+      count = 0
+      for option in prop['oneOf']:
+        start = len(errors)
+        check(value, option, path)
+        count += len(errors) == start
+        del errors[start:]
+      if count != 1:
+        errors.append(path + ': does not match the declared input shape')
+    if 'minLength' in prop and isinstance(value, str) and len(value) < prop['minLength']:
+      errors.append(path + ': string is too short')
+    if isinstance(value, dict) and prop.get('additionalProperties') is False and any(key not in prop.get('properties', {}) for key in value):
+      errors.append(path + ': undeclared property')
     kind = prop.get('type')
     kinds = kind if isinstance(kind, list) else [kind]
     if kind and not any(matches(value, entry) for entry in kinds):
@@ -515,9 +559,15 @@ def _prepare_inputs(inputs, data):
         else:
           target[name] = dict(value)
           visit(inp.get('elements'), target[name], path + '.')
-      elif inp.get('type') == 'file' and isinstance(value, (bytes, bytearray, memoryview)):
+      elif inp.get('type') in ('file', 'image', 'audio', 'video') and isinstance(value, (bytes, bytearray, memoryview)):
         continue
       else:
+        if inp.get('type') in ('object', 'table'):
+          try:
+            _assert_json_value(value)
+          except (ValueError, TypeError, OverflowError):
+            errors.append(path + ': expected a finite JSON value')
+            continue
         check(value, jsee_inputs_to_json_schema([inp])['properties'][name], path)
   result = dict(data) if isinstance(data, dict) else {}
   if not isinstance(data, dict):
@@ -843,7 +893,7 @@ def _invocation_unsupported_reason(schema):
   return None
 
 
-async def invoke_schema(schema, data, *, cwd='.', _model_funcs=None):
+async def invoke_schema(schema, data, *, cwd='.', _model_funcs=None, artifact_store=None):
   """Execute a local Python pipeline; keep terminal status separate from model data.
 
   Accepts decoded inputs, not file paths/URLs to fetch. Synchronous model code runs
@@ -865,6 +915,8 @@ async def invoke_schema(schema, data, *, cwd='.', _model_funcs=None):
     code = 'JSEE_INPUT_INVALID'
     # Validation precedes module initialization. JSON input containers belong to this invocation.
     result = _prepare_inputs(schema.get('inputs'), copy.deepcopy(data))
+    from .transport import resolve_artifact_inputs
+    result = resolve_artifact_inputs(schema.get('inputs'), result, artifact_store)
     code = 'JSEE_CAPABILITY_UNSUPPORTED'
     unsupported = _invocation_unsupported_reason(schema)
     if unsupported:
@@ -1045,9 +1097,7 @@ def _check_body_limit(limit):
   return limit
 
 
-def _read_request_inputs(inputs, stream, content_type, content_length, limit, *, json_only=False, validate_inputs=True):
-  if json_only and content_type.split(';')[0].strip().lower() != 'application/json':
-    raise _RequestError('Canonical /run accepts application/json', 415)
+def _read_request_body(stream, content_length, limit):
   length_text = str(content_length or '0').strip()
   if not length_text.isascii() or not length_text.isdigit():
     raise _RequestError('Content-Length must be a nonnegative integer')
@@ -1061,6 +1111,13 @@ def _read_request_inputs(inputs, stream, content_type, content_length, limit, *,
   body = stream.read(length) if length else b''
   if len(body) != length:
     raise _RequestError('Body is shorter than Content-Length')
+  return body
+
+
+def _read_request_inputs(inputs, stream, content_type, content_length, limit, *, json_only=False, validate_inputs=True):
+  if json_only and content_type.split(';')[0].strip().lower() != 'application/json':
+    raise _RequestError('Canonical /run accepts application/json', 415)
+  body = _read_request_body(stream, content_length, limit)
   try:
     if json_only:
       def reject_constant(value):
@@ -1219,6 +1276,9 @@ def _prepare_app(target, host, port, options):
     m['url'] = '/{}'.format(name)
     m['worker'] = False
 
+  if options.get('canonical'):
+    schema['model'] = [{'name': 'computation', 'type': 'post', 'url': '/run', 'worker': False, 'autorun': False, '_jseeCanonical': True}]
+
   return schema, funcs, models, schema_cwd, source_schema
 
 
@@ -1312,7 +1372,7 @@ def serve(target, host='127.0.0.1', port=5050, max_body_bytes=DEFAULT_MAX_BODY_B
     def _canonical(self):
       if computation is None:
         return False
-      response = computation.dispatch(self.command, urllib.parse.urlparse(self.path).path,
+      response = computation.dispatch(self.command, self.path,
           self.headers.get('Content-Type', ''), self.headers.get('Content-Length'), self.rfile)
       if response is None:
         return False
@@ -1507,7 +1567,7 @@ def create_app(target, **kwargs):
     method = environ.get('REQUEST_METHOD', 'GET')
     path_info = environ.get('PATH_INFO', '/').rstrip('/') or '/'
     if computation:
-      response = computation.dispatch(method, path_info, environ.get('CONTENT_TYPE', ''),
+      response = computation.dispatch(method, path_info + ('?' + environ['QUERY_STRING'] if environ.get('QUERY_STRING') else ''), environ.get('CONTENT_TYPE', ''),
                                       environ.get('CONTENT_LENGTH'), environ.get('wsgi.input'))
       if response is not None:
         from http import HTTPStatus

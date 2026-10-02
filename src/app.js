@@ -26,7 +26,7 @@ const JsonViewer = require('vue3-json-viewer').default
 const { sanitizeName, debounce, createValidateFn, runValidation, normalizeSecurityOptions } = require('./utils.js')
 
 const LEGACY_STORAGE_KEY = 'jsee:inputs'
-const STORAGE_SKIP_TYPES = new Set(['file', 'folder', 'action', 'button'])
+const STORAGE_SKIP_TYPES = new Set(['file', 'image', 'audio', 'video', 'folder', 'action', 'button'])
 
 function stableHash (value) {
   const text = String(value == null ? '' : value)
@@ -257,7 +257,7 @@ function resetInputs (inputs, example) {
       else {
         if (input.type === 'file') input.file = null
         const value = getInputDefaultValue(input)
-        input.value = value === undefined ? '' : value
+        input.value = value === undefined && !['image', 'audio', 'video'].includes(input.type) ? '' : value
       }
     }
   })

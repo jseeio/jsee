@@ -98,6 +98,7 @@
 </template>
 
 <script>
+const { matchesFileAccept } = require('../src/schema')
 const { normalizeSecurityOptions, isNetworkUrl } = require('../src/utils.js')
 
 export default {
@@ -113,7 +114,7 @@ export default {
     security:      { type: Object,  default: null },
     labelValue:    { type: String,  default: 'Choose File' }
   },
-  emits : ['update:modelValue', 'update:url', 'change'],
+  emits : ['update:modelValue', 'update:url', 'change', 'invalid'],
   data () {
     return {
       isActive: false,
@@ -180,10 +181,12 @@ export default {
 
       if (wasDropped && !this.allowMultiple && files.length > 1)
         throw new Error('vue-file-picker: Multiple files are not allowed')
-      if (wasDropped && this.requiresTypeCheck)
-        for (const f of files)
-          if (!this.acceptedTypes.includes(f.type))
-            throw new Error('vue-file-picker: File type not allowed')
+      if (Array.from(files).some(file => !matchesFileAccept(this.accept, file.name, file.type))) {
+        this.info = 'File type does not match ' + this.accept
+        this.$emit('invalid', this.info)
+        return
+      }
+      this.$emit('invalid', null)
 
       this.loadFile(files)
     },

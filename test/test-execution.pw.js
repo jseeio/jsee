@@ -1075,9 +1075,9 @@ for (const runtime of ['node', 'python']) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-auth-browser-'))
     const token = 'browser-test-token'
     const model = runtime === 'node' ? 'model.js' : 'model.py'
-    fs.writeFileSync(path.join(directory, model), runtime === 'node' ? 'module.exports = ({x}) => ({answer:x * 2})' : 'def compute(x):\n    return {"answer": x * 2}\n')
+    fs.writeFileSync(path.join(directory, model), runtime === 'node' ? 'module.exports = ({x, document, table, photo}) => ({answer:x * 2, metadata:{document,table,bytes:photo ? Array.from(new Uint8Array(photo)) : []}, preview:photo ? {content:photo,mime:"image/png"} : ""})' : 'def compute(x, document=None, table=None, photo=None):\n    return {"answer": x * 2, "metadata":{"document":document,"table":table,"bytes":list(photo) if photo else []}, "preview":{"content":photo,"mime":"image/png"} if photo else ""}\n')
     const filename = path.join(directory, 'schema.json')
-    fs.writeFileSync(filename, JSON.stringify({ model: { name: 'compute', url: model, autorun: false }, inputs: [{ name: 'x', type: 'int', default: 3 }], outputs: [{ name: 'answer', type: 'number' }] }))
+    fs.writeFileSync(filename, JSON.stringify({ model: { name: 'compute', url: model, autorun: false }, inputs: [{ name: 'x', type: 'int', default: 3 }, { name: 'document', type: 'object', default: {} }, { name: 'table', type: 'table', default: [] }, { name: 'photo', type: 'image', required: false }], outputs: [{ name: 'answer', type: 'number' }, { name: 'metadata', type: 'object' }, { name: 'preview', type: 'image' }] }))
     const clientOrigin = http.createServer((req, res) => res.end('<!doctype html><title>Client</title>'))
     await new Promise(resolve => clientOrigin.listen(0, '127.0.0.1', resolve))
     const allowed = 'http://127.0.0.1:' + clientOrigin.address().port
@@ -1103,10 +1103,29 @@ for (const runtime of ['node', 'python']) {
       // Browser credentials authenticate navigation, runtime scripts and same-origin calls.
       context = await browser.newContext({ httpCredentials: { username: 'jsee', password: token, origin: base } })
       const page = await context.newPage()
+      const messages = []
+      const uploads = []
+      page.on('request', request => { if (request.method() === 'POST' && request.url().includes('/__jsee/artifacts')) uploads.push(request.url()) })
+      page.on('console', message => messages.push(message.text()))
+      page.on('pageerror', error => messages.push(String(error)))
       expect((await page.goto(base)).status()).toBe(200)
       await page.evaluate(() => window.env._initPromise)
-      await page.evaluate(() => window.env.run())
+      const started = await page.evaluate(() => window.env.run())
+      expect(started, messages.join('\n')).toBe(true)
       await expect.poll(() => page.evaluate(() => window.env.data.outputs[0].value)).toBe(6)
+
+      await page.getByLabel('document', { exact: true }).fill('{"items":[0,false,null]}')
+      await page.getByRole('button', { name: 'Edit JSON', exact: true }).click()
+      await page.getByLabel('table', { exact: true }).fill('[{"value":false},{"value":null}]')
+      await page.getByLabel('photo', { exact: true }).setInputFiles({ name: 'photo.png', mimeType: 'image/png', buffer: Buffer.from([0, 255, 128]) })
+      expect(await page.evaluate(() => window.env.run())).toBe(true)
+      const media = await page.evaluate(async () => ({ metadata: window.env.data.outputs[1].value, bytes: Array.from(new Uint8Array(await (await fetch(window.env.data.outputs[2].value)).arrayBuffer())) }))
+      expect(media.metadata).toEqual({ document: { items: [0, false, null] }, table: [{ value: false }, { value: null }], bytes: [0, 255, 128] })
+      expect(media.bytes).toEqual([0, 255, 128])
+      await page.locator('#x').fill('4')
+      expect(await page.evaluate(() => window.env.run())).toBe(true)
+      expect(uploads).toHaveLength(1)
+
       expect(await page.content()).not.toContain(token)
       await page.goto(allowed)
       const result = await page.evaluate(async ({ base, token }) => {

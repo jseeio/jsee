@@ -1,6 +1,6 @@
 /** JSON descriptors use schemaVersion 1 independently of package versions. */
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
-export type InputType = 'int' | 'float' | 'number' | 'string' | 'color' | 'text' | 'categorical' | 'select' | 'bool' | 'checkbox' | 'file' | 'group' | 'action' | 'button' | 'slider' | 'radio' | 'toggle' | 'date' | 'multi-select' | 'range' | 'folder'
+export type InputType = 'int' | 'float' | 'number' | 'string' | 'color' | 'text' | 'categorical' | 'select' | 'bool' | 'checkbox' | 'file' | 'group' | 'action' | 'button' | 'slider' | 'radio' | 'toggle' | 'date' | 'multi-select' | 'range' | 'folder' | 'table' | 'object' | 'image' | 'audio' | 'video'
 export type ModelType = 'function' | 'class' | 'module' | 'async-init' | 'async-function' | 'get' | 'post' | 'py'
 export type OutputType = 'text' | 'string' | 'int' | 'float' | 'bool' | 'table' | 'chart' | '3d' | 'map' | 'pdf' | 'gallery' | 'gauge' | 'number' | 'alert' | 'highlight' | 'chat' | 'viewer' | 'markdown' | 'image' | 'audio' | 'video' | 'object' | 'html' | 'svg' | 'code' | 'file' | 'group' | 'function' | 'blank'
 export type DType = 'float32' | 'float64' | 'int8' | 'uint8' | 'int16' | 'uint16' | 'int32' | 'uint32'
@@ -25,6 +25,7 @@ export interface InputProperties {
   validate?: string
   error?: string
   disabled?: boolean
+  readonly?: boolean
   reactive?: boolean
   enter?: boolean
   raw?: boolean
@@ -193,3 +194,6 @@ export function collectInputValues(inputs?: Input[], read?: (input: Input) => un
 export function jseeInputsToJsonSchema(inputs?: Input[]): InputJsonSchema
 /** Copies containers, applies explicit defaults, and rejects invalid values before execution. */
 export function prepareInputs(inputs: Input[] | undefined, data: unknown): Record<string, unknown>
+
+export function matchesFileAccept(accept?: string, name?: string, mime?: string): boolean
+export function tableOutputJsonSchema(): Record<string, unknown>

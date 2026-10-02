@@ -1,0 +1,16 @@
+[
+  {"name":"nested JSON and variable lists", "type":"object", "value":{"items":[{"x":0},{"x":null}],"enabled":false}, "valid":true},
+  {"name":"JSON list root", "type":"object", "value":[0,false,null,""], "valid":true},
+  {"name":"JSON scalar", "type":"object", "value":42, "valid":true},
+  {"name":"matrix table", "type":"table", "value":{"columns":["x","y"],"rows":[[null,0],[false,""]]}, "valid":true},
+  {"name":"record table", "type":"table", "value":[{"x":null},{"x":0},{"x":false},{"x":""}], "valid":true},
+  {"name":"empty record table", "type":"table", "value":[], "valid":true},
+  {"name":"table needs columns and rows", "type":"table", "value":{"rows":[]}, "valid":false},
+  {"name":"table rows must be records", "type":"table", "value":[[1,2]], "valid":false},
+  {"name":"table columns must be strings", "type":"table", "value":{"columns":[1],"rows":[]}, "valid":false},
+  {"name":"image reference", "type":"image", "value":{"artifact":"id/0"}, "valid":true},
+  {"name":"audio reference", "type":"audio", "value":{"artifact":"id/0"}, "valid":true},
+  {"name":"video reference", "type":"video", "value":{"artifact":"id/0"}, "valid":true},
+  {"name":"media does not mean inline string", "type":"image", "value":"pretend-image", "valid":false},
+  {"name":"reference metadata cannot be overridden", "type":"image", "value":{"artifact":"id/0","mime":"image/png"}, "valid":false}
+]

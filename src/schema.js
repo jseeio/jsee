@@ -77,6 +77,10 @@ function getInputDefaultValue (input) {
       return [input.min || 0, input.max || 100]
     case 'slider':
       return input.min || 0
+    case 'object':
+      return {}
+    case 'table':
+      return []
     case 'folder':
       return input.default || []
     case 'file':
@@ -95,6 +99,38 @@ function optionSchema (options) {
     return typeof value
   }))]
   return { type: types.length === 1 ? types[0] : types, enum: values }
+}
+
+function tableOutputJsonSchema () {
+  return {
+    oneOf: [
+      {
+        type: 'object',
+        properties: {
+          columns: { type: 'array', items: { type: 'string' } },
+          rows: { type: 'array', items: { type: 'array', items: {} } }
+        },
+        required: ['columns', 'rows'],
+        additionalProperties: true
+      },
+      {
+        type: 'array',
+        items: { type: 'object', additionalProperties: true }
+      }
+    ]
+  }
+}
+
+function artifactInputSchema () {
+  return { type: 'object', properties: { artifact: { type: 'string', minLength: 1 } }, required: ['artifact'], additionalProperties: false }
+}
+
+function assertJsonValue (value, seen=new Set()) {
+  if (value === null || ['string', 'boolean'].includes(typeof value) || typeof value === 'number' && Number.isFinite(value)) return
+  if (!value || typeof value !== 'object' || seen.has(value) || !Array.isArray(value) && ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw new Error('Expected a finite JSON value')
+  seen.add(value)
+  Object.values(value).forEach(item => assertJsonValue(item, seen))
+  seen.delete(value)
 }
 
 function jseeInputsToJsonSchema (inputs) {
@@ -120,6 +156,15 @@ function jseeInputsToJsonSchema (inputs) {
     switch (inp.type) {
       case 'group':
         Object.assign(prop, jseeInputsToJsonSchema(inp.elements))
+        break
+      case 'table':
+        Object.assign(prop, tableOutputJsonSchema())
+        break
+      case 'object':
+        break
+      case 'image': case 'audio': case 'video':
+        Object.assign(prop, artifactInputSchema())
+        prop['x-jsee-accept'] = inp.accept || inp.type + '/*'
         break
       case 'file':
         prop.type = 'string'
@@ -162,6 +207,13 @@ function jseeInputsToJsonSchema (inputs) {
       prop.type = 'array'
       prop.items = { type: 'number' }
     }
+    if (inp.type === 'file' && !inp.raw && !inp.stream) {
+      const legacy = { ...prop }
+      delete legacy.description
+      for (const key of Object.keys(prop)) if (key !== 'description') delete prop[key]
+      prop.oneOf = [legacy, artifactInputSchema()]
+      if (inp.accept) prop['x-jsee-accept'] = inp.accept
+    }
     if (['integer', 'number'].includes(prop.type)) {
       if (inp.min !== undefined) prop.minimum = inp.min
       if (inp.max !== undefined) prop.maximum = inp.max
@@ -170,13 +222,28 @@ function jseeInputsToJsonSchema (inputs) {
     if (inp.default !== undefined) prop.default = inp.default
     if (inp.nullable === true || inp.default === null) {
       const types = Array.isArray(prop.type) ? prop.type : [prop.type]
-      prop.type = [...new Set([...types, 'null'])]
+      if (prop.oneOf) prop.oneOf.push({ type: 'null' })
+      else if (prop.type) prop.type = [...new Set([...types, 'null'])]
       if (prop.enum && !prop.enum.includes(null)) prop.enum.push(null)
     }
     add(inp.name, prop)
     if (inp.required === true || (inp.required !== false && inp.default === undefined)) required.push(inp.name)
   }
   return { type: 'object', properties, required }
+}
+
+// HTML accept is a selection hint; transports compare it against stored declarations,
+// not client overrides. This does not decode media or establish content authenticity.
+function matchesFileAccept (accept, name='', mime='') {
+  if (!accept) return true
+  const media = mime.split(';')[0].trim().toLowerCase()
+  return accept.split(',').some(token => {
+    token = token.trim().toLowerCase()
+    if (token === '*/*') return true
+    if (token.startsWith('.')) return name.toLowerCase().endsWith(token)
+    if (token.endsWith('/*')) return media.startsWith(token.slice(0, -1))
+    return token === media
+  })
 }
 
 function prepareInputs (inputs, data) {
@@ -198,6 +265,17 @@ function prepareInputs (inputs, data) {
     return typeof value === type
   }
   const check = (value, prop, path) => {
+    if (prop.oneOf) {
+      const count = prop.oneOf.filter(option => {
+        const start = errors.length
+        check(value, option, path)
+        return errors.splice(start).length === 0
+      }).length
+      if (count !== 1) errors.push(`${path}: does not match the declared input shape`)
+    }
+    if (prop.minLength !== undefined && typeof value === 'string' && value.length < prop.minLength) errors.push(`${path}: string is too short`)
+    if (isRecord(value) && prop.additionalProperties === false && Object.keys(value).some(key => !Object.hasOwn(prop.properties || {}, key))) errors.push(`${path}: undeclared property`)
+
     const types = Array.isArray(prop.type) ? prop.type : [prop.type]
     if (prop.type && !types.some(type => matches(value, type))) {
       errors.push(`${path}: expected ${types.join(' or ')}`)
@@ -248,10 +326,13 @@ function prepareInputs (inputs, data) {
           setProperty(target, name, { ...value })
           visit(input.elements, target[name], path + '.')
         }
-      } else if (value && ((input.type === 'file' || input.arrayBuffer === true) && (ArrayBuffer.isView(value) || Object.prototype.toString.call(value) === '[object ArrayBuffer]') || (input.type === 'file' && typeof Blob !== 'undefined' && value instanceof Blob))) {
+      } else if (value && ((['file', 'image', 'audio', 'video'].includes(input.type) || input.arrayBuffer === true) && (ArrayBuffer.isView(value) || Object.prototype.toString.call(value) === '[object ArrayBuffer]') || (['file', 'image', 'audio', 'video'].includes(input.type) && typeof Blob !== 'undefined' && value instanceof Blob))) {
         // Multipart decoding produces binary values after transport-level string validation.
         continue
       } else {
+        if (['table', 'object'].includes(input.type)) {
+          try { assertJsonValue(value) } catch (error) { errors.push(path + ': ' + error.message); continue }
+        }
         check(value, jseeInputsToJsonSchema([input]).properties[name], path)
       }
     }
@@ -268,4 +349,4 @@ function prepareInputs (inputs, data) {
   return result
 }
 
-module.exports = { assertSchemaVersion, cloneSchema, getOptionValue, collectInputValues, getInputDefaultValue, jseeInputsToJsonSchema, prepareInputs }
+module.exports = { tableOutputJsonSchema, matchesFileAccept, assertSchemaVersion, cloneSchema, getOptionValue, collectInputValues, getInputDefaultValue, jseeInputsToJsonSchema, prepareInputs }

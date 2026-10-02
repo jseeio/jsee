@@ -8,7 +8,7 @@ import sys
 import uuid
 
 from .jsee import invoke_schema
-from .transport import (inspect_schema, run_result_schema, ArtifactStore, format_run,
+from .transport import (upload_tool, inspect_schema, run_result_schema, ArtifactStore, format_run,
                         failed_run, BODY_LIMIT, ARTIFACT_LIMIT)
 
 
@@ -32,20 +32,30 @@ async def serve(schema_path, *, max_body_bytes=BODY_LIMIT, max_artifact_bytes=AR
         return dict(uri=artifact['uri'], name=artifact['name'], mimeType=artifact['mime'], size=artifact['size'],
                     _meta={'io.jsee/sha256': artifact['sha256'], 'io.jsee/output': artifact['output']})
 
+    uploader = upload_tool(description['id'])
+
     async def list_tools(ctx, params):
         return types.ListToolsResult(tools=[types.Tool(
             name=description['id'], title=description['title'], description=description['description'],
             inputSchema=description['inputSchema'], outputSchema=run_result_schema(schema),
-            _meta={'io.jsee/capabilities': description['capabilities']})])
+            _meta={'io.jsee/capabilities': description['capabilities']}), types.Tool(**uploader)])
 
     async def call_tool(ctx, params):
+        if params.name == uploader['name']:
+            try:
+                if len(json.dumps(params.arguments or {}, ensure_ascii=False, separators=(',', ':')).encode('utf-8')) > max_body_bytes:
+                    raise ValueError('Input exceeds {} bytes'.format(max_body_bytes))
+                result = store.upload(params.arguments or {})
+                return types.CallToolResult(content=[types.TextContent(type='text', text=json.dumps(result))], structuredContent=result)
+            except (ValueError, OSError) as error:
+                return types.CallToolResult(content=[types.TextContent(type='text', text=str(error))], isError=True)
         if params.name != description['id']:
             raise MCPError(-32602, 'Unknown tool: ' + params.name)
         data = params.arguments or {}
         if len(json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode('utf-8')) > max_body_bytes:
             invoked = failed_run('JSEE_BODY_TOO_LARGE', 'Input exceeds {} bytes'.format(max_body_bytes))
         else:
-            invoked = await invoke_schema(schema, data, cwd=filename.parent)
+            invoked = await invoke_schema(schema, data, cwd=filename.parent, artifact_store=store)
         run = format_run(schema, invoked, store)
         content = [types.TextContent(type='text', text=json.dumps(run, allow_nan=False))]
         if run['status'] != 'succeeded':
@@ -64,7 +74,7 @@ async def serve(schema_path, *, max_body_bytes=BODY_LIMIT, max_artifact_bytes=AR
             raise MCPError(-32602, 'Unknown artifact')
         try:
             contents = store.read(identifier)
-        except OSError as error:
+        except (OSError, ValueError) as error:
             raise MCPError(-32602, 'Artifact unavailable') from error
         return types.ReadResourceResult(contents=[types.BlobResourceContents(
             uri=uri, mimeType=artifact['mime'], blob=base64.b64encode(contents).decode('ascii'))])

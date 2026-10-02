@@ -1365,3 +1365,70 @@ test.describe('Custom design colors', () => {
     expect(bg.trim()).toBe('#1a1a1a')
   })
 })
+
+test('structured editors preserve JSON values, editable rows and invalid drafts', async ({ page }) => {
+  await page.goto('http://localhost:8484/load/')
+  await page.evaluate(async () => {
+    if (window.app) window.app.destroy()
+    document.body.innerHTML = '<div id="editor-test"></div>'
+    window.app = new JSEE({ container: '#editor-test', schema: {
+      persist: false, model: { worker: false, autorun: false, code: 'function model(data) { self.lastEdited = data; return data }' },
+      inputs: [{ name: 'document', type: 'object', required: true, default: { items: [] } }, { name: 'data', type: 'table', required: true, default: { columns: ['value'], rows: [[0], [false], [null], ['']] } }], outputs: []
+    } })
+    await window.app._initPromise
+  })
+  await page.getByLabel('document', { exact: true }).fill('{"items":[0,false,null,""]}')
+  await page.getByLabel('Row 1, value', { exact: true }).fill('42')
+  await page.getByRole('button', { name: 'Add row', exact: true }).click()
+  expect(await page.evaluate(() => window.app.run())).toBe(true)
+  const values = await page.evaluate(() => self.lastEdited)
+  expect(values.document).toEqual({ items: [0, false, null, ''] })
+  expect(values.data.rows).toEqual([[42], [false], [null], [''], ['']])
+  await page.getByLabel('document', { exact: true }).fill('[]')
+  await page.getByRole('button', { name: 'Edit JSON', exact: true }).click()
+  await page.getByLabel('data', { exact: true }).fill('[]')
+  expect(await page.evaluate(() => window.app.run())).toBe(true)
+  await page.getByLabel('document', { exact: true }).fill('{bad json')
+  expect(await page.evaluate(() => window.app.run())).toBe(false)
+  await expect(page.getByRole('alert')).toContainText('JSON')
+})
+
+test('typed media selects declared MIME, preserves bytes and releases previews', async ({ page }) => {
+  await page.goto('http://localhost:8484/load/')
+  await page.evaluate(async () => {
+    if (window.app) window.app.destroy()
+    document.body.innerHTML = '<div id="media-test"></div>'
+    self.revokedMedia = []
+    const revoke = URL.revokeObjectURL.bind(URL)
+    URL.revokeObjectURL = url => { self.revokedMedia.push(url); revoke(url) }
+    window.app = new JSEE({ container: '#media-test', schema: {
+      persist: false, model: { worker: true, autorun: false, code: 'function model(data) { return {bytes: Array.from(new Uint8Array(data.photo)), preview:data.photo} }' },
+      inputs: [{ name: 'photo', type: 'image', accept: 'image/png' }], outputs: [{ name: 'bytes', type: 'object' }, { name: 'preview', type: 'image', mime: 'image/png' }]
+    } })
+    await window.app._initPromise
+  })
+  const picker = page.locator('#media-test input[type=file]')
+  await expect(picker).toHaveAttribute('accept', 'image/png')
+  await picker.setInputFiles({ name: 'test.png', mimeType: 'image/png', buffer: Buffer.from([0, 255, 128]) })
+  expect(await page.evaluate(() => window.app.run())).toBe(true)
+  expect(await page.evaluate(() => window.app.data.outputs[0].value)).toEqual([0, 255, 128])
+  const outputPreview = await page.evaluate(() => window.app.data.outputs[1].value)
+  expect(typeof outputPreview).toBe('string')
+  expect(await page.evaluate(async url => Array.from(new Uint8Array(await (await fetch(url)).arrayBuffer())), outputPreview)).toEqual([0, 255, 128])
+  const preview = await page.locator('#media-test .jsee-media-input img').getAttribute('src')
+  expect(preview.startsWith('blob:')).toBe(true)
+  await picker.setInputFiles({ name: 'bad.bin', mimeType: 'application/octet-stream', buffer: Buffer.from([1]) })
+  expect(await page.evaluate(() => window.app.run())).toBe(false)
+  await page.evaluate(() => window.app.destroy())
+  expect(await page.evaluate(() => self.revokedMedia)).toEqual(expect.arrayContaining([preview, outputPreview]))
+})
+
+
+test('file accept is forwarded and typed media honors the existing file operation gate', async ({ page }) => {
+  await page.goto(urlQueryEscaped(echoSchema([{ name: 'source', type: 'file', accept: '.csv,text/csv' }])))
+  await expect(page.locator('input[type=file]')).toHaveAttribute('accept', '.csv,text/csv')
+  const schema = echoSchema([{ name: 'photo', type: 'image', required: false }])
+  schema.security = { allowFileViewer: false }
+  await page.goto(urlQueryEscaped(schema))
+  await expect(page.getByLabel('photo', { exact: true })).toBeDisabled()
+})

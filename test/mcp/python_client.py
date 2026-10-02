@@ -16,7 +16,7 @@ async def main():
     mode = config.pop('mode')
     async with Client(StdioServerParameters(**config), mode=mode, read_timeout_seconds=10) as client:
         tools = (await client.list_tools()).tools
-        assert len(tools) == 1 and tools[0].name == 'clean_sales'
+        assert len(tools) == 2 and tools[0].name == 'clean_sales'
         assert tools[0].input_schema['properties']['missing']['enum'] == ['drop', 'error']
         assert tools[0].output_schema['properties']['outputs']['required'] == ['summary', 'table', 'cleaned_csv']
         assert (await client.list_resources()).resources == []

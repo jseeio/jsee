@@ -68,3 +68,24 @@ for (const worker of [false, true]) {
     })
   }
 }
+
+for (const worker of [false, true]) {
+  test(`typed media reaches Python as an exact byte buffer, worker=${worker}`, async ({ page }) => {
+    test.setTimeout(120000)
+    await page.goto('/load/')
+    await page.evaluate(async worker => {
+      document.body.innerHTML = '<div id="media-python"></div>'
+      window.app = new JSEE({ container: '#media-python', verbose: false, schema: {
+        persist: false,
+        model: { name: 'model', entry: 'model', type: 'py', worker, autorun: false,
+          pyodide: { url: '/tmp/test-assets/pyodide-0.24.1/pyodide.js', indexURL: '/tmp/test-assets/pyodide-0.24.1/' },
+          code: 'def model(photo):\n    return {"values": list(bytes(photo))}' },
+        inputs: [{ name: 'photo', type: 'image' }], outputs: [{ name: 'values', type: 'object' }]
+      } })
+      await window.app._initPromise
+    }, worker)
+    await page.getByLabel('photo', { exact: true }).setInputFiles({ name: 'test.png', mimeType: 'image/png', buffer: Buffer.from([0, 255, 128]) })
+    expect(await page.evaluate(() => window.app.run())).toBe(true)
+    expect(await page.evaluate(() => window.app.data.outputs[0].value)).toEqual([0, 255, 128])
+  })
+}

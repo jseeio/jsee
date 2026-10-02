@@ -43,7 +43,8 @@ for (const runtime of ['node', 'python']) {
         const connection = await connect(command(runtime, filename, directory), mode)
         client = connection.client
         const tools = (await client.listTools()).tools
-        assert.equal(tools.length, 1)
+        assert.equal(tools.length, 2)
+        assert.equal(tools[1].name, 'upload_artifact')
         assert.equal(tools[0].name, 'clean_sales')
         assert.deepEqual(tools[0].inputSchema.properties.missing.enum, ['drop', 'error'])
         assert.deepEqual(tools[0].outputSchema.properties.outputs.required, ['summary', 'table', 'cleaned_csv'])
@@ -70,6 +71,14 @@ for (const runtime of ['node', 'python']) {
           }
         }
         assert.equal((await client.listResources()).resources.length, cases.filter(f => !f.error).length)
+        const upload = await client.callTool({ name: 'upload_artifact', arguments: { data: Buffer.from('price,quantity\n10,2\n').toString('base64'), mime: 'text/csv', name: 'sales.csv', final: true } })
+        assert.equal(upload.isError, false)
+        const handle = { artifact: upload.structuredContent.artifact }
+        const first = await client.callTool({ name: 'clean_sales', arguments: { csv: handle, missing: 'drop' } })
+        assert.equal(first.structuredContent.outputs.summary.total_revenue, 20)
+        const second = await client.callTool({ name: 'clean_sales', arguments: { csv: first.structuredContent.outputs.cleaned_csv, missing: 'drop' } })
+        assert.deepEqual(second.structuredContent.outputs.summary, first.structuredContent.outputs.summary)
+
         await assert.rejects(client.callTool({ name: 'unknown', arguments: {} }), { code: -32602 })
         await assert.rejects(client.readResource({ uri: 'file:///etc/passwd' }), { code: -32602 })
       } finally {
@@ -166,3 +175,16 @@ for (const runtime of ['node', 'python']) {
     })
   })
 }
+
+test('Python upload honors the configured decoded argument limit', { timeout: 15000 }, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-mcp-upload-limit-'))
+  let client
+  try {
+    const filename = path.join(fixtureRoot, 'examples/clean-sales/schema-python.json')
+    ;({ client } = await connect(command('python', filename, directory, ['--max-body-bytes', '4096'])))
+    const result = await client.callTool({ name: 'upload_artifact', arguments: { data: Buffer.alloc(4096).toString('base64'), final: true } })
+    assert.equal(result.isError, true)
+    assert.match(result.content[0].text, /exceeds 4096 bytes/)
+    assert.deepEqual((await client.listResources()).resources, [])
+  } finally { if (client) await client.close(); fs.rmSync(directory, { recursive: true, force: true }) }
+})

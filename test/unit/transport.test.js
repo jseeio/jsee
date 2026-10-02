@@ -89,6 +89,12 @@ test('JSON CLI uses stdin/files and separates model diagnostics', () => {
         expect(fs.readFileSync(fileURLToPath(run.artifacts[0].uri), 'utf8')).toBe(fixture.csv)
       }
     }
+    fs.writeFileSync(path.join(directory, 'sales.csv'), 'price,quantity\n10,2\n')
+    const uploaded = JSON.parse(execute(['artifact-import', 'sales.csv', '--mime', 'text/csv']).stdout)
+    const first = JSON.parse(execute(['run', schemaPath], JSON.stringify({ csv: { artifact: uploaded.artifact }, missing: 'drop' })).stdout)
+    expect(first.outputs.summary.total_revenue).toBe(20)
+    const second = JSON.parse(execute(['run', schemaPath], JSON.stringify({ csv: first.outputs.cleaned_csv, missing: 'drop' })).stdout)
+    expect(second.outputs.summary).toEqual(first.outputs.summary)
     fs.writeFileSync(path.join(directory, 'loud.js'), 'console.log("import diagnostic"); module.exports = data => { console.log("run diagnostic"); return {answer:data.x} }')
     fs.writeFileSync(path.join(directory, 'schema.json'), JSON.stringify({ model: { url: 'loud.js' }, inputs: [{ name: 'x', type: 'int' }], outputs: [{ name: 'answer', type: 'number' }] }))
     fs.writeFileSync(path.join(directory, 'input.json'), '{"x":42}')
@@ -131,6 +137,14 @@ test('canonical HTTP runs whole sales pipeline, preserves stages and retrieves a
         expect(artifact.sha256).toBe(crypto.createHash('sha256').update(fixture.csv).digest('hex'))
       }
     }
+    const uploadResponse = await fetch(base + '/__jsee/artifacts?name=sales.csv', { method: 'POST', headers: { 'Content-Type': 'text/csv' }, body: 'price,quantity\n10,2\n' })
+    expect(uploadResponse.status).toBe(201)
+    const uploaded = await uploadResponse.json()
+    expect(uploaded.metadata.name).toBe('sales.csv')
+    const call = async csv => (await fetch(base + '/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ csv, missing: 'drop' }) })).json()
+    const first = await call({ artifact: uploaded.artifact })
+    expect(first.outputs.summary.total_revenue).toBe(20)
+    expect((await call(first.outputs.cleaned_csv)).outputs.summary).toEqual(first.outputs.summary)
     expect((await fetch(base + '/')).status).toBe(200)
     const stage = await fetch(base + '/parse_sales', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sales[0].data) })
     expect((await stage.json()).rows_read).toBe(3)
@@ -167,6 +181,8 @@ test('canonical calls share initialized state with legacy stages and enforce fil
     const outside = path.join(directory, 'outside.txt')
     fs.writeFileSync(outside, 'outside-canary')
     const storedPath = store.get(artifact.id).path
+    fs.writeFileSync(storedPath, 'broken')
+    expect((await fetch(base + artifact.uri)).status).toBe(409)
     fs.unlinkSync(storedPath)
     fs.symlinkSync(outside, storedPath)
     fs.symlinkSync(outside, path.join(appRoot, 'escape.txt'))
@@ -193,4 +209,164 @@ test('canonical serving rejects reserved and inferred duplicate endpoints before
       await expect(gen(['serve', filename, '--port', '0'])).rejects.toThrow(message)
     }
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('output handles become text or exact bytes before model execution, including groups and defaults', async () => {
+  const store = new ArtifactStore()
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-artifact-input-'))
+  const model = path.join(directory, 'model.js')
+  fs.writeFileSync(model, 'module.exports = x => ({value: x.group.file instanceof ArrayBuffer ? Array.from(new Uint8Array(x.group.file)) : x.group.file})')
+  try {
+    const produced = formatRun({ outputs: [{ name: 'file', type: 'file', mime: 'text/csv' }] }, { runId: crypto.randomUUID(), status: 'succeeded', result: { file: 'a,b\n' } }, store)
+    const field = { name: 'file', type: 'file', accept: 'text/*', default: produced.outputs.file }
+    const descriptor = { model: { url: model }, inputs: [{ name: 'group', type: 'group', elements: [field] }] }
+    expect((await gen.invokeSchema(descriptor, { group: {} }, { artifactStore: store })).result.value).toBe('a,b\n')
+    field.arrayBuffer = true
+    expect((await gen.invokeSchema(descriptor, { group: {} }, { artifactStore: store })).result.value).toEqual([97, 44, 98, 10])
+    const ajv = new Ajv({ strict: false })
+    expect(ajv.compile(inspectSchema(descriptor).inputSchema)({ group: { file: produced.outputs.file } })).toBe(true)
+    field.accept = 'image/*'
+    expect((await gen.invokeSchema(descriptor, { group: {} }, { artifactStore: store })).error.code).toBe('JSEE_INPUT_INVALID')
+    descriptor.model.url = path.join(directory, 'must-not-import.js')
+    expect((await gen.invokeSchema(descriptor, { group: { file: { artifact: 'unknown' } } }, { artifactStore: store })).error.code).toBe('JSEE_INPUT_INVALID')
+    expect((await gen.invokeSchema(descriptor, { group: {} })).error.code).toBe('JSEE_INPUT_INVALID')
+  } finally { store.close(); fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('persistent artifact registrations survive reopening and verify bytes', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-persistent-artifacts-'))
+  try {
+    const first = new ArtifactStore({ directory })
+    const [artifact] = first.commit(crypto.randomUUID(), [{ bytes: Buffer.from([0, 255, 128]), name: 'test.bin', mime: 'application/octet-stream' }])
+    first.close()
+    const second = new ArtifactStore({ directory })
+    expect(second.read(artifact.id)).toEqual(Buffer.from([0, 255, 128]))
+    fs.writeFileSync(second.pathFor(artifact.id), Buffer.from([0, 0, 0]))
+    expect(() => second.read(artifact.id)).toThrow(/integrity/i)
+    second.close()
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('bounded chunk ingestion publishes only completed uploads and rejects offsets and excess bytes', () => {
+  const store = new ArtifactStore({ maxBytes: 5 })
+  try {
+    const part = store.upload({ data: 'AP8=', offset: 0, name: 'test.bin', mime: 'application/octet-stream' })
+    expect(store.entries.size).toBe(0)
+    expect(() => store.upload({ upload: part.upload, offset: 0, data: 'gA==' })).toThrow(/offset/)
+    const complete = store.upload({ upload: part.upload, offset: 2, data: 'gA==', final: true })
+    expect(store.read(complete.artifact)).toEqual(Buffer.from([0, 255, 128]))
+    expect(() => store.upload({ data: 'AAAA', final: true })).toThrow(/limit/)
+    expect(() => store.upload({ data: '!!!!', final: true })).toThrow(/base64/)
+    expect(store.entries.size).toBe(1)
+  } finally { store.close() }
+})
+
+test.each(require('../fixtures/structured-inputs.json'))('$name input is discoverable and validated consistently', fixture => {
+  const { prepareInputs } = require('../../src/schema')
+  const inputs = [{ name: 'value', type: fixture.type }]
+  const descriptor = { model: { url: 'model.js' }, inputs }
+  expect(validateDescriptor(descriptor).valid).toBe(true)
+  const valid = new Ajv({ strict: false }).compile(inspectSchema(descriptor).inputSchema)({ value: fixture.value })
+  expect(valid).toBe(fixture.valid)
+  if (fixture.valid) expect(prepareInputs(inputs, { value: fixture.value }).value).toEqual(fixture.value)
+  else expect(() => prepareInputs(inputs, { value: fixture.value })).toThrow()
+})
+
+test.each(['image', 'audio', 'video'])('%s bytes are reusable artifacts while URL outputs retain their form', async type => {
+  const store = new ArtifactStore()
+  try {
+    const schema = { outputs: [{ name: 'value', type, mime: type + '/example' }] }
+    const result = formatRun(schema, { runId: crypto.randomUUID(), status: 'succeeded', result: { value: Buffer.from([0, 255, 128]) } }, store)
+    expect(result.status).toBe('succeeded')
+    expect(store.read(result.outputs.value.artifact)).toEqual(Buffer.from([0, 255, 128]))
+    const descriptor = { inputs: [{ name: 'value', type }], model: { code: 'function model(x) { return Array.from(new Uint8Array(x.value)) }' } }
+    expect((await gen.invokeSchema(descriptor, result.outputs, { artifactStore: store })).result).toEqual([0, 255, 128])
+    const url = formatRun(schema, { runId: crypto.randomUUID(), status: 'succeeded', result: { value: 'https://example.test/file' } }, store)
+    expect(url.outputs.value).toBe('https://example.test/file')
+    expect(url.artifacts).toEqual([])
+  } finally { store.close() }
+})
+
+test('40 MiB enters through upload and invokes through a small handle, without copying bytes into JSON', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-large-input-'))
+  const descriptor = path.join(directory, 'schema.json')
+  fs.writeFileSync(path.join(directory, 'model.js'), 'module.exports = ({file}) => ({size:file.byteLength, hash:require("crypto").createHash("sha256").update(Buffer.from(file)).digest("hex")})')
+  fs.writeFileSync(descriptor, JSON.stringify({ model: { name: 'measure', url: 'model.js' }, inputs: [{ name: 'file', type: 'file', arrayBuffer: true }], outputs: [{ name: 'size', type: 'int' }, { name: 'hash', type: 'string' }] }))
+  const server = await gen(['serve', descriptor, '--port', '0'])
+  if (!server.listening) await once(server, 'listening')
+  const base = 'http://127.0.0.1:' + server.address().port
+  try {
+    const bytes = Buffer.alloc(40 * 1024 * 1024, 255)
+    const uploaded = await (await fetch(base + '/__jsee/artifacts?name=data.bin', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: bytes })).json()
+    const body = JSON.stringify({ file: { artifact: uploaded.artifact } })
+    expect(Buffer.byteLength(body)).toBeLessThan(100)
+    console.info('Artifact input measurement:', JSON.stringify({ uploadBytes: bytes.length, invocationBytes: Buffer.byteLength(body) }))
+    const result = await (await fetch(base + '/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })).json()
+    expect(result.outputs).toEqual({ size: bytes.length, hash: crypto.createHash('sha256').update(bytes).digest('hex') })
+  } finally { await new Promise(resolve => server.close(resolve)); fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('artifact reads reject invalid encoding, modified bytes, foreign and malformed references before imports', async () => {
+  const store = new ArtifactStore()
+  try {
+    const uploaded = store.ingest(Buffer.from([255]), { mime: 'application/octet-stream' })
+    const schema = { model: { url: '/must-not-import.js' }, inputs: [{ name: 'file', type: 'file' }] }
+    for (const file of [{ artifact: uploaded.artifact }, { artifact: 'unknown' }, { artifact: 123 }, { artifact: uploaded.artifact, mime: 'text/plain' }]) {
+      const result = await gen.invokeSchema(schema, { file }, { artifactStore: store })
+      expect(result.error.code).toBe('JSEE_INPUT_INVALID')
+    }
+    const pending = store.upload({ data: 'AA==' })
+    expect(store.pendingBytes).toBe(1)
+    expect(store.upload({ upload: pending.upload, cancel: true })).toEqual({ cancelled: true })
+    expect(store.pendingBytes).toBe(0)
+  } finally { store.close() }
+})
+
+test('maximum-size upload chunks, cancellation and failed finalization do not leak quota', () => {
+  const store = new ArtifactStore({ maxBytes: 524288 })
+  try {
+    const bytes = Buffer.alloc(262144, 255)
+    const first = store.upload({ data: bytes.toString('base64') })
+    const done = store.upload({ upload: first.upload, offset: bytes.length, data: bytes.toString('base64'), final: true })
+    expect(store.read(done.artifact)).toEqual(Buffer.concat([bytes, bytes]))
+    expect(store.pendingBytes).toBe(0)
+    expect(() => store.upload({ data: 'AA==' })).toThrow(/limit/)
+  } finally { store.close() }
+})
+
+test.each([new Date(), { value: undefined }, [NaN], [() => 1]])('structured input rejects non-JSON runtime values', value => {
+  expect(() => require('../../src/schema').prepareInputs([{ name: 'value', type: 'object' }], { value })).toThrow()
+})
+
+test('Node and Python share persistent artifact registrations', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-artifact-cross-runtime-'))
+  try {
+    const first = new ArtifactStore({ directory })
+    const uploaded = first.ingest(Buffer.from([0, 255, 128]), { name: 'node.bin' })
+    const script = 'import sys,json\nsys.path.insert(0,sys.argv[1])\nfrom jsee.transport import ArtifactStore\ns=ArtifactStore(directory=sys.argv[2])\nassert s.read(sys.argv[3]) == bytes([0,255,128])\nprint(json.dumps(s.ingest(bytes([128,255,0]),name="python.bin")))\n'
+    const child = spawnSync('python', ['-c', script, path.join(root, 'py'), directory, uploaded.artifact], { encoding: 'utf8' })
+    expect(child.status).toBe(0)
+    const result = JSON.parse(child.stdout)
+    const reopened = new ArtifactStore({ directory })
+    expect(reopened.read(result.artifact)).toEqual(Buffer.from([128, 255, 0]))
+    expect(reopened.entries.size).toBe(2)
+    expect(fs.existsSync(path.join(directory, '.write-lock'))).toBe(false)
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('concurrent readers never observe an incomplete registration manifest', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-manifest-publication-'))
+  const write = fs.writeFileSync
+  const spy = jest.spyOn(fs, 'writeFileSync').mockImplementation((filename, data, options) => {
+    if (/\/manifest\.(json|pending)$/.test(filename)) {
+      write(filename, '[', options)
+      expect(new ArtifactStore({ directory }).entries.size).toBe(0)
+      write(filename, data, { ...options, flag: 'w' })
+    } else write(filename, data, options)
+  })
+  try {
+    const store = new ArtifactStore({ directory })
+    store.ingest(Buffer.from('complete'))
+    expect(new ArtifactStore({ directory }).entries.size).toBe(1)
+  } finally { spy.mockRestore(); fs.rmSync(directory, { recursive: true, force: true }) }
 })

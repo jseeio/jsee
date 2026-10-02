@@ -6,7 +6,7 @@ const minimist = require('minimist')
 const { Server, ProtocolError, ProtocolErrorCode } = require('@modelcontextprotocol/server')
 const { serveStdio, StdioServerTransport } = require('@modelcontextprotocol/server/stdio')
 const { invokeSchema } = require('./cli')
-const { inspectSchema, runResultSchema, ArtifactStore, formatRun, failedRun, BODY_LIMIT, ARTIFACT_LIMIT } = require('./transport')
+const { uploadTool, inspectSchema, runResultSchema, ArtifactStore, formatRun, failedRun, BODY_LIMIT, ARTIFACT_LIMIT } = require('./transport')
 const version = require('../package.json').version
 
 function resource (artifact) {
@@ -25,6 +25,7 @@ function serve (args, stdout) {
   const limit = argv['max-body-bytes']
   if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('max-body-bytes must be a positive integer')
   const store = new ArtifactStore({ maxBytes: argv['max-artifact-bytes'], uriPrefix: 'jsee-artifact://' + crypto.randomUUID() + '/' })
+  const uploader = uploadTool(description.id)
   const cleanup = () => store.close()
   const transport = new StdioServerTransport(process.stdin, stdout, { maxBufferSize: limit })
   const handle = serveStdio(() => {
@@ -33,13 +34,20 @@ function serve (args, stdout) {
       name: description.id, title: description.title, description: description.description,
       inputSchema: description.inputSchema, outputSchema: runResultSchema(schema),
       _meta: { 'io.jsee/capabilities': description.capabilities }
-    }] }))
+    }, uploader] }))
     server.setRequestHandler('tools/call', async request => {
+      if (request.params.name === uploader.name) {
+        try {
+          if (Buffer.byteLength(JSON.stringify(request.params.arguments || {})) > limit) throw new Error('Input exceeds ' + limit + ' bytes')
+          const result = store.upload(request.params.arguments || {})
+          return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result, isError: false }
+        } catch (error) { return { content: [{ type: 'text', text: error.message }], isError: true } }
+      }
       if (request.params.name !== description.id) throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'Unknown tool: ' + request.params.name)
       const data = request.params.arguments || {}
       const invoked = Buffer.byteLength(JSON.stringify(data)) > limit
         ? failedRun('JSEE_BODY_TOO_LARGE', 'Input exceeds ' + limit + ' bytes')
-        : await invokeSchema(schema, data, { schemaPath, log: console.error })
+        : await invokeSchema(schema, data, { schemaPath, log: console.error, artifactStore: store })
       const run = formatRun(schema, invoked, store)
       const content = [{ type: 'text', text: JSON.stringify(run) }]
       if (run.status !== 'succeeded') return { content, isError: true }

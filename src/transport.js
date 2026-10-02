@@ -6,12 +6,21 @@ const crypto = require('crypto')
 const { pathToFileURL } = require('url')
 const { resolveInside, makeHttpError } = require('./files')
 const { assertSchemaVersion, prepareInputs, jseeInputsToJsonSchema } = require('./schema')
-const { isRecordObject, outputLookupNames, normalizeFileOutputValue, flattenJseeOutputs,
+const { isBinaryLike, isRecordObject, outputLookupNames, normalizeFileOutputValue, flattenJseeOutputs,
   jseeOutputsToJsonSchema, invocationUnsupportedReason } = require('./utils')
 const vocabulary = require('../schema.json').definitions
 
 const BODY_LIMIT = 50 * 1024 * 1024
 const ARTIFACT_LIMIT = 64 * 1024 * 1024
+
+function uploadTool (computationId) {
+  return { name: computationId === 'upload_artifact' ? 'jsee_upload_artifact' : 'upload_artifact',
+    description: 'Upload bytes in base64 chunks of at most 262144 decoded bytes. First call omits upload; continue with upload and returned offset. final publishes an artifact; cancel discards pending bytes. Pass {artifact: result.artifact} to file inputs. MIME is declared, not decoded.',
+    inputSchema: { type: 'object', properties: {
+      upload: { type: 'string' }, data: { type: 'string', maxLength: 349528 }, offset: { type: 'integer', minimum: 0 },
+      name: { type: 'string' }, mime: { type: 'string' }, final: { type: 'boolean' }, cancel: { type: 'boolean' }
+    }, additionalProperties: false } }
+}
 
 function validateDescriptor (schema) {
   const errors = []
@@ -43,6 +52,8 @@ function validateDescriptor (schema) {
         for (const key of ['required', 'nullable', 'raw', 'stream', 'arrayBuffer']) {
           if (field[key] !== undefined && typeof field[key] !== 'boolean') errors.push(at + '.' + key + ' should be boolean')
         }
+        if (field.accept !== undefined && typeof field.accept !== 'string') errors.push(at + '.accept should be a string')
+        if (['image', 'audio', 'video', 'object', 'table'].includes(field.type) && (field.arrayBuffer || field.raw || field.stream)) errors.push(at + ': raw, stream and arrayBuffer are not supported for this input type')
         for (const key of ['min', 'max', 'step']) {
           if (field[key] !== undefined && (typeof field[key] !== 'number' || !Number.isFinite(field[key]))) errors.push(at + '.' + key + ' should be finite')
         }
@@ -84,7 +95,9 @@ function canonicalOutputSchema (outputs) {
   outputSchema.required = []
   for (const output of flattenJseeOutputs(outputs)) {
     outputSchema.required.push(output.name)
-    if (output.type === 'file') outputSchema.properties[output.name] = { type: 'object', properties: { artifact: { type: 'string' } }, required: ['artifact'], additionalProperties: false }
+    const reference = { type: 'object', properties: { artifact: { type: 'string' } }, required: ['artifact'], additionalProperties: false }
+    if (output.type === 'file') outputSchema.properties[output.name] = reference
+    else if (['image', 'audio', 'video'].includes(output.type)) outputSchema.properties[output.name] = { anyOf: [reference, outputSchema.properties[output.name]] }
   }
   // Ajv-based clients skip __proto__ in properties; the exact-name pattern preserves its contract.
   if (Object.hasOwn(outputSchema.properties || {}, '__proto__')) outputSchema.patternProperties = { '^__proto__$': outputSchema.properties.__proto__ }
@@ -126,8 +139,9 @@ function jsonValue (value, seen=new Set()) {
 // Validate only the JSON Schema vocabulary emitted by our built-in output mappings.
 // This is not an author-supplied JSON Schema interpreter. Fail closed if mappings grow.
 function outputShapeError (value, schema, at='outputs') {
-  const supported = ['type', 'oneOf', 'properties', 'required', 'items', 'additionalProperties', 'patternProperties']
+  const supported = ['type', 'oneOf', 'anyOf', 'properties', 'required', 'items', 'additionalProperties', 'patternProperties']
   for (const key of Object.keys(schema)) if (!supported.includes(key)) return at + ': unsupported output schema keyword ' + key
+  if (schema.anyOf && !schema.anyOf.some(option => !outputShapeError(value, option, at))) return at + ': does not match the declared output shape'
   if (schema.oneOf && schema.oneOf.filter(option => !outputShapeError(value, option, at)).length !== 1) return at + ': does not match the declared output shape'
   const matches = { object: isRecordObject(value), array: Array.isArray(value), string: typeof value === 'string',
     number: typeof value === 'number' && Number.isFinite(value), integer: Number.isInteger(value), boolean: typeof value === 'boolean' }
@@ -168,12 +182,49 @@ class ArtifactStore {
     this.http = http
     this.uriPrefix = uriPrefix
     this.bytes = 0
+    this.uploads = new Map()
+    this.pendingBytes = 0
     this.entries = new Map()
+    if (!this.temporary) this.load()
+  }
+
+  load () {
+    const entries = new Map()
+    let bytes = 0
+    for (const dir of fs.readdirSync(this.root)) {
+      if (!/^[0-9a-f-]{36}$/.test(dir)) continue
+      const manifest = dir + '/manifest.json'
+      if (!fs.existsSync(path.join(this.root, manifest))) continue
+      const records = JSON.parse(fs.readFileSync(resolveInside(this.root, manifest), 'utf8'))
+      if (!Array.isArray(records)) throw new Error('Invalid artifact manifest')
+      for (const [index, record] of records.entries()) {
+        if (!record || record.id !== dir + '/' + index || !Number.isSafeInteger(record.size) || record.size < 0 || !/^[a-f0-9]{64}$/.test(record.sha256) || typeof record.name !== 'string' || typeof record.mime !== 'string') throw new Error('Invalid artifact manifest')
+        const filename = resolveInside(this.root, record.id)
+        if (!fs.statSync(filename).isFile()) throw new Error('Invalid artifact file')
+        entries.set(record.id, { ...record, path: filename, uri: pathToFileURL(filename).href })
+        bytes += record.size
+        if (entries.size > 1024 || bytes > this.maxBytes) throw Object.assign(new Error('Artifact store limit exceeded'), { code: 'JSEE_ARTIFACT_LIMIT' })
+      }
+    }
+    this.entries = entries
+    this.bytes = bytes
   }
 
   commit (runId, files) {
+    if (this.temporary) return this.commitFiles(runId, files)
+    // Cross-process writers serialize quota checks and publication. An interrupted writer
+    // leaves a lock: fail closed until the owner removes it after checking no writer lives.
+    const lock = path.join(this.root, '.write-lock')
+    fs.mkdirSync(lock, { mode: 0o700 })
+    try {
+      this.load()
+      return this.commitFiles(runId, files)
+    } finally { fs.rmdirSync(lock) }
+  }
+
+  commitFiles (runId, files) {
     const size = files.reduce((sum, file) => sum + file.bytes.length, 0)
-    if (size + this.bytes > this.maxBytes || this.entries.size + files.length > 1024) {
+    if (size + this.bytes + this.pendingBytes > this.maxBytes || this.entries.size + files.length > 1024) {
       throw Object.assign(new Error('Artifact store limit exceeded'), { code: 'JSEE_ARTIFACT_LIMIT' })
     }
     if (!files.length) return []
@@ -185,10 +236,15 @@ class ArtifactStore {
         const id = runId + '/' + index
         const filename = path.join(directory, String(index))
         fs.writeFileSync(filename, file.bytes, { flag: 'wx', mode: 0o600 })
-        return { id, output: file.output, name: file.name, mime: file.mime, size: file.bytes.length,
+        return { id, output: file.output === undefined ? '' : file.output, name: file.name, mime: file.mime, size: file.bytes.length,
           sha256: crypto.createHash('sha256').update(file.bytes).digest('hex'),
           uri: this.uriPrefix ? this.uriPrefix + id : this.http ? '/__jsee/artifacts/' + id : pathToFileURL(filename).href }
       })
+      if (!this.temporary) {
+        // Publish the complete registration batch atomically for concurrent readers.
+        fs.writeFileSync(path.join(directory, 'manifest.pending'), JSON.stringify(result), { flag: 'wx', mode: 0o600 })
+        fs.renameSync(path.join(directory, 'manifest.pending'), path.join(directory, 'manifest.json'))
+      }
       result.forEach((artifact, index) => this.entries.set(artifact.id, { ...artifact, path: path.join(directory, String(index)) }))
       this.bytes += size
       return result
@@ -198,13 +254,79 @@ class ArtifactStore {
     }
   }
 
+  ingest (bytes, { name='file', mime='application/octet-stream' }={}) {
+    if (typeof name !== 'string' || typeof mime !== 'string' || !/^[\w.+-]+\/[\w.+-]+(?:;[^\r\n]*)?$/.test(mime)) throw new Error('Invalid upload name or MIME type')
+    name = name.replace(/\\/g, '/').split('/').pop().replace(/[\x00-\x1f\x7f]/g, '_').slice(0, 255) || 'file'
+    const [metadata] = this.commit(crypto.randomUUID(), [{ output: '', name, mime, bytes }])
+    return { artifact: metadata.id, metadata }
+  }
+
+  upload (part) {
+    if (!isRecordObject(part) || Object.keys(part).some(key => !['upload', 'data', 'offset', 'name', 'mime', 'final', 'cancel'].includes(key))) throw new Error('Invalid upload fields')
+    for (const key of ['upload', 'name', 'mime']) if (part[key] !== undefined && (typeof part[key] !== 'string' || part[key].length > 1024)) throw new Error('Invalid upload ' + key)
+    for (const key of ['final', 'cancel']) if (part[key] !== undefined && typeof part[key] !== 'boolean') throw new Error('Invalid upload ' + key)
+    const { upload, data='', offset=0, final=false, cancel=false } = part
+    let pending = upload ? this.uploads.get(upload) : null
+    if (upload && !pending) throw new Error('Unknown upload')
+    if (cancel) {
+      if (pending) { this.pendingBytes -= pending.size; this.uploads.delete(upload) }
+      return { cancelled: true }
+    }
+    if (typeof data !== 'string' || data.length > 349528) throw new Error('Invalid or oversized base64 chunk (maximum 262144 bytes)')
+    const bytes = Buffer.from(data, 'base64')
+    if (bytes.length > 262144 || bytes.toString('base64') !== data) throw new Error('Invalid base64 chunk')
+    if (!Number.isSafeInteger(offset) || offset !== (pending ? pending.size : 0)) throw new Error('Upload offset mismatch')
+    if (this.bytes + this.pendingBytes + bytes.length > this.maxBytes || !pending && this.uploads.size >= 16) throw Object.assign(new Error('Artifact store limit exceeded'), { code: 'JSEE_ARTIFACT_LIMIT' })
+    const id = upload || crypto.randomUUID()
+    if (!pending) pending = { chunks: [], size: 0, name: part.name, mime: part.mime }
+    pending.chunks.push(bytes)
+    pending.size += bytes.length
+    this.pendingBytes += bytes.length
+    this.uploads.set(id, pending)
+    if (!final) return { upload: id, offset: pending.size }
+    this.uploads.delete(id)
+    this.pendingBytes -= pending.size
+    return this.ingest(Buffer.concat(pending.chunks), pending)
+  }
+
   get (id) { return this.entries.get(id) }
   pathFor (id) {
     if (!this.entries.has(id)) throw makeHttpError('Unknown artifact', 404)
     return resolveInside(this.root, id)
   }
-  read (id) { return fs.readFileSync(this.pathFor(id)) }
-  close () { if (this.temporary) fs.rmSync(this.root, { recursive: true, force: true }) }
+  read (id) {
+    const filename = this.pathFor(id)
+    const metadata = this.get(id)
+    if (fs.statSync(filename).size !== metadata.size) throw makeHttpError('Artifact integrity check failed', 409)
+    const bytes = fs.readFileSync(filename)
+    if (bytes.length !== metadata.size || crypto.createHash('sha256').update(bytes).digest('hex') !== metadata.sha256) throw makeHttpError('Artifact integrity check failed', 409)
+    return bytes
+  }
+  close () { this.uploads.clear(); this.pendingBytes = 0; if (this.temporary) fs.rmSync(this.root, { recursive: true, force: true }) }
+}
+
+function resolveArtifactInputs (fields, inputs, store) {
+  const result = { ...inputs }
+  for (const field of fields || []) {
+    if (field.type === 'group' && !field.name) {
+      Object.assign(result, resolveArtifactInputs(field.elements, result, store))
+    } else if (field.type === 'group' && isRecordObject(result[field.name])) {
+      Object.defineProperty(result, field.name, { value: resolveArtifactInputs(field.elements, result[field.name], store), enumerable: true, writable: true, configurable: true })
+    } else if (['file', 'image', 'audio', 'video'].includes(field.type) && isRecordObject(result[field.name]) && Object.hasOwn(result[field.name], 'artifact')) {
+      const id = result[field.name].artifact
+      const metadata = store && store.get(id)
+      if (!metadata) throw new Error(field.name + ': unknown or unavailable artifact')
+      if (field.raw || field.stream) throw new Error(field.name + ': artifact references do not support raw/stream mode')
+      const accepts = require('./schema').matchesFileAccept
+      if (!accepts(field.accept, metadata.name, metadata.mime) || field.type !== 'file' && !accepts(field.type + '/*', metadata.name, metadata.mime)) throw new Error(field.name + ': artifact MIME/name does not match accept')
+      const bytes = store.read(id)
+      const value = field.arrayBuffer === true || field.type !== 'file'
+        ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+        : new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
+      Object.defineProperty(result, field.name, { value, enumerable: true, writable: true, configurable: true })
+    }
+  }
+  return result
 }
 
 function formatRun (schema, run, store) {
@@ -220,7 +342,8 @@ function formatRun (schema, run, store) {
         value = key === undefined ? output.value : value[key]
       } else if (outputs.length !== 1) throw new Error('Multiple outputs require a result object')
       if (value === undefined) throw new Error('Missing declared output: ' + output.name)
-      if (output.type === 'file') {
+      const media = ['image', 'audio', 'video'].includes(output.type)
+      if (output.type === 'file' || media && (isBinaryLike(value) || isRecordObject(value) && ['content', 'value', 'data'].some(key => Object.hasOwn(value, key)))) {
         if (isRecordObject(value) && ['content', 'value', 'data'].every(key => !(key in value))) throw new Error('File outputs need content, value, or data; URLs are not fetched')
         const file = normalizeFileOutputValue(output, value)
         let bytes
@@ -230,6 +353,7 @@ function formatRun (schema, run, store) {
         else throw new Error('File content must be text or bytes')
         const name = String(file.filename || output.name).replace(/\\/g, '/').split('/').pop().replace(/[\x00-\x1f\x7f]/g, '_').slice(0, 255) || 'file'
         const mime = file.mime || 'application/octet-stream'
+        if (media && !require('./schema').matchesFileAccept(output.type + '/*', name, mime)) throw new Error('Media bytes require a matching declared MIME type')
         if (typeof mime !== 'string' || !/^[\w.+-]+\/[\w.+-]+(?:;[^\r\n]*)?$/.test(mime)) throw new Error('Invalid file MIME type')
         entries.push([output.name, { artifact: run.runId + '/' + files.length }])
         files.push({ output: output.name, bytes, name, mime })
@@ -263,6 +387,7 @@ function canonicalOpenAPI (schema) {
   const description = inspectSchema(schema)
   return { openapi: '3.1.0', info: { title: description.title, version: '1.0.0' }, paths: {
     '/schema': { get: { responses: { 200: { description: 'Computation descriptor with local model references' } } } },
+    '/__jsee/artifacts': { post: { description: 'Upload raw bytes; Content-Type declares MIME. Returns artifact ID and metadata.', parameters: [{ name: 'name', in: 'query', schema: { type: 'string' } }], requestBody: { required: true, content: { '*/*': { schema: { type: 'string', format: 'binary' } } } }, responses: { 201: { description: 'Registered artifact ID and metadata' }, 413: { description: 'Body limit exceeded' }, 507: { description: 'Artifact limit exceeded' } } } },
     '/__jsee/artifacts/{runId}/{index}': { get: {
       parameters: ['runId', 'index'].map(name => ({ name, in: 'path', required: true, schema: { type: 'string' } })),
       responses: { 200: { description: 'Artifact bytes; Content-Type and attachment name come from artifact metadata' }, 403: { description: 'Access denied' }, 404: { description: 'Unknown artifact' } }
@@ -272,4 +397,4 @@ function canonicalOpenAPI (schema) {
   } }
 }
 
-module.exports = { validateDescriptor, inspectSchema, ArtifactStore, formatRun, failedRun, responseStatus, canonicalOpenAPI, runResultSchema, outputShapeError, BODY_LIMIT, ARTIFACT_LIMIT }
+module.exports = { uploadTool, resolveArtifactInputs, validateDescriptor, inspectSchema, ArtifactStore, formatRun, failedRun, responseStatus, canonicalOpenAPI, runResultSchema, outputShapeError, BODY_LIMIT, ARTIFACT_LIMIT }

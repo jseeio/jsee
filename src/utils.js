@@ -1,4 +1,4 @@
-const { assertSchemaVersion, jseeInputsToJsonSchema, collectInputValues } = require('./schema')
+const { matchesFileAccept, tableOutputJsonSchema, assertSchemaVersion, jseeInputsToJsonSchema, collectInputValues } = require('./schema')
 const { DEFAULT_CHUNK_SIZE, STREAM_HIGH_WATER } = require('./constants')
 
 // https://stackoverflow.com/questions/8511281/check-if-a-value-is-an-object-in-javascript
@@ -1386,34 +1386,79 @@ async function readSSE (response, onChunk) {
   }
 }
 
-function getModelFuncAPI (model, log=console.log, onChunk, security) {
+function getModelFuncAPI (model, log=console.log, onChunk, security, outputs) {
   if (model.type !== 'get' && model.type !== 'post') return undefined
+  // Blob/File contents are immutable; reuse registrations only within this host binding.
+  const uploadedFiles = new WeakMap()
   return (data, options={}) => {
     assertApiNetworkAllowed(model, security)
     const url = model.type === 'get' ? model.url + '?' + new URLSearchParams(data).toString() : model.url
     assertNetworkAllowed(url, security, 'API model URL')
-    log('Sending', model.type.toUpperCase(), 'request to', url)
-    const init = model.type === 'post' ? {
-      method: 'POST',
-      headers: { 'Accept': model.stream ? 'text/event-stream' : 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    } : {}
-    if (model.type === 'get' && model.stream) init.headers = { 'Accept': 'text/event-stream' }
-    if (options.signal) init.signal = options.signal
-    const request = Object.keys(init).length ? fetch(url, init) : fetch(url)
-    return request.then(async response => {
-      if (response.ok === false) {
-        const body = await response.text()
-        let message = body
-        try { const value = JSON.parse(body); message = value.error || value.message || body } catch (_) { /* text error */ }
-        const error = new Error(`HTTP ${response.status}: ${message || response.statusText || 'Request failed'}`)
-        error.status = response.status
-        throw error
+    const canonicalUrl = model._jseeCanonical ? new URL(url, typeof location !== 'undefined' ? location.href : undefined).href : url
+    return (async () => {
+      if (model._jseeCanonical) {
+        const uploadUrl = new URL('__jsee/artifacts', new URL('./', canonicalUrl)).href
+        const encode = async value => {
+          if (typeof Blob !== 'undefined' && value instanceof Blob || isBinaryLike(value)) {
+            const immutable = typeof Blob !== 'undefined' && value instanceof Blob
+            const known = immutable && uploadedFiles.get(value)
+            if (known && known.url === uploadUrl) return known.promise
+            const promise = (async () => {
+              const target = uploadUrl + '?name=' + encodeURIComponent(value.name || 'file')
+              assertNetworkAllowed(target, security, 'Artifact upload')
+              const response = await fetch(target, { method: 'POST', headers: { 'Content-Type': value.type || 'application/octet-stream' }, body: value, signal: options.signal })
+              const uploaded = await response.json()
+              if (!response.ok) throw new Error(uploaded.error && uploaded.error.message || 'Artifact upload failed')
+              return { artifact: uploaded.artifact }
+            })()
+            if (immutable) uploadedFiles.set(value, { url: uploadUrl, promise })
+            try { return await promise } catch (error) {
+              if (immutable && uploadedFiles.get(value).promise === promise) uploadedFiles.delete(value)
+              throw error
+            }
+          }
+          if (Array.isArray(value)) return Promise.all(value.map(encode))
+          if (isRecordObject(value)) return Object.fromEntries(await Promise.all(Object.entries(value).map(async ([key, item]) => [key, await encode(item)])))
+          return value
+        }
+        data = await encode(data)
       }
-      const contentType = response.headers && response.headers.get('content-type') || ''
-      if (contentType.includes('text/event-stream') && response.body) return readSSE(response, options.onChunk || onChunk)
-      return response.json()
-    })
+      log('Sending', model.type.toUpperCase(), 'request to', url)
+      const init = model.type === 'post' ? {
+        method: 'POST',
+        headers: { 'Accept': model.stream ? 'text/event-stream' : 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      } : {}
+      if (model.type === 'get' && model.stream) init.headers = { 'Accept': 'text/event-stream' }
+      if (options.signal) init.signal = options.signal
+      const request = Object.keys(init).length ? fetch(url, init) : fetch(url)
+      return request.then(async response => {
+        if (response.ok === false) {
+          const body = await response.text()
+          let message = body
+          try { const value = JSON.parse(body); message = value.error || value.message || body } catch (_) { /* text error */ }
+          const error = new Error(`HTTP ${response.status}: ${message || response.statusText || 'Request failed'}`)
+          error.status = response.status
+          throw error
+        }
+        const contentType = response.headers && response.headers.get('content-type') || ''
+        if (contentType.includes('text/event-stream') && response.body) return readSSE(response, options.onChunk || onChunk)
+        const result = await response.json()
+        if (!model._jseeCanonical) return result
+        if (result.status !== 'succeeded') throw new Error(result.error && result.error.message || 'Invocation failed')
+        const kinds = Object.fromEntries(flattenJseeOutputs(outputs).map(output => [output.name, output.type]))
+        for (const artifact of result.artifacts || []) {
+          const target = new URL(artifact.uri, canonicalUrl).href
+          assertNetworkAllowed(target, security, 'Artifact output')
+          if (kinds[artifact.output] === 'file') {
+            const file = await fetch(target, { signal: options.signal })
+            if (!file.ok) throw new Error('Artifact download failed')
+            result.outputs[artifact.output] = { content: await file.blob(), filename: artifact.name, mime: artifact.mime }
+          } else result.outputs[artifact.output] = target
+        }
+        return result.outputs
+      })
+    })()
   }
 }
 
@@ -1468,11 +1513,29 @@ function collectTransferables (value, seen) {
   return buffers
 }
 
+async function prepareBrowserFiles (fields, values, remote=false) {
+  const result = { ...values }
+  for (const field of fields || []) {
+    const value = result[field.name]
+    if (field.type === 'group') {
+      if (!field.name) Object.assign(result, await prepareBrowserFiles(field.elements, result, remote))
+      else if (value) Object.defineProperty(result, field.name, { value: await prepareBrowserFiles(field.elements, value, remote), enumerable: true, writable: true, configurable: true })
+    } else if (['file', 'image', 'audio', 'video'].includes(field.type)) {
+      if (value && value.artifact && !remote) throw new Error(field.name + ': artifact references require their canonical host')
+      if (field.type !== 'file' && typeof Blob !== 'undefined' && value instanceof Blob) {
+        if (!matchesFileAccept(field.type + '/*', value.name, value.type) || !matchesFileAccept(field.accept, value.name, value.type)) throw new Error(field.name + ': media does not match accept')
+        if (!remote) Object.defineProperty(result, field.name, { value: await value.arrayBuffer(), enumerable: true, writable: true, configurable: true })
+      }
+    }
+  }
+  return result
+}
+
 function wrapTypedArrayInputs (inputs, inputConfigs) {
   if (!isObject(inputs) || !Array.isArray(inputConfigs)) return inputs
   const wrapped = Object.assign({}, inputs)
   inputConfigs.forEach(cfg => {
-    if (cfg.arrayBuffer && cfg.name && typeof wrapped[cfg.name] !== 'undefined') {
+    if (cfg.arrayBuffer && !['image', 'audio', 'video'].includes(cfg.type) && cfg.name && typeof wrapped[cfg.name] !== 'undefined') {
       wrapped[cfg.name] = toTypedArray(wrapped[cfg.name], cfg.dtype || 'float64')
     }
   })
@@ -2601,26 +2664,6 @@ function flattenJseeOutputs (outputs, flat=[]) {
   return flat
 }
 
-function tableOutputJsonSchema () {
-  return {
-    oneOf: [
-      {
-        type: 'object',
-        properties: {
-          columns: { type: 'array', items: { type: 'string' } },
-          rows: { type: 'array', items: { type: 'array', items: {} } }
-        },
-        required: ['columns', 'rows'],
-        additionalProperties: true
-      },
-      {
-        type: 'array',
-        items: { type: 'object', additionalProperties: true }
-      }
-    ]
-  }
-}
-
 function fileLikeOutputJsonSchema () {
   return {
     oneOf: [
@@ -2918,8 +2961,12 @@ function createValidateFn (input, filtrexCompile, filtrexOptions) {
   if (input.required) {
     const msg = input.error || 'Required'
     return function (value) {
-      if (value === null || value === undefined || value === '') return msg
-      if (Array.isArray(value) && value.length === 0) return msg
+      // Structured inputs use JSON Schema presence semantics; empty collections are values.
+      if (value === undefined) return msg
+      if (!['object', 'table'].includes(input.type)) {
+        if (value === null || value === '') return msg
+        if (Array.isArray(value) && value.length === 0) return msg
+      }
       return validate ? validate(value) : null
     }
   }
@@ -2929,6 +2976,7 @@ function createValidateFn (input, filtrexCompile, filtrexOptions) {
 function runValidation (inputs, validateFunctions) {
   let hasErrors = false
   inputs.forEach((input, index) => {
+    if (input._parseError) { input._error = input._parseError; hasErrors = true; return }
     if (index < validateFunctions.length && validateFunctions[index]) {
       const value = input.type === 'group' ? collectInputValues(input.elements) : input.value
       input._error = validateFunctions[index](value)
@@ -3042,6 +3090,7 @@ module.exports = {
   parseSSELine,
   toTypedArray,
   fromTypedArray,
+  prepareBrowserFiles,
   wrapTypedArrayInputs,
   collectTransferables,
   columnsToRows,

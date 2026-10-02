@@ -35,7 +35,7 @@
   },
   "definitions": {
     "inputType": {
-      "enum": ["int", "float", "number", "string", "color", "text", "categorical", "select", "bool", "checkbox", "file", "group", "action", "button", "slider", "radio", "toggle", "date", "multi-select", "range", "folder"]
+      "enum": ["int", "float", "number", "string", "color", "text", "categorical", "select", "bool", "checkbox", "file", "group", "action", "button", "slider", "radio", "toggle", "date", "multi-select", "range", "folder", "table", "object", "image", "audio", "video"]
     },
     "modelType": { "enum": ["function", "class", "module", "async-init", "async-function", "get", "post", "py"] },
     "outputType": {
@@ -100,6 +100,7 @@
         "validate": { "type": "string" },
         "error": { "type": "string" },
         "disabled": { "type": "boolean" },
+        "readonly": { "type": "boolean" },
         "reactive": { "type": "boolean" },
         "enter": { "type": "boolean" },
         "raw": { "type": "boolean" },

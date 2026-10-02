@@ -313,6 +313,8 @@
 </style>
 
 <template>
+  <structured-input v-if="['object', 'table'].includes(input.type)" :input="input" @change="changeHandler" />
+  <media-input v-if="['image', 'audio', 'video'].includes(input.type)" :input="input" @change="changeHandler" />
   <div class="jsee-field" v-if="input.type == 'int' || input.type == 'float' || input.type == 'number'">
     <label v-bind:for="input.name" class="jsee-label">{{ input.name }}</label>
     <input
@@ -491,6 +493,8 @@
       <file-picker
         v-model="input.value"
         v-model:url="input.url"
+        :accept="input.accept || '*/*'"
+        @invalid="input._parseError = $event"
         v-bind:raw="input.raw === true || input.stream === true"
         v-bind:autoload="input.urlAutoLoad === true"
         v-bind:security="security"

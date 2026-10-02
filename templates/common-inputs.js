@@ -1,5 +1,7 @@
 const FileReader = window['FileReader']
 import FilePicker from './file-picker.vue'
+import StructuredInput from './structured-input.vue'
+import MediaInput from './media-input.vue'
 
 const component = {
   props: ['input', 'security'],
@@ -7,7 +9,7 @@ const component = {
   inject: {
     jsee: { default: null }
   },
-  components: { FilePicker },
+  components: { FilePicker, StructuredInput, MediaInput },
   data () {
     return {
       collapsed: this.input && this.input.collapsed === true,

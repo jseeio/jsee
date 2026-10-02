@@ -10,7 +10,7 @@ import sys
 import jsee
 from jsee.jsee import DEFAULT_MAX_BODY_BYTES
 
-if len(sys.argv) > 1 and sys.argv[1] in ('inspect', 'validate', 'run', 'serve'):
+if len(sys.argv) > 1 and sys.argv[1] in ('inspect', 'validate', 'run', 'serve', 'artifact-import'):
   from jsee.transport import command
   output = sys.stdout
   if sys.argv[1] != 'serve':
