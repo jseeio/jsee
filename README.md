@@ -178,7 +178,15 @@ JSEE turns a JSON schema into a working web app. Instead of writing HTML, event 
 
 ## Structured and media inputs
 
-`object` accepts JSON values, including nested objects and variable-length lists. Its editor reports invalid JSON and blocks execution until corrected. `table` accepts the same values as table outputs: an array of row objects or `{ "columns": ["name"], "rows": [["Ada"]] }`. The table editor supports adding/removing rows, adding columns and editing JSON. Cells preserve JSON types: `0`, `false`, `null` and `""` are distinct. Column-specific validation is not inferred. Named groups remain useful for fixed nested forms.
+`object` accepts JSON values, including nested objects and variable-length lists. Its editor reports invalid JSON and blocks execution until corrected. `table` accepts the same values as table outputs: an array of row objects or `{ "columns": ["name"], "rows": [["Ada"]] }`. The table editor supports adding/removing rows, adding columns and editing JSON. Cells preserve JSON types: `0`, `false`, `null` and `""` are distinct. Column-specific validation is not inferred. An `object` input or output can declare an optional `valueSchema`, for example:
+
+```json
+{"name":"info","type":"object","valueSchema":{"type":"object","properties":{"counts":{"type":"array","items":{"type":"integer","minimum":0}}},"required":["counts"],"additionalProperties":false}}
+```
+
+`valueSchema` uses a bounded JSON Schema vocabulary: `type` (including type arrays and `null`), `properties`, `required`, boolean `additionalProperties`, `items`, `enum`, `minimum`, `maximum`, `minLength`, `maxLength`, `minItems`, `maxItems`, and `description`. Browser, Node and Python enforce these rules, and HTTP/MCP discovery exposes them. Unsupported keywords fail descriptor validation; references, formats, nested defaults and coercion are not supported. A provided shape owns nullability: include `"null"` in its type if needed; outer `nullable` or `default: null` do not widen it. Without a shape, `object` keeps accepting any finite JSON value.
+
+ Named groups remain useful for fixed nested forms.
 
 `image`, `audio` and `video` provide file selection and previews. Declare `accept`, such as `"image/png"` or `"audio/*"`, to restrict selection; the media type also requires its own MIME family. Browser JS models receive an ArrayBuffer; native Python models receive bytes. Pyodide models can use `bytes(value)` on the received buffer. Canonical CLI/HTTP/MCP inputs use `{ "artifact": "<runId>/<index>" }`, rather than encoded media strings. MIME describes supplied metadata; it does not prove that a codec can decode the content. JSEE does not implicitly convert images to PIL/NumPy or audio to sample arrays.
 

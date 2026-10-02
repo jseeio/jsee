@@ -8,7 +8,26 @@ export type Alias = string | string[]
 export type GroupStyle = 'blocks' | 'accordion' | 'tabs'
 export type Columns = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12
 
+export type JsonType = 'object' | 'array' | 'string' | 'number' | 'integer' | 'boolean' | 'null'
+/** Supported JSON Schema vocabulary for object inputs and outputs. No coercion or nested defaults. */
+export interface ValueSchema {
+  type?: JsonType | JsonType[]
+  properties?: Record<string, ValueSchema>
+  items?: ValueSchema
+  required?: string[]
+  additionalProperties?: boolean
+  enum?: JsonValue[]
+  description?: string
+  minimum?: number
+  maximum?: number
+  minLength?: number
+  maxLength?: number
+  minItems?: number
+  maxItems?: number
+}
+
 export interface InputProperties {
+  valueSchema?: ValueSchema
   name?: string
   label?: string
   description?: string
@@ -48,6 +67,7 @@ export type Input = InputProperties & (
 )
 
 export interface OutputProperties {
+  valueSchema?: ValueSchema
   name?: string
   label?: string
   description?: string

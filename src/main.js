@@ -3,7 +3,7 @@ import Worker from './worker.js'
 
 const utils = require('./utils')
 const { outputLookupNames, collectOutputNames, cleanOutputMetadata } = utils
-const { cloneSchema, collectInputValues, prepareInputs } = require('./schema')
+const { assertShapedValue, cloneSchema, collectInputValues, prepareInputs } = require('./schema')
 const { runPipeline } = require('./pipeline')
 const isObject = utils.isObject
 const { DEFAULT_CONTAINER, DEFAULT_WORKER_TIMEOUT } = require('./constants')
@@ -1330,6 +1330,21 @@ export default class JSEE {
 
   output (res, partial=false) {
     if (this._destroyed) return
+    const declared = utils.flattenJseeOutputs(this.schema.outputs)
+    for (const field of declared) {
+      if (field.valueSchema === undefined) continue
+      const resolved = isObject(res) ? resolveOutputResult(res, field) : { found: declared.length === 1, value: res }
+      if (!resolved.found) {
+        if (partial) continue
+        throw new Error(field.name + ': missing declared output')
+      }
+      assertShapedValue(field, resolved.value)
+    }
+    // A single shaped JSON array is one value, even when it happens to contain one item.
+    if (declared.length === 1 && declared[0].valueSchema !== undefined && !isObject(res)) {
+      this._mapResultsToOutputs(this.data.outputs, { [declared[0].name]: res })
+      return
+    }
     // Edge case: no output field with reactivity is handled — undefined results exit early
 
     if (typeof res === 'undefined') {

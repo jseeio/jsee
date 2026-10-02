@@ -70,3 +70,11 @@ const ${type}Equal: [${type}] extends [typeof ${type}Values[number]] ? [typeof $
     expect(report.warnings).toHaveLength(2)
   })
 })
+
+test.each(require('../fixtures/value-schema.json'))('authoring accepts valueSchema: $name', fixture => {
+  expect(validate({ inputs: [{ name: 'info', type: 'object', valueSchema: fixture.schema }] })).toBe(true)
+})
+
+test.each([{ $ref: 'remote' }, { type: 'invalid' }, { properties: { x: { pattern: 'x' } } }, { items: [] }])('authoring rejects unsupported valueSchema %j', valueSchema => {
+  expect(validate({ inputs: [{ name: 'info', type: 'object', valueSchema }] })).toBe(false)
+})

@@ -133,6 +133,44 @@ function assertJsonValue (value, seen=new Set()) {
   seen.delete(value)
 }
 
+function assertValueSchema (schema, at='valueSchema') {
+  assertJsonValue(schema)
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) throw new Error(at + ': expected schema object')
+  const keywords = ['type', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'minimum', 'maximum', 'minLength', 'maxLength', 'minItems', 'maxItems', 'description']
+  for (const key of Object.keys(schema)) if (!keywords.includes(key)) throw new Error(at + ': unsupported keyword ' + key)
+  if (schema.type !== undefined) {
+    const types = Array.isArray(schema.type) ? schema.type : [schema.type]
+    if (!types.length || new Set(types).size !== types.length || types.some(type => !['object', 'array', 'string', 'number', 'integer', 'boolean', 'null'].includes(type))) throw new Error(at + '.type: invalid JSON type')
+  }
+  if (schema.properties !== undefined) {
+    if (!schema.properties || typeof schema.properties !== 'object' || Array.isArray(schema.properties)) throw new Error(at + '.properties: expected object')
+    for (const [name, child] of Object.entries(schema.properties)) assertValueSchema(child, at + '.properties.' + name)
+  }
+  if (schema.items !== undefined) assertValueSchema(schema.items, at + '.items')
+  if (schema.required !== undefined && (!Array.isArray(schema.required) || schema.required.some(name => typeof name !== 'string') || new Set(schema.required).size !== schema.required.length)) throw new Error(at + '.required: expected unique strings')
+  if (schema.additionalProperties !== undefined && typeof schema.additionalProperties !== 'boolean') throw new Error(at + '.additionalProperties: expected boolean')
+  if (schema.enum !== undefined && (!Array.isArray(schema.enum) || !schema.enum.length)) throw new Error(at + '.enum: expected nonempty array')
+  if (schema.description !== undefined && typeof schema.description !== 'string') throw new Error(at + '.description: expected string')
+  for (const key of ['minimum', 'maximum', 'minLength', 'maxLength', 'minItems', 'maxItems']) {
+    if (schema[key] !== undefined && (typeof schema[key] !== 'number' || !Number.isFinite(schema[key]) || !['minimum', 'maximum'].includes(key) && (!Number.isInteger(schema[key]) || schema[key] < 0))) throw new Error(at + '.' + key + ': invalid bound')
+  }
+}
+
+function getValueSchema (field) {
+  if (!Object.hasOwn(field, 'valueSchema')) return undefined
+  if (field.type !== 'object') throw new Error('valueSchema is only supported for type object')
+  assertValueSchema(field.valueSchema)
+  return cloneSchema(field.valueSchema)
+}
+
+function assertShapedValue (field, value, at=field.name) {
+  const shape = getValueSchema(field)
+  if (shape === undefined) return
+  assertJsonValue(value)
+  const errors = jsonShapeErrors(value, shape, at)
+  if (errors.length) throw new Error(errors.join('; '))
+}
+
 function jseeInputsToJsonSchema (inputs) {
   if (inputs != null && !Array.isArray(inputs)) throw new Error('inputs/elements should be an array')
   const properties = {}
@@ -144,6 +182,7 @@ function jseeInputsToJsonSchema (inputs) {
   }
   for (const inp of inputs || []) {
     if (!inp || typeof inp !== 'object') throw new Error('Input should be an object')
+    const valueSchema = getValueSchema(inp)
     if (inp.type === 'button' || inp.type === 'action') continue
     if (inp.type === 'group' && !inp.name) {
       const nested = jseeInputsToJsonSchema(inp.elements)
@@ -161,6 +200,7 @@ function jseeInputsToJsonSchema (inputs) {
         Object.assign(prop, tableOutputJsonSchema())
         break
       case 'object':
+        if (valueSchema) Object.assign(prop, valueSchema)
         break
       case 'image': case 'audio': case 'video':
         Object.assign(prop, artifactInputSchema())
@@ -220,7 +260,7 @@ function jseeInputsToJsonSchema (inputs) {
       if (inp.step !== undefined) prop.multipleOf = inp.step
     }
     if (inp.default !== undefined) prop.default = inp.default
-    if (inp.nullable === true || inp.default === null) {
+    if (valueSchema === undefined && (inp.nullable === true || inp.default === null)) {
       const types = Array.isArray(prop.type) ? prop.type : [prop.type]
       if (prop.oneOf) prop.oneOf.push({ type: 'null' })
       else if (prop.type) prop.type = [...new Set([...types, 'null'])]
@@ -246,7 +286,7 @@ function matchesFileAccept (accept, name='', mime='') {
   })
 }
 
-function prepareInputs (inputs, data) {
+function jsonShapeErrors (value, schema, path) {
   const errors = []
   const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
   const sameValue = (a, b) => {
@@ -265,6 +305,14 @@ function prepareInputs (inputs, data) {
     return typeof value === type
   }
   const check = (value, prop, path) => {
+    const supported = ['type', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'minimum', 'maximum', 'multipleOf', 'minLength', 'maxLength', 'minItems', 'maxItems', 'description', 'default', 'oneOf', 'anyOf', 'patternProperties', 'x-jsee-accept']
+    for (const key of Object.keys(prop)) if (!supported.includes(key)) { errors.push(path + ': unsupported schema keyword ' + key); return }
+    if (prop.anyOf && !prop.anyOf.some(option => !jsonShapeErrors(value, option, path).length)) errors.push(`${path}: does not match the declared shape`)
+    if (prop.patternProperties && isRecord(value)) {
+      for (const [pattern, rule] of Object.entries(prop.patternProperties)) {
+        for (const key of Object.keys(value)) if (new RegExp(pattern).test(key)) check(value[key], rule, path + '.' + key)
+      }
+    }
     if (prop.oneOf) {
       const count = prop.oneOf.filter(option => {
         const start = errors.length
@@ -273,7 +321,8 @@ function prepareInputs (inputs, data) {
       }).length
       if (count !== 1) errors.push(`${path}: does not match the declared input shape`)
     }
-    if (prop.minLength !== undefined && typeof value === 'string' && value.length < prop.minLength) errors.push(`${path}: string is too short`)
+    if (prop.minLength !== undefined && typeof value === 'string' && [...value].length < prop.minLength) errors.push(`${path}: string is too short`)
+    if (prop.maxLength !== undefined && typeof value === 'string' && [...value].length > prop.maxLength) errors.push(`${path}: string is too long`)
     if (isRecord(value) && prop.additionalProperties === false && Object.keys(value).some(key => !Object.hasOwn(prop.properties || {}, key))) errors.push(`${path}: undeclared property`)
 
     const types = Array.isArray(prop.type) ? prop.type : [prop.type]
@@ -283,9 +332,9 @@ function prepareInputs (inputs, data) {
     }
     if (prop.enum && !prop.enum.some(option => sameValue(option, value))) errors.push(`${path}: value is not in options`)
     if (value === null) return
-    if (prop.minimum !== undefined && value < prop.minimum) errors.push(`${path}: minimum is ${prop.minimum}`)
-    if (prop.maximum !== undefined && value > prop.maximum) errors.push(`${path}: maximum is ${prop.maximum}`)
-    if (prop.multipleOf > 0) {
+    if (typeof value === 'number' && prop.minimum !== undefined && value < prop.minimum) errors.push(`${path}: minimum is ${prop.minimum}`)
+    if (typeof value === 'number' && prop.maximum !== undefined && value > prop.maximum) errors.push(`${path}: maximum is ${prop.maximum}`)
+    if (typeof value === 'number' && prop.multipleOf > 0) {
       const ratio = value / prop.multipleOf
       if (Math.abs(ratio - Math.round(ratio)) > 1e-9) errors.push(`${path}: expected a multiple of ${prop.multipleOf}`)
     }
@@ -294,15 +343,22 @@ function prepareInputs (inputs, data) {
       if (prop.maxItems !== undefined && value.length > prop.maxItems) errors.push(`${path}: too many items`)
       if (prop.items) value.forEach((item, index) => check(item, prop.items, `${path}[${index}]`))
     }
-    if (isRecord(value) && prop.properties) {
+    if (isRecord(value)) {
       for (const name of prop.required || []) {
         if (!Object.prototype.hasOwnProperty.call(value, name)) errors.push(`${path}.${name}: required`)
       }
-      for (const name of Object.keys(prop.properties)) {
+      for (const name of Object.keys(prop.properties || {})) {
         if (Object.prototype.hasOwnProperty.call(value, name)) check(value[name], prop.properties[name], `${path}.${name}`)
       }
     }
   }
+  check(value, schema, path)
+  return errors
+}
+
+function prepareInputs (inputs, data) {
+  const errors = []
+  const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
   const visit = (fields, target, prefix='') => {
     for (const input of fields || []) {
       if (input.type === 'button' || input.type === 'action') continue
@@ -319,7 +375,7 @@ function prepareInputs (inputs, data) {
         if (!Object.prototype.hasOwnProperty.call(target, name)) continue
       }
       const value = target[name]
-      if (value === null && (input.nullable === true || input.default === null)) continue
+      if (input.valueSchema === undefined && value === null && (input.nullable === true || input.default === null)) continue
       if (input.type === 'group') {
         if (!isRecord(value)) errors.push(`${path}: expected object`)
         else {
@@ -333,7 +389,7 @@ function prepareInputs (inputs, data) {
         if (['table', 'object'].includes(input.type)) {
           try { assertJsonValue(value) } catch (error) { errors.push(path + ': ' + error.message); continue }
         }
-        check(value, jseeInputsToJsonSchema([input]).properties[name], path)
+        errors.push(...jsonShapeErrors(value, jseeInputsToJsonSchema([input]).properties[name], path))
       }
     }
   }
@@ -349,4 +405,4 @@ function prepareInputs (inputs, data) {
   return result
 }
 
-module.exports = { tableOutputJsonSchema, matchesFileAccept, assertSchemaVersion, cloneSchema, getOptionValue, collectInputValues, getInputDefaultValue, jseeInputsToJsonSchema, prepareInputs }
+module.exports = { getValueSchema, assertValueSchema, assertShapedValue, jsonShapeErrors, tableOutputJsonSchema, matchesFileAccept, assertSchemaVersion, cloneSchema, getOptionValue, collectInputValues, getInputDefaultValue, jseeInputsToJsonSchema, prepareInputs }

@@ -5,7 +5,7 @@ const path = require('path')
 const crypto = require('crypto')
 const { pathToFileURL } = require('url')
 const { resolveInside, makeHttpError } = require('./files')
-const { assertSchemaVersion, prepareInputs, jseeInputsToJsonSchema } = require('./schema')
+const { getValueSchema, jsonShapeErrors, assertSchemaVersion, prepareInputs, jseeInputsToJsonSchema } = require('./schema')
 const { isBinaryLike, isRecordObject, outputLookupNames, normalizeFileOutputValue, flattenJseeOutputs,
   jseeOutputsToJsonSchema, invocationUnsupportedReason } = require('./utils')
 const vocabulary = require('../schema.json').definitions
@@ -38,6 +38,7 @@ function validateDescriptor (schema) {
       if (!isRecordObject(field)) { errors.push(at + ' should be an object'); return }
       if (field.type !== undefined && !vocabulary[kind + 'Type'].enum.includes(field.type)) errors.push(at + '.type is not recognized')
       if (field.name !== undefined && (typeof field.name !== 'string' || !field.name)) errors.push(at + '.name should be a nonempty string')
+      try { getValueSchema(field) } catch (error) { errors.push(at + ': ' + error.message) }
       if (field.type === 'group') {
         const scope = kind === 'output' || !field.name ? names : new Set()
         checkFields(field.elements, kind, at + '.elements', scope)
@@ -154,37 +155,7 @@ function jsonValue (value, at, seen=new Set()) {
 // Validate only the JSON Schema vocabulary emitted by our built-in output mappings.
 // This is not an author-supplied JSON Schema interpreter. Fail closed if mappings grow.
 function outputShapeError (value, schema, at='outputs') {
-  const supported = ['type', 'oneOf', 'anyOf', 'properties', 'required', 'items', 'additionalProperties', 'patternProperties']
-  for (const key of Object.keys(schema)) if (!supported.includes(key)) return at + ': unsupported output schema keyword ' + key
-  if (schema.anyOf && !schema.anyOf.some(option => !outputShapeError(value, option, at))) return at + ': does not match the declared output shape'
-  if (schema.oneOf && schema.oneOf.filter(option => !outputShapeError(value, option, at)).length !== 1) return at + ': does not match the declared output shape'
-  const matches = { object: isRecordObject(value), array: Array.isArray(value), string: typeof value === 'string',
-    number: typeof value === 'number' && Number.isFinite(value), integer: Number.isInteger(value), boolean: typeof value === 'boolean' }
-  if (schema.type && !matches[schema.type]) return at + ': expected ' + schema.type
-  if (Array.isArray(value) && schema.items) {
-    for (let index = 0; index < value.length; index++) {
-      const error = outputShapeError(value[index], schema.items, `${at}[${index}]`)
-      if (error) return error
-    }
-  }
-  if (isRecordObject(value)) {
-    for (const name of schema.required || []) if (!Object.hasOwn(value, name)) return at + '.' + name + ': required'
-    for (const name of Object.keys(value)) {
-      const properties = schema.properties || {}
-      let declared = Object.hasOwn(properties, name)
-      for (const [pattern, rule] of Object.entries(schema.patternProperties || {})) {
-        if (!new RegExp(pattern).test(name)) continue
-        declared = true
-        const error = outputShapeError(value[name], rule, at + '.' + name)
-        if (error) return error
-      }
-      if (Object.hasOwn(properties, name)) {
-        const error = outputShapeError(value[name], properties[name], at + '.' + name)
-        if (error) return error
-      } else if (!declared && schema.additionalProperties === false) return at + '.' + name + ': undeclared output'
-    }
-  }
-  return null
+  return jsonShapeErrors(value, schema, at)[0] || null
 }
 
 class ArtifactStore {

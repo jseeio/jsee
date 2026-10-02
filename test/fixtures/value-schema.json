@@ -1,0 +1,6 @@
+[
+ {"name":"nested record","schema":{"type":"object","properties":{"rows":{"type":"array","items":{"type":"object","properties":{"count":{"type":"integer","minimum":0},"label":{"type":["string","null"],"maxLength":2}},"required":["count"],"additionalProperties":false},"minItems":1}},"required":["rows"],"additionalProperties":false},"valid":[{"rows":[{"count":0,"label":null}]},{"rows":[{"count":2,"label":"😀😀"}]}],"invalid":[{},null,{"rows":[]},{"rows":[{}]},{"rows":[{"count":-1}]},{"rows":[{"count":false}]},{"rows":[{"count":0,"x":1}]},{"rows":[{"count":0,"label":"abc"}]},{"rows":[{"count":0}],"extra":1}]},
+ {"name":"root list","schema":{"type":"array","items":{"type":"string","enum":["a","b"]},"maxItems":2},"valid":[[],["a","b"]],"invalid":[["c"],["a","a","b"],{}]},
+ {"name":"required without properties","schema":{"type":"object","required":["x"]},"valid":[{"x":null}],"invalid":[{}]},
+ {"name":"JSON Schema constraints only apply to their type","schema":{"minimum":0,"minLength":2},"valid":[null,{},[1],true,"ok",1],"invalid":[-1,"a"]}
+]

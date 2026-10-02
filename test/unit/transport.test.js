@@ -399,3 +399,31 @@ test('concurrent readers never observe an incomplete registration manifest', () 
     expect(new ArtifactStore({ directory }).entries.size).toBe(1)
   } finally { spy.mockRestore(); fs.rmSync(directory, { recursive: true, force: true }) }
 })
+
+test.each(require('../fixtures/value-schema.json'))('valueSchema: $name', fixture => {
+  const { prepareInputs } = require('../../src/schema')
+  const field = { name: 'info', type: 'object', valueSchema: fixture.schema }
+  const schema = { model: { code: 'function model(data) { return data }' }, inputs: [field], outputs: [field] }
+  const store = new ArtifactStore()
+  try {
+    expect(validateDescriptor(schema).valid).toBe(true)
+    const description = inspectSchema(schema)
+    expect(description.inputSchema.properties.info).toEqual(fixture.schema)
+    expect(description.outputSchema.properties.info).toEqual(fixture.schema)
+    const accepts = new Ajv({ strict: false }).compile(fixture.schema)
+    for (const [values, valid] of [[fixture.valid, true], [fixture.invalid, false]]) {
+      for (const info of values) {
+        expect(accepts(info)).toBe(valid)
+        if (valid) expect(prepareInputs([field], { info })).toEqual({ info })
+        else expect(() => prepareInputs([field], { info })).toThrow()
+        const run = formatRun(schema, { runId: crypto.randomUUID(), status: 'succeeded', result: { info } }, store)
+        expect(run.status).toBe(valid ? 'succeeded' : 'failed')
+      }
+    }
+  } finally { store.close() }
+})
+
+test.each([{ $ref: 'https://example.com/schema' }, { type: 'wat' }, { items: [] }, { required: 'x' }, { extra: true }, { properties: { x: { pattern: 'x' } } }, { minimum: '0' }])('reject unsupported valueSchema %j', valueSchema => {
+  const field = { name: 'x', type: 'object', valueSchema }
+  expect(validateDescriptor({ model: { code: 'function model() {}' }, inputs: [field], outputs: [field] }).valid).toBe(false)
+})

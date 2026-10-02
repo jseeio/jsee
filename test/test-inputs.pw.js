@@ -1432,3 +1432,28 @@ test('file accept is forwarded and typed media honors the existing file operatio
   await page.goto(urlQueryEscaped(schema))
   await expect(page.getByLabel('photo', { exact: true })).toBeDisabled()
 })
+
+test('object valueSchema validates browser inputs and outputs without coercion', async ({ page }) => {
+  await page.goto('http://localhost:8484/load/')
+  await page.evaluate(async () => {
+    if (window.app) window.app.destroy()
+    document.body.innerHTML = '<div id="shape-test"></div>'
+    const shape = { type: 'array', items: { type: 'integer', minimum: 0 } }
+    window.app = new JSEE({ container: '#shape-test', schema: {
+      persist: false, model: { worker: false, autorun: false, code: 'function model(data) { return self.badOutput ? ["wrong"] : data.info }' },
+      inputs: [{ name: 'info', type: 'object', valueSchema: shape, default: [1] }],
+      outputs: [{ name: 'result', type: 'object', valueSchema: shape }]
+    } })
+    await window.app._initPromise
+  })
+  expect(await page.evaluate(() => window.app.run())).toBe(true)
+  expect(await page.evaluate(() => window.app.data.outputs[0].value)).toEqual([1])
+  await page.getByLabel('info', { exact: true }).fill('["1"]')
+  expect(await page.evaluate(() => window.app.run())).toBe(false)
+  await page.getByLabel('info', { exact: true }).fill('[]')
+  expect(await page.evaluate(() => window.app.run())).toBe(true)
+  expect(await page.evaluate(() => window.app.data.outputs[0].value)).toEqual([])
+  await page.evaluate(() => { self.badOutput = true })
+  expect(await page.evaluate(() => window.app.run())).toBe(false)
+  expect(await page.evaluate(() => window.app.data.outputs[0].value)).toEqual([])
+})

@@ -414,3 +414,32 @@ def test_large_uploaded_file_through_wsgi(tmp_path):
 def test_non_json_structured_values(value):
     with pytest.raises(ValueError):
         runtime._prepare_inputs([{'name': 'value', 'type': 'object'}], {'value': value})
+
+
+@pytest.mark.parametrize('fixture', json.loads((ROOT / 'test/fixtures/value-schema.json').read_text()), ids=lambda f: f['name'])
+def test_value_schema(fixture):
+    field = {'name': 'info', 'type': 'object', 'valueSchema': fixture['schema']}
+    schema = {'model': {'code': 'def model(info): return info', 'type': 'py'}, 'inputs': [field], 'outputs': [field]}
+    store = ArtifactStore()
+    try:
+        assert validate_descriptor(schema)['valid']
+        description = inspect_schema(schema)
+        assert description['inputSchema']['properties']['info'] == fixture['schema']
+        assert description['outputSchema']['properties']['info'] == fixture['schema']
+        for values, valid in ((fixture['valid'], True), (fixture['invalid'], False)):
+            for info in values:
+                if valid:
+                    assert runtime._prepare_inputs([field], {'info': info}) == {'info': info}
+                else:
+                    with pytest.raises(ValueError):
+                        runtime._prepare_inputs([field], {'info': info})
+                run = format_run(schema, {'runId': str(uuid.uuid4()), 'status': 'succeeded', 'result': {'info': info}}, store)
+                assert run['status'] == ('succeeded' if valid else 'failed')
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize('shape', [{'$ref': 'https://example.com/schema'}, {'type': 'wat'}, {'items': []}, {'required': 'x'}, {'extra': True}, {'properties': {'x': {'pattern': 'x'}}}, {'minimum': '0'}])
+def test_reject_unsupported_value_schema(shape):
+    field = {'name': 'x', 'type': 'object', 'valueSchema': shape}
+    assert not validate_descriptor({'model': {'code': 'def model(): pass', 'type': 'py'}, 'inputs': [field], 'outputs': [field]})['valid']

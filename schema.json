@@ -34,6 +34,7 @@
     "page": { "$ref": "#/definitions/page" }
   },
   "definitions": {
+    "valueSchema": {"type": "object", "additionalProperties": false, "properties": {"type": {"anyOf": [{"enum": ["object", "array", "string", "number", "integer", "boolean", "null"]}, {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["object", "array", "string", "number", "integer", "boolean", "null"]}}]}, "properties": {"type": "object", "additionalProperties": {"$ref": "#/definitions/valueSchema"}}, "items": {"$ref": "#/definitions/valueSchema"}, "required": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}, "additionalProperties": {"type": "boolean"}, "enum": {"type": "array", "minItems": 1}, "description": {"type": "string"}, "minimum": {"type": "number"}, "maximum": {"type": "number"}, "minLength": {"type": "integer", "minimum": 0}, "maxLength": {"type": "integer", "minimum": 0}, "minItems": {"type": "integer", "minimum": 0}, "maxItems": {"type": "integer", "minimum": 0}}},
     "inputType": {
       "enum": ["int", "float", "number", "string", "color", "text", "categorical", "select", "bool", "checkbox", "file", "group", "action", "button", "slider", "radio", "toggle", "date", "multi-select", "range", "folder", "table", "object", "image", "audio", "video"]
     },
@@ -81,7 +82,9 @@
     },
     "input": {
       "type": "object",
+      "dependencies": { "valueSchema": { "required": ["type"], "properties": { "type": { "const": "object" } } } },
       "properties": {
+        "valueSchema": { "$ref": "#/definitions/valueSchema" },
         "name": { "type": "string", "minLength": 1 },
         "type": { "$ref": "#/definitions/inputType" },
         "label": { "type": "string" },
@@ -129,7 +132,9 @@
     },
     "output": {
       "type": "object",
+      "dependencies": { "valueSchema": { "required": ["type"], "properties": { "type": { "const": "object" } } } },
       "properties": {
+        "valueSchema": { "$ref": "#/definitions/valueSchema" },
         "name": { "type": "string" },
         "type": { "$ref": "#/definitions/outputType" },
         "label": { "type": "string" },

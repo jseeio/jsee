@@ -14,7 +14,7 @@ import uuid
 import urllib.parse
 import weakref
 
-from .jsee import (_validate_schema_version, _prepare_inputs, _flatten_outputs,
+from .jsee import (_get_value_schema, _json_shape_errors, _validate_schema_version, _prepare_inputs, _flatten_outputs,
                    _invocation_unsupported_reason, jsee_inputs_to_json_schema,
                    jsee_outputs_to_json_schema, DEFAULT_MAX_BODY_BYTES,
                    invoke_schema, _read_request_body, _read_request_inputs, _RequestError, _resolve_static_file)
@@ -62,6 +62,10 @@ def validate_descriptor(schema):
             if 'name' in field and (not isinstance(name, str) or not name):
                 errors.append(at + '.name should be a nonempty string')
                 name = None
+            try:
+                _get_value_schema(field)
+            except (ValueError, TypeError) as error:
+                errors.append(at + ': ' + str(error))
             if field.get('type') == 'group':
                 scope = names if kind == 'output' or not name else set()
                 check_fields(field.get('elements'), kind, at + '.elements', scope)
@@ -216,45 +220,8 @@ def json_value(value, at, seen=None):
 
 
 def output_shape_error(value, schema, at='outputs'):
-    # Only generated built-in output schemas enter here; fail closed on new vocabulary.
-    supported = ('type', 'oneOf', 'anyOf', 'properties', 'required', 'items', 'additionalProperties', 'patternProperties')
-    for key in schema:
-        if key not in supported:
-            return at + ': unsupported output schema keyword ' + key
-    if 'anyOf' in schema and not any(output_shape_error(value, option, at) is None for option in schema['anyOf']):
-        return at + ': does not match the declared output shape'
-    if 'oneOf' in schema and sum(output_shape_error(value, option, at) is None for option in schema['oneOf']) != 1:
-        return at + ': does not match the declared output shape'
-    # Python integers are already finite; converting them to float can overflow.
-    numeric = type(value) is int or type(value) is float and math.isfinite(value)
-    matches = {'object': isinstance(value, dict), 'array': isinstance(value, list), 'string': isinstance(value, str),
-               'number': numeric, 'integer': numeric and value == int(value), 'boolean': isinstance(value, bool)}
-    if schema.get('type') and not matches.get(schema['type']):
-        return at + ': expected ' + schema['type']
-    if isinstance(value, list) and 'items' in schema:
-        for index, item in enumerate(value):
-            error = output_shape_error(item, schema['items'], '{}[{}]'.format(at, index))
-            if error:
-                return error
-    if isinstance(value, dict):
-        for name in schema.get('required', []):
-            if name not in value:
-                return at + '.' + name + ': required'
-        for name, item in value.items():
-            declared = name in schema.get('properties', {})
-            for pattern, rule in schema.get('patternProperties', {}).items():
-                if re.search(pattern, name):
-                    declared = True
-                    error = output_shape_error(item, rule, at + '.' + name)
-                    if error:
-                        return error
-            if name in schema.get('properties', {}):
-                error = output_shape_error(item, schema['properties'][name], at + '.' + name)
-                if error:
-                    return error
-            elif not declared and schema.get('additionalProperties') is False:
-                return at + '.' + name + ': undeclared output'
-    return None
+    errors = _json_shape_errors(value, schema, at)
+    return errors[0] if errors else None
 
 
 class ArtifactStore:

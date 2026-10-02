@@ -12,6 +12,7 @@ import math
 import io
 import json
 import os
+import re
 import typing
 import types
 import importlib.util
@@ -345,6 +346,49 @@ def _option_schema(options):
   return {'type': types[0] if len(types) == 1 else types, 'enum': values}
 
 
+def _assert_value_schema(schema, at='valueSchema'):
+  _assert_json_value(schema)
+  if not isinstance(schema, dict):
+    raise ValueError(at + ': expected schema object')
+  keywords = ('type', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'minimum', 'maximum', 'minLength', 'maxLength', 'minItems', 'maxItems', 'description')
+  for key in schema:
+    if key not in keywords:
+      raise ValueError(at + ': unsupported keyword ' + key)
+  if 'type' in schema:
+    types = schema['type'] if isinstance(schema['type'], list) else [schema['type']]
+    if not types or any(kind not in ('object', 'array', 'string', 'number', 'integer', 'boolean', 'null') for kind in types) or len(set(types)) != len(types):
+      raise ValueError(at + '.type: invalid JSON type')
+  if 'properties' in schema:
+    if not isinstance(schema['properties'], dict):
+      raise ValueError(at + '.properties: expected object')
+    for name, child in schema['properties'].items():
+      _assert_value_schema(child, at + '.properties.' + name)
+  if 'items' in schema:
+    _assert_value_schema(schema['items'], at + '.items')
+  if 'required' in schema:
+    names = schema['required']
+    if not isinstance(names, list) or any(not isinstance(name, str) for name in names) or len(set(names)) != len(names):
+      raise ValueError(at + '.required: expected unique strings')
+  if 'additionalProperties' in schema and type(schema['additionalProperties']) is not bool:
+    raise ValueError(at + '.additionalProperties: expected boolean')
+  if 'enum' in schema and (not isinstance(schema['enum'], list) or not schema['enum']):
+    raise ValueError(at + '.enum: expected nonempty array')
+  if 'description' in schema and not isinstance(schema['description'], str):
+    raise ValueError(at + '.description: expected string')
+  for key in ('minimum', 'maximum', 'minLength', 'maxLength', 'minItems', 'maxItems'):
+    if key in schema and (type(schema[key]) not in (int, float) or not math.isfinite(schema[key]) or key not in ('minimum', 'maximum') and (schema[key] < 0 or schema[key] != int(schema[key]))):
+      raise ValueError(at + '.' + key + ': invalid bound')
+
+
+def _get_value_schema(field):
+  if 'valueSchema' not in field:
+    return None
+  if field.get('type') != 'object':
+    raise ValueError('valueSchema is only supported for type object')
+  _assert_value_schema(field['valueSchema'])
+  return copy.deepcopy(field['valueSchema'])
+
+
 def jsee_inputs_to_json_schema(inputs):
   """Convert JSEE inputs to JSON Schema (mirrors JS version)."""
   if inputs is not None and not isinstance(inputs, list):
@@ -360,6 +404,7 @@ def jsee_inputs_to_json_schema(inputs):
   for inp in (inputs or []):
     if not isinstance(inp, dict):
       raise ValueError('Input should be an object')
+    value_schema = _get_value_schema(inp)
     if inp.get('type') in ('button', 'action'):
       continue
     if inp.get('type') == 'group' and not inp.get('name'):
@@ -377,7 +422,8 @@ def jsee_inputs_to_json_schema(inputs):
     elif t == 'table':
       prop.update(_table_output_json_schema())
     elif t == 'object':
-      pass
+      if value_schema is not None:
+        prop.update(value_schema)
     elif t in ('image', 'audio', 'video'):
       prop.update({'type': 'object', 'properties': {'artifact': {'type': 'string', 'minLength': 1}}, 'required': ['artifact'], 'additionalProperties': False})
       prop['x-jsee-accept'] = inp.get('accept') or t + '/*'
@@ -435,7 +481,7 @@ def jsee_inputs_to_json_schema(inputs):
         prop['multipleOf'] = inp['step']
     if 'default' in inp:
       prop['default'] = inp['default']
-    if inp.get('nullable') is True or ('default' in inp and inp['default'] is None):
+    if value_schema is None and (inp.get('nullable') is True or ('default' in inp and inp['default'] is None)):
       if 'oneOf' in prop:
         prop['oneOf'].append({'type': 'null'})
       elif 'type' in prop:
@@ -463,12 +509,11 @@ def _assert_json_value(value, seen=None):
   seen.remove(id(value))
 
 
-def _prepare_inputs(inputs, data):
-  """Apply declared defaults and validate the contract shared by HTTP and WSGI."""
+def _json_shape_errors(value, schema, path):
   errors = []
   def matches(value, kind):
     if kind in ('integer', 'number'):
-      numeric = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+      numeric = type(value) is int or type(value) is float and math.isfinite(value)
       return numeric and (kind != 'integer' or value == int(value))
     if kind == 'boolean':
       return isinstance(value, bool)
@@ -486,6 +531,20 @@ def _prepare_inputs(inputs, data):
     return a == b
 
   def check(value, prop, path):
+    supported = ('type', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'minimum', 'maximum', 'multipleOf', 'minLength', 'maxLength', 'minItems', 'maxItems', 'description', 'default', 'oneOf', 'anyOf', 'patternProperties', 'x-jsee-accept')
+    for key in prop:
+      if key not in supported:
+        errors.append(path + ': unsupported schema keyword ' + key)
+        return
+    if 'anyOf' in prop and not any(not _json_shape_errors(value, option, path) for option in prop['anyOf']):
+      errors.append(path + ': does not match the declared shape')
+    if isinstance(value, dict):
+      for pattern, rule in prop.get('patternProperties', {}).items():
+        for key in value:
+          if re.search(pattern, key):
+            check(value[key], rule, path + '.' + key)
+    if 'maxLength' in prop and isinstance(value, str) and len(value) > prop['maxLength']:
+      errors.append(path + ': string is too long')
     if 'oneOf' in prop:
       count = 0
       for option in prop['oneOf']:
@@ -508,11 +567,11 @@ def _prepare_inputs(inputs, data):
       errors.append(path + ': value is not in options')
     if value is None:
       return
-    if 'minimum' in prop and value < prop['minimum']:
+    if type(value) in (int, float) and 'minimum' in prop and value < prop['minimum']:
       errors.append('{}: minimum is {}'.format(path, prop['minimum']))
-    if 'maximum' in prop and value > prop['maximum']:
+    if type(value) in (int, float) and 'maximum' in prop and value > prop['maximum']:
       errors.append('{}: maximum is {}'.format(path, prop['maximum']))
-    if prop.get('multipleOf', 0) > 0:
+    if type(value) in (int, float) and prop.get('multipleOf', 0) > 0:
       ratio = value / prop['multipleOf']
       if abs(ratio - round(ratio)) > 1e-9:
         errors.append('{}: expected a multiple of {}'.format(path, prop['multipleOf']))
@@ -524,14 +583,21 @@ def _prepare_inputs(inputs, data):
       if 'items' in prop:
         for index, item in enumerate(value):
           check(item, prop['items'], '{}[{}]'.format(path, index))
-    if isinstance(value, dict) and 'properties' in prop:
+    if isinstance(value, dict):
       for name in prop.get('required', []):
         if name not in value:
           errors.append(path + '.' + name + ': required')
-      for name, field in prop['properties'].items():
+      for name, field in prop.get('properties', {}).items():
         if name in value:
           check(value[name], field, path + '.' + name)
 
+  check(value, schema, path)
+  return errors
+
+
+def _prepare_inputs(inputs, data):
+  """Apply declared defaults and validate the contract shared by HTTP and WSGI."""
+  errors = []
   def visit(fields, target, prefix=''):
     for inp in fields or []:
       if inp.get('type') in ('button', 'action'):
@@ -551,7 +617,7 @@ def _prepare_inputs(inputs, data):
         if name not in target:
           continue
       value = target[name]
-      if value is None and (inp.get('nullable') is True or ('default' in inp and inp['default'] is None)):
+      if 'valueSchema' not in inp and value is None and (inp.get('nullable') is True or ('default' in inp and inp['default'] is None)):
         continue
       if inp.get('type') == 'group':
         if not isinstance(value, dict):
@@ -568,7 +634,7 @@ def _prepare_inputs(inputs, data):
           except (ValueError, TypeError, OverflowError):
             errors.append(path + ': expected a finite JSON value')
             continue
-        check(value, jsee_inputs_to_json_schema([inp])['properties'][name], path)
+        errors.extend(_json_shape_errors(value, jsee_inputs_to_json_schema([inp])['properties'][name], path))
   result = dict(data) if isinstance(data, dict) else {}
   if not isinstance(data, dict):
     errors.append('inputs: expected object')
@@ -638,6 +704,9 @@ def _file_like_output_json_schema():
 
 
 def jsee_output_to_json_schema(output):
+  shape = _get_value_schema(output)
+  if shape is not None:
+    return shape
   t = (output or {}).get('type')
   if t == 'int':
     return {'type': 'integer'}

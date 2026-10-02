@@ -1,4 +1,4 @@
-const { matchesFileAccept, tableOutputJsonSchema, assertSchemaVersion, jseeInputsToJsonSchema, collectInputValues } = require('./schema')
+const { getValueSchema, matchesFileAccept, tableOutputJsonSchema, assertSchemaVersion, jseeInputsToJsonSchema, collectInputValues } = require('./schema')
 const { DEFAULT_CHUNK_SIZE, STREAM_HIGH_WATER } = require('./constants')
 
 // https://stackoverflow.com/questions/8511281/check-if-a-value-is-an-object-in-javascript
@@ -2618,6 +2618,14 @@ function validateSchema (schema) {
     })
   }
 
+  const checkShapes = fields => {
+    for (const field of fields || []) {
+      try { getValueSchema(field) } catch (error) { report.errors.push(error.message) }
+      if (Array.isArray(field.elements)) checkShapes(field.elements)
+    }
+  }
+  if (Array.isArray(schema.inputs)) checkShapes(schema.inputs)
+  if (Array.isArray(schema.outputs)) checkShapes(schema.outputs)
   validateSecuritySchema(schema, report)
 
   return report
@@ -2687,6 +2695,8 @@ function fileLikeOutputJsonSchema () {
 }
 
 function jseeOutputToJsonSchema (output) {
+  const shape = getValueSchema(output)
+  if (shape !== undefined) return shape
   const type = output && output.type
   switch (type) {
     case 'int':
