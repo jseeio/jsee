@@ -1,5 +1,6 @@
 import { createVueApp } from './app'
-import Worker from './worker.js'
+import workerSource from '../dist/jsee.worker.mjs?worker-source'
+import classicWorkerSource from '../dist/jsee.worker.js?worker-source'
 
 const utils = require('./utils')
 const { outputLookupNames, collectOutputNames, cleanOutputMetadata } = utils
@@ -761,7 +762,28 @@ export default class JSEE {
 
   async initWorker (model) {
     // Init worker
-    const worker = new Worker()
+    const legacyPython = model.type === 'py' && !/\.mjs(?:[?#]|$)/.test(utils.normalizePyodideOptions(model).url)
+    const classic = model.type === 'py' ? legacyPython
+      : !['module', 'get', 'post'].includes(model.type) || model.type === 'module' && (model.imports || []).some(imp => !utils.isCssImport(imp.url))
+    const cachedEntry = model.workerUrl && utils.loadFromDOM(model.workerUrl)
+    const source = cachedEntry || (classic ? classicWorkerSource : workerSource)
+    let ownedUrl
+    let url = model.workerUrl
+    if (url && !cachedEntry) {
+      utils.assertNetworkAllowed(url, this.security, 'worker entry URL')
+      url = utils.getUrl(url)
+    } else if (location.protocol === 'file:') {
+      // Chromium rejects Blob module entry points at file origins asynchronously.
+      url = 'data:text/javascript;charset=utf-8,' + encodeURIComponent(source)
+    } else {
+      url = ownedUrl = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }))
+    }
+    let worker
+    try { worker = new globalThis.Worker(url, { type: classic ? 'classic' : 'module' }) }
+    catch (error) { if (ownedUrl) URL.revokeObjectURL(ownedUrl); throw error }
+    // Worker termination owns its bootstrap URL, including initialization failures.
+    const terminate = worker.terminate.bind(worker)
+    worker.terminate = () => { terminate(); if (ownedUrl) { URL.revokeObjectURL(ownedUrl); ownedUrl = null } }
     this._workers.push(worker)
 
     // Init worker with the model
@@ -871,8 +893,8 @@ export default class JSEE {
         acceptingMessages = false
       })
 
-      // Skip timeout for init call (loading model can be slow); apply to execution calls
-      if (isInitCall) return workerPromise
+      // Initialization may fetch large models, but must still have a finite deadline.
+      const deadline = isInitCall ? (model.initTimeout || 120000) : timeoutMs
 
       let timeoutId = null
       let settled = false
@@ -883,8 +905,8 @@ export default class JSEE {
           // Pipeline closures retain every worker, so rebuilding requires disposing the whole set.
           this._terminateWorkers()
           this._needsModelReinit = true
-          reject(new Error(`Worker timed out after ${timeoutMs}ms`))
-        }, timeoutMs)
+          reject(new Error(`Worker ${isInitCall ? 'initialization ' : ''}timed out after ${deadline}ms`))
+        }, deadline)
       })
       return Promise.race([workerPromise, timeoutPromise])
         .finally(() => {
@@ -903,7 +925,7 @@ export default class JSEE {
       _inputNames: Object.keys(collectInputValues(this.schema.inputs, () => null)),
       _security: this.security
     })
-    await modelFunc(modelInitPayload)
+    try { await modelFunc(modelInitPayload) } catch (error) { this._terminateWorkers(); throw error }
 
     // Worker will be in the context of each modelFunc
     return modelFunc
@@ -926,13 +948,8 @@ export default class JSEE {
     const preparedRuntimeOptions = await utils.preparePyodideRuntimeOptions(runtimeOptions, window)
     if (this._destroyed) return
     utils.assertPyodideNetworkAllowed(preparedRuntimeOptions, this.security)
-    if (typeof loadPyodide === 'undefined') {
-      const runtimeImport = preparedRuntimeOptions.code
-        ? { url: preparedRuntimeOptions.url, code: preparedRuntimeOptions.code }
-        : preparedRuntimeOptions.url
-      await utils.importScripts(runtimeImport)
-      if (this._destroyed) return
-    }
+    const loadPyodide = await utils.loadPyodideRuntime(preparedRuntimeOptions, window)
+    if (this._destroyed) return
     const pyodide = await loadPyodide(utils.getPyodideLoadOptions(preparedRuntimeOptions))
     if (this._destroyed) return
     if (model.imports && Array.isArray(model.imports) && model.imports.length) {
@@ -1479,6 +1496,11 @@ export default class JSEE {
   }
 
   async download (title='output') {
+    for (const model of this.model) {
+      if (model.type === 'py' && !utils.loadPyodideEmbeddedAssets(utils.normalizePyodideOptions(model))) {
+        throw new Error('Python download requires embedded runtime assets; generate the app with --bundle=pyodide-single first')
+      }
+    }
     // Cache the model
     const clone = document.cloneNode(true)
 
@@ -1532,12 +1554,21 @@ export default class JSEE {
 
     for (const model of this.model) {
       storeInHiddenElement(model.url, model.code)
+      if (model.workerUrl && !utils.loadFromDOM(model.workerUrl)) {
+        const response = await fetch(utils.getUrl(model.workerUrl))
+        if (!response.ok) throw new Error('Failed to download worker entry: ' + model.workerUrl)
+        storeInHiddenElement(model.workerUrl, await response.text())
+      }
       // Iterate over imports
-      if (model.imports) {
+      if (model.imports && model.type !== 'py') {
         for (let imp of model.imports) {
           // Store the import
-          const response = await fetch(imp.url)
-          const content = await response.text()
+          let content = imp.code || utils.loadFromDOM(imp._rawUrl || imp.url)
+          if (!content) {
+            const response = await fetch(imp.url)
+            if (!response.ok) throw new Error('Failed to download import: ' + imp.url)
+            content = await response.text()
+          }
           storeInHiddenElement(imp.url, content)
           // Remove any src-based script tags with the same URL
           const script = clone.querySelector('script[src="' + imp.url + '"]')

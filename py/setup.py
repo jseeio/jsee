@@ -6,7 +6,7 @@ from setuptools.command.sdist import sdist
 
 def require_runtime_assets():
     static = Path(__file__).parent / 'jsee' / 'static'
-    missing = [name for name in ('jsee.core.js', 'jsee.full.js', 'schema.json')
+    missing = [name for name in ('jsee.core.js', 'jsee.full.js', 'jsee.worker.mjs', 'jsee.worker.js', 'schema.json')
                if not (static / name).is_file() or not (static / name).stat().st_size]
     if missing:
         raise RuntimeError('Missing browser runtime assets: {}. Run npm run build '

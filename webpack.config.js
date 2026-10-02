@@ -27,6 +27,7 @@ module.exports = (env) => {
         },
         {
           test: /\.js$/,
+          resourceQuery: { not: [/worker-source/] },
           type: 'javascript/auto',
           loader: 'babel-loader'
         },
@@ -43,11 +44,8 @@ module.exports = (env) => {
           ]
         },
         {
-          test: /worker\.js$/,
-          loader: "worker-loader",
-          options: {
-            inline: 'no-fallback'
-          },
+          resourceQuery: /worker-source/,
+          type: 'asset/source'
         },
         {
           test: /\.scss$/,
@@ -98,5 +96,20 @@ module.exports = (env) => {
       : false
   }
 
-  return config
+  // Compile one protocol/source in both forms; classic JS retains importScripts. The browser embeds the same bytes shipped for external hosting.
+  const worker = module => ({
+    name: module ? 'module-worker' : 'classic-worker',
+    mode: env.DEVELOPMENT ? 'development' : 'production',
+    target: 'webworker',
+    entry: './src/worker.js',
+    experiments: { outputModule: module },
+    output: { path: path.resolve(__dirname, 'dist'), filename: module ? 'jsee.worker.mjs' : 'jsee.worker.js', module },
+    module: { rules: [{ test: /\.js$/, type: 'javascript/auto' }] },
+    optimization: config.optimization,
+    performance: { hints: false },
+    devtool: false
+  })
+  config.name = env.FULL ? 'full' : 'core'
+  config.dependencies = ['module-worker', 'classic-worker']
+  return [worker(true), worker(false), config]
 }

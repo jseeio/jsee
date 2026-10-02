@@ -119,6 +119,8 @@ export interface Model {
   type?: ModelType
   container?: 'object' | 'args'
   worker?: boolean
+  workerUrl?: string
+  initTimeout?: number
   timeout?: number
   method?: string
   export?: string

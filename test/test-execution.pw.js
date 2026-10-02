@@ -1147,3 +1147,59 @@ for (const runtime of ['node', 'python']) {
     }
   })
 }
+
+test('worker initialization has a bounded deadline', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    document.body.innerHTML = '<div id="deadline"></div>'
+    const app = new JSEE({ container: '#deadline', schema: {
+      model: { type: 'async-init', worker: true, initTimeout: 100, autorun: false, code: 'async function model() { await new Promise(() => {}) }' }
+    } })
+    const outcome = await Promise.race([app._initPromise.then(() => 'settled', () => 'rejected'), new Promise(resolve => setTimeout(() => resolve('hung'), 1500))])
+    const workers = app._workers.length
+    app.destroy()
+    return { outcome, workers }
+  })
+  expect(result.outcome).not.toBe('hung')
+  expect(result.workers).toBe(0)
+})
+
+test('dynamic classic worker retains imports, classes and globals', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const Original = window.Worker
+    const types = []
+    window.Worker = class extends Original { constructor(url, options) { types.push(options && options.type); super(url, options) } }
+    document.body.innerHTML = '<div id="module-worker"></div>'
+    const app = new JSEE({ container: '#module-worker', schema: {
+      model: { name: 'Model', type: 'class', method: 'run', worker: true, autorun: false,
+        imports: ['/test/fixtures/worker-compat.js'],
+        code: 'class Model { run(data) { return { answer: helper(data.x) * self.factor, moduleWorker: (()=>{try{importScripts();return false}catch(e){return true}})() } } }' },
+      inputs: [{ name: 'x', type: 'int', default: 2 }], outputs: [{ name: 'answer', type: 'number' }, { name: 'moduleWorker', type: 'bool' }]
+    } })
+    await app._initPromise
+    const ok = await app.run()
+    const values = app.data.outputs.map(o => o.value)
+    app.destroy(); window.Worker = Original
+    return { ok, values, types }
+  })
+  expect(result).toEqual({ ok: true, values: [9, false], types: ['classic'] })
+})
+
+test('classic imports preserve each script strictness and model globals', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    document.body.innerHTML = '<div id="script-scope"></div>'
+    const app = new JSEE({ container: '#script-scope', schema: {
+      model: { worker: true, autorun: false, imports: ['/test/fixtures/worker-strict.js'],
+        code: 'function model() { return { answer: this === self && self.strictImportLoaded } }' },
+      outputs: [{ name: 'answer', type: 'bool' }]
+    } })
+    await app._initPromise
+    const ok = await app.run()
+    const answer = app.data.outputs[0].value
+    app.destroy()
+    return { ok, answer }
+  })
+  expect(result).toEqual({ ok: true, answer: true })
+})

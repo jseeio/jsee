@@ -77,7 +77,8 @@ function validateDescriptor (schema) {
     const at = `model[${index}]`
     if (!isRecordObject(model)) { errors.push(at + ' should be an object'); return }
     if (model.type !== undefined && !vocabulary.modelType.enum.includes(model.type)) errors.push(at + '.type is not recognized')
-    for (const key of ['name', 'url', 'entry']) {
+    if (model.initTimeout !== undefined && (typeof model.initTimeout !== 'number' || !Number.isFinite(model.initTimeout) || model.initTimeout <= 0)) errors.push(at + '.initTimeout should be positive and finite')
+    for (const key of ['name', 'url', 'entry', 'workerUrl']) {
       if (model[key] !== undefined && (typeof model[key] !== 'string' || !model[key])) errors.push(at + '.' + key + ' should be a nonempty string')
     }
     if (model.entry && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(model.entry)) errors.push(at + '.entry is invalid')

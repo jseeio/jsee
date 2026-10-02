@@ -726,7 +726,7 @@ describe('Pyodide entry helpers', () => {
   })
 
   test('normalizes default and custom Pyodide runtime options', () => {
-    expect(normalizePyodideOptions({}).url).toBe('https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js')
+    expect(normalizePyodideOptions({}).url).toBe('https://cdn.jsdelivr.net/pyodide/v314.0.7/full/pyodide.mjs')
 
     expect(normalizePyodideOptions({
       pyodide: 'https://cdn.jsdelivr.net/pyodide/v314.0.2/full/pyodide.js'

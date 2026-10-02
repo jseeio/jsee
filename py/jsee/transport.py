@@ -122,7 +122,9 @@ def validate_descriptor(schema):
             continue
         if 'type' in model and model['type'] not in vocabulary['modelType']['enum']:
             errors.append(at + '.type is not recognized')
-        for key in ('name', 'url', 'entry'):
+        if 'initTimeout' in model and (type(model['initTimeout']) not in (int, float) or not math.isfinite(model['initTimeout']) or model['initTimeout'] <= 0):
+            errors.append(at + '.initTimeout should be positive and finite')
+        for key in ('name', 'url', 'entry', 'workerUrl'):
             if key in model and (not isinstance(model[key], str) or not model[key]):
                 errors.append(at + '.' + key + ' should be a nonempty string')
         if isinstance(model.get('entry'), str) and not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', model['entry']):

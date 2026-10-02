@@ -45,7 +45,9 @@
       "types": "./src/schema.d.ts",
       "default": "./src/schema.js"
     },
-    "./schema.json": "./schema.json"
+    "./schema.json": "./schema.json",
+    "./dist/jsee.worker.mjs": "./dist/jsee.worker.mjs",
+    "./dist/jsee.worker.js": "./dist/jsee.worker.js"
   },
   "unpkg": "dist/jsee.core.js",
   "jsdelivr": "dist/jsee.core.js",
@@ -62,7 +64,9 @@
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
-    "schema.json"
+    "schema.json",
+    "dist/jsee.worker.mjs",
+    "dist/jsee.worker.js"
   ],
   "private": false,
   "scripts": {
@@ -78,14 +82,14 @@
     "test:e2e": "npx playwright test test/test-basic.pw.js test/test-inputs.pw.js test/test-execution.pw.js",
     "test:basic": "npx playwright test test/test-basic.pw.js",
     "test:inputs": "npx playwright test test/test-inputs.pw.js",
-    "test:python": "npx playwright test test/test-python.pw.js test/test-python-apps.pw.js --workers=1",
+    "test:python": "npx playwright test test/test-python.pw.js test/test-python-apps.pw.js test/test-worker-offline.pw.js --workers=1",
     "test:python-native": "python -m pytest py/test/ -q",
     "test:python-apps-native": "python -m pytest test/python/ -q",
     "test:ml": "npx playwright test test/test-ml-apps.pw.js --workers=1",
     "test:probes": "node test/probes/run.js",
     "test-head": "HEADLESS=false npm test",
     "lint": "eslint src/ test/",
-    "copy-runtime-py": "mkdir -p py/jsee/static && cp dist/jsee.core.js py/jsee/static/jsee.core.js && cp dist/jsee.full.js py/jsee/static/jsee.full.js && cp schema.json py/jsee/static/schema.json",
+    "copy-runtime-py": "mkdir -p py/jsee/static && cp dist/jsee.core.js py/jsee/static/jsee.core.js && cp dist/jsee.full.js py/jsee/static/jsee.full.js && cp dist/jsee.worker.* py/jsee/static/ && cp schema.json py/jsee/static/schema.json",
     "test:types": "node node_modules/typescript/lib/tsc.js --project test/types/tsconfig.json",
     "test:mcp": "node --test test/mcp/*.test.js"
   },
@@ -155,7 +159,6 @@
     "vue-loader": "^17.0.1",
     "webpack": "^5.78.0",
     "webpack-cli": "^5.0.1",
-    "worker-loader": "^3.0.8",
     "@modelcontextprotocol/client": "2.0.0"
   },
   "resolutions": {

@@ -211,7 +211,7 @@ const SECURE_SECURITY_OPTIONS = {
   allowFileViewer: false
 }
 
-const DEFAULT_PYODIDE_URL = 'https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js'
+const DEFAULT_PYODIDE_URL = 'https://cdn.jsdelivr.net/pyodide/v314.0.7/full/pyodide.mjs'
 
 const SAFE_HTML_TAGS = new Set([
   'a',
@@ -925,8 +925,8 @@ function resolveUrlLike (url) {
 function inferPyodideIndexURL (url) {
   if (typeof url !== 'string' || !url) return undefined
   const clean = url.split('#')[0].split('?')[0]
-  if (!/\/pyodide\.js$/i.test(clean)) return undefined
-  return clean.slice(0, clean.length - 'pyodide.js'.length)
+  if (!/\/pyodide\.m?js$/i.test(clean)) return undefined
+  return clean.slice(0, clean.lastIndexOf('/') + 1)
 }
 
 function normalizePyodideOptions (model={}, options={}) {
@@ -983,6 +983,23 @@ function normalizePyodideOptions (model={}, options={}) {
     createPyodideModule,
     packages
   }
+}
+
+async function loadPyodideRuntime (options, root) {
+  if (/\.mjs(?:[?#]|$)/.test(options.url)) {
+    const url = options.code ? URL.createObjectURL(new Blob([options.code], { type: 'text/javascript' })) : options.url
+    try { return (await import(/* webpackIgnore: true */ url)).loadPyodide }
+    finally { if (options.code) URL.revokeObjectURL(url) }
+  }
+  // The worker factory routes legacy .js Python loaders to the classic build.
+  if (!root.loadPyodide) {
+    if (root.document) await importScripts(options.code ? { url: options.url, code: options.code } : options.url)
+    else {
+      const url = options.code ? URL.createObjectURL(new Blob([options.code], { type: 'text/javascript' })) : options.url
+      try { root.importScripts(url) } finally { if (options.code) URL.revokeObjectURL(url) }
+    }
+  }
+  return root.loadPyodide
 }
 
 function getPyodideLoadOptions (pyodideOptions) {
@@ -1193,8 +1210,10 @@ async function importEmbeddedAsmJs (asset, targetGlobal) {
 
 async function importEmbeddedAsmModule (asset, targetGlobal) {
   const url = createEmbeddedAssetObjectUrl(asset, targetGlobal)
-  const mod = await import(/* webpackIgnore: true */ url)
-  return mod && (mod.default || mod.createPyodideModule)
+  try {
+    const mod = await import(/* webpackIgnore: true */ url)
+    return mod && (mod.default || mod.createPyodideModule)
+  } finally { (targetGlobal || globalThis).URL.revokeObjectURL(url) }
 }
 
 async function preparePyodideRuntimeOptions (pyodideOptions, targetGlobal) {
@@ -1951,6 +1970,9 @@ function validateModelSchema (model, path, report) {
   if ((typeof model.worker !== 'undefined') && (typeof model.worker !== 'boolean')) {
     report.warnings.push(`${path}.worker should be a boolean`)
   }
+
+  if (model.initTimeout !== undefined && (typeof model.initTimeout !== 'number' || !Number.isFinite(model.initTimeout) || model.initTimeout <= 0)) report.errors.push(`${path}.initTimeout should be a positive finite number`)
+  if (model.workerUrl !== undefined && (typeof model.workerUrl !== 'string' || !model.workerUrl)) report.errors.push(`${path}.workerUrl should be a nonempty string`)
 
   if (typeof model.timeout !== 'undefined') {
     const timeoutValid = (typeof model.timeout === 'number') && !Number.isNaN(model.timeout) && (model.timeout > 0)
@@ -3052,6 +3074,7 @@ module.exports = {
   importScripts,
   getUrl,
   normalizePyodideOptions,
+  loadPyodideRuntime,
   getPyodideLoadOptions,
   loadPyodideEmbeddedAssets,
   preparePyodideRuntimeOptions,

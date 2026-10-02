@@ -2856,6 +2856,13 @@ Documentation: https://jsee.org
       if (offlineStrictBundle) {
         assertOfflineStrictModel(m, assetRoot, bundleOutputDirs)
       }
+      if (m.workerUrl) {
+        const entry = resolveFetchImport(m.workerUrl, undefined, assetRoot)
+        const source = entry.localFilePath
+          ? fs.readFileSync(entry.localFilePath, 'utf8')
+          : await readRemoteText(entry.remoteUrl)
+        appendHiddenAsset(m.workerUrl, source)
+      }
       if (m.type === 'get' || m.type === 'post') {
         continue
       }

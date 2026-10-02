@@ -1,4 +1,4 @@
-# Match the numerical packages in the pinned Pyodide 0.24.1 distribution.
+# Native baseline for the shared fixtures; browser tests also cover Pyodide 314.0.7 with NumPy 2.4.6/pandas 3.0.2.
 numpy==1.25.2
 pandas==1.5.3
 pytest==8.4.2

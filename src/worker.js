@@ -46,13 +46,7 @@ async function initPython (model) {
   }
   const runtimeOptions = await utils.preparePyodideRuntimeOptions(pyodideOptions, self)
   utils.assertPyodideNetworkAllowed(runtimeOptions, security, 'Pyodide runtime in worker')
-  if (typeof loadPyodide === 'undefined') {
-    if (runtimeOptions.code) {
-      importScripts(URL.createObjectURL(new Blob([runtimeOptions.code], { type: 'text/javascript' })))
-    } else {
-      importScripts(runtimeOptions.url)
-    }
-  }
+  const loadPyodide = await utils.loadPyodideRuntime(runtimeOptions, self)
   const pyodide = await loadPyodide(utils.getPyodideLoadOptions(runtimeOptions))
   if (model.imports && Array.isArray(model.imports) && model.imports.length) {
     if (security.allowNetwork === false && !runtimeOptions.embeddedAssets) {
@@ -87,9 +81,14 @@ async function initPython (model) {
   }
 }
 
+function importClassicCode (code) {
+  const url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }))
+  try { importScripts(url) } finally { URL.revokeObjectURL(url) }
+}
+
 async function initJS (model) {
   log('Init JS')
-  this.container = model.container
+  self.container = model.container
   const security = utils.normalizeSecurityOptions(model._security)
 
   if (model.imports && model.imports.length) {
@@ -103,7 +102,7 @@ async function initJS (model) {
       if (imp.code) {
         utils.assertEvalAllowed(security, `worker import[${index}] inline script`)
         log('Importing from DOM:', imp.url)
-        importScripts(URL.createObjectURL(new Blob([imp.code], { type: 'text/javascript' })))
+        importClassicCode(imp.code)
       } else {
         utils.assertNetworkAllowed(imp._rawUrl || imp.url, security, `worker import[${index}]`)
         log('Importing from network:', imp.url)
@@ -125,7 +124,7 @@ async function initJS (model) {
   } else if (model.code) {
     utils.assertEvalAllowed(security, 'worker JavaScript model.code')
     log('Load code as a string', model)
-    importScripts(URL.createObjectURL(new Blob([model.code], { type: 'text/javascript' })))
+    importClassicCode(model.code)
   } else if (model.url) {
     utils.assertNetworkAllowed(model.url, security, 'worker model URL')
     const workerUrl = model._workerUrl || model.url
@@ -139,7 +138,7 @@ async function initJS (model) {
     utils.assertEvalAllowed(security, 'worker class lookup')
     target = eval(model.name)
   } else if (model.type !== 'module') {
-    target = this[model.name]
+    target = self[model.name]
   }
 
   let modelFunc = await utils.getModelFuncJS(model, target, {
@@ -157,7 +156,7 @@ function initAPI (model) {
   return utils.getModelFuncAPI(model, log, onChunk, model._security)
 }
 
-onmessage = async function (e) {
+self.onmessage = async function (e) {
   const message = e.data
   // Inspect the runtime envelope before unwrapping model data, which may use any keys.
   if (message && message._jsee === 'cancel') {

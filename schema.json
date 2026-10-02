@@ -64,6 +64,8 @@
         "type": { "$ref": "#/definitions/modelType" },
         "container": { "enum": ["object", "args"] },
         "worker": { "type": "boolean" },
+        "workerUrl": { "type": "string" },
+        "initTimeout": { "type": "number", "exclusiveMinimum": 0 },
         "timeout": { "type": "number", "exclusiveMinimum": 0 },
         "method": { "type": "string" },
         "export": { "type": "string" },

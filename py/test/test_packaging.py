@@ -17,7 +17,7 @@ from packaging.requirements import Requirement
 
 ROOT = Path(__file__).resolve().parents[2]
 ASSETS = ('jsee.core.js', 'jsee.full.js')
-PACKAGE_ASSETS = ASSETS + ('schema.json',)
+PACKAGE_ASSETS = ASSETS + ('jsee.worker.mjs', 'jsee.worker.js', 'schema.json')
 
 
 def asset_source(name):

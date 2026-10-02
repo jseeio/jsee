@@ -9,7 +9,7 @@ module.exports = defineConfig({
     headless: process.env.HEADLESS !== 'false'
   },
   projects: [
-    { name: 'chromium', use: { browserName: 'chromium' } }
+    { name: process.env.JSEE_TEST_BROWSER || 'chromium', use: { browserName: process.env.JSEE_TEST_BROWSER || 'chromium' } }
   ],
   webServer: {
     command: 'npx http-server -p 8484 --silent --cors',

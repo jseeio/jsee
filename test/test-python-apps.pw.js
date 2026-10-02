@@ -27,8 +27,8 @@ for (const worker of [false, true]) {
         schema.model.worker = worker
         schema.model.autorun = false
         schema.model.pyodide = {
-          url: '/tmp/test-assets/pyodide-0.24.1/pyodide.js',
-          indexURL: '/tmp/test-assets/pyodide-0.24.1/'
+          url: '/tmp/test-assets/pyodide-314.0.7/pyodide.mjs',
+          indexURL: '/tmp/test-assets/pyodide-314.0.7/'
         }
         window.app = new JSEE({ container: '#app', schema, verbose: false })
         await window.app._initPromise
@@ -78,7 +78,7 @@ for (const worker of [false, true]) {
       window.app = new JSEE({ container: '#media-python', verbose: false, schema: {
         persist: false,
         model: { name: 'model', entry: 'model', type: 'py', worker, autorun: false,
-          pyodide: { url: '/tmp/test-assets/pyodide-0.24.1/pyodide.js', indexURL: '/tmp/test-assets/pyodide-0.24.1/' },
+          pyodide: { url: '/tmp/test-assets/pyodide-314.0.7/pyodide.mjs', indexURL: '/tmp/test-assets/pyodide-314.0.7/' },
           code: 'def model(photo):\n    return {"values": list(bytes(photo))}' },
         inputs: [{ name: 'photo', type: 'image' }], outputs: [{ name: 'values', type: 'object' }]
       } })
@@ -89,3 +89,23 @@ for (const worker of [false, true]) {
     expect(await page.evaluate(() => window.app.data.outputs[0].value)).toEqual([0, 255, 128])
   })
 }
+
+test('explicit legacy Pyodide loader retains classic-worker compatibility', async ({ page }) => {
+  test.setTimeout(120000)
+  await prepareAssets('python-legacy')
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    document.body.innerHTML = '<div id="legacy-python"></div>'
+    const app = new JSEE({ container: '#legacy-python', schema: {
+      model: { name: 'model', type: 'py', worker: true, autorun: false, entry: 'model',
+        code: 'def model(): return 7', pyodide: { url: '/tmp/test-assets/pyodide-0.24.1/pyodide.js', indexURL: '/tmp/test-assets/pyodide-0.24.1/' } },
+      outputs: [{ name: 'answer', type: 'int' }]
+    } })
+    await app._initPromise
+    const ok = await app.run()
+    const answer = app.data.outputs[0].value
+    app.destroy()
+    return { ok, answer }
+  })
+  expect(result).toEqual({ ok: true, answer: 7 })
+})

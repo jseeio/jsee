@@ -35,12 +35,13 @@ async function installModuleCspRoutes (page) {
   const appScript = `
 (async function () {
   const params = new URLSearchParams(window.location.search)
-  const worker = params.get('mode') === 'worker'
+  const worker = params.get('mode') !== 'main'
   const schema = {
     security: { mode: 'secure' },
     model: {
       type: 'module',
       worker,
+      workerUrl: params.get('mode') === 'external' ? '/dist/jsee.worker.mjs' : undefined,
       timeout: 1000,
       url: '/test/fixtures/module-worker-model.mjs',
       export: 'predict'
@@ -561,6 +562,10 @@ test.describe('Load code directly', () => {
     expect(workerResult.ok).toBe(true)
     expect(workerResult.text).toContain('24')
     expect(workerResult.text).toContain('true')
+
+    const externalWorkerResult = await runModuleCspCase(page, 'external', 'self')
+    expect(externalWorkerResult.ok).toBe(true)
+    expect(externalWorkerResult.text).toContain('24')
 
     const blockedWorkerResult = await runModuleCspCase(page, 'worker', 'self')
     expect(blockedWorkerResult.ok).toBe(false)
