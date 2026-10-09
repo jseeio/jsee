@@ -53,9 +53,20 @@
     },
     "imports": { "anyOf": [{ "type": "string" }, { "type": "array", "items": { "$ref": "#/definitions/import" } }] },
     "models": { "anyOf": [{ "$ref": "#/definitions/model" }, { "type": "array", "items": { "$ref": "#/definitions/model" } }] },
+    "stageBinding": { "oneOf": [
+      { "type": "object", "required": ["stage", "path"], "properties": { "stage": {"type":"string"}, "path": {"type":"array","items":{"type":"string"}} }, "additionalProperties": false },
+      { "type": "object", "required": ["input"], "properties": { "input": {"type":"array","minItems":1,"items":{"type":"string"}} }, "additionalProperties": false },
+      { "type": "object", "required": ["value"], "properties": { "value": {} }, "additionalProperties": false }
+    ] },
     "model": {
       "type": "object",
       "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$" },
+        "scope": { "type": "string" },
+        "from": { "type": "string" },
+        "bindings": { "type": "object", "additionalProperties": { "$ref": "#/definitions/stageBinding" } },
+        "enabled": { "type": "boolean" },
+        "render": { "type": "boolean" },
         "name": { "type": "string" },
         "title": { "type": "string" },
         "description": { "type": "string" },
@@ -64,6 +75,7 @@
         "type": { "$ref": "#/definitions/modelType" },
         "container": { "enum": ["object", "args"] },
         "worker": { "type": "boolean" },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
         "workerUrl": { "type": "string" },
         "initTimeout": { "type": "number", "exclusiveMinimum": 0 },
         "timeout": { "type": "number", "exclusiveMinimum": 0 },
@@ -118,8 +130,9 @@
         "accept": { "type": "string" },
         "placeholder": { "type": "string" },
         "columns": { "$ref": "#/definitions/columns" },
-        "style": { "enum": ["blocks", "accordion", "tabs"] },
-        "collapsed": { "type": "boolean" }
+        "style": { "enum": ["blocks", "accordion", "section", "tabs"] },
+        "collapsed": { "type": "boolean" },
+        "direction": { "enum": ["row", "column"] }
       },
       "allOf": [
         {

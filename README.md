@@ -368,7 +368,7 @@ Use `columns` on inputs/outputs for dashboard-style layouts:
   - `model` can also be an **array of model objects** to create a pipeline. Models execute sequentially — each receives the merged output of the previous one. First model defaults to `worker: true`, others to `worker: false`. Return `{ stop: true }` from any model to halt the pipeline early
 - `render` — Custom rendering script. Instead of relying on JSEE for output visualization, you can provide a custom script that visualizes the results. That can be useful if you rely on custom libs for plotting
 - `design` — Design parameters
-  - `layout` — Layout for the model/input/output blocks. If it's empty and the JSEE container is not, JSEE uses inner HTML as a template. If the container is empty too, it uses the default `blocks` template. Set `'sidebar'` for a fixed-width (280px) sticky input panel — inputs stay visible while scrolling outputs. Collapses to single column on mobile
+  - `layout` — Layout for the model/input/output blocks. If it's empty and the JSEE container is not, JSEE uses inner HTML as a template. If the container is empty too, it uses the default `blocks` template. Set `'sidebar'` for a fixed-width (280px) sticky input panel — inputs stay visible while scrolling outputs. Collapses to single column on mobile. `grid` sets its column split; a host that places the app below its own header can bound the panel with the `--jsee-sidebar-max-height` CSS variable (default `100vh`)
   - `framework` — Design framework to use (`'minimal'` by default). If a JavaScript object with the same name is present in a global context, JSEE loads it too (using Vue's `use` method)
   - `theme` — Color theme. Set `'dark'` for dark mode
   - `primary` — Accent color (buttons, toggles, gradient). Hex string, e.g. `'#e74c3c'`
@@ -397,6 +397,7 @@ Use `columns` on inputs/outputs for dashboard-style layouts:
     - `group` — Group of inputs. Use `elements` array for child inputs. Supports three display styles via `style` property:
       - `blocks` (default) — flat list of child inputs
       - `accordion` — collapsible section (also triggered by `collapsed` or `label` props)
+      - `section` — collapsible section with a prominent heading, for module-level groups in long forms
       - `tabs` — tabbed view where each child element becomes a tab (child groups use their `name`/`label` as tab label)
     - `object` — JSON editor for nested objects, lists or other JSON values
     - `table` — Editable table using row objects or `{columns, rows}`
@@ -591,6 +592,12 @@ Multiple JSEE instances can run on the same page; progress and overlay DOM nodes
 
 | Method | Description |
 |---|---|
+| `await jsee.ready` | Wait for schema, model, UI and pipeline initialization; rejects on failure or destruction |
+| `jsee.getInputs()` | Read a snapshot of input values after readiness; named groups remain nested |
+| `await jsee.setInputs(values)` | Patch input values by schema name, including nested groups; unknown names reject atomically. Does not run unless schema reactivity is enabled |
+| `await jsee.invoke(values?)` | Run once and return declared output values (or the pipeline result when no outputs are declared). Rejects on validation, execution failure, overlap, or cancellation (`AbortError`) |
+| `jsee.on(event, listener)` | Subscribe to `inputs`, `start`, `result`, `error`, `cancel`, or `destroy`; returns an unsubscribe function. Listener exceptions do not affect execution |
+| `jsee.stop()` | Cancel the active computation; same behavior as `cancelCurrentRun()` |
 | `jsee.run(caller)` | Execute the model pipeline. `caller` can be `'run'`, `'autorun'`, `'reactive'`, `'interval'`, or a custom button name |
 | `jsee.output(result)` | Process and render results to output cards |
 | `jsee.cancelCurrentRun()` | Stop the active run. Rejects the current run promise, sets cancellation state, and signals/terminates workers |
@@ -601,6 +608,134 @@ Multiple JSEE instances can run on the same page; progress and overlay DOM nodes
 | `jsee.notify(text)` | Show a success toast notification |
 | `jsee.log(...args)` | Log to browser console and optional `#log` DOM element as plain text |
 
+### Named stages in the existing pipeline
+
+Composers flatten tool schemas into ordinary `model` entries, input groups and
+namespaced outputs. JSEE does not accept nested module schemas. Named and unnamed
+lists use the same pipeline loop; unnamed lists retain their existing merge/stop behavior.
+
+```js
+const schema = {
+  inputs: [
+    { type: 'group', name: 'gen1', elements: [{ name: 'n', type: 'int', default: 4 }] },
+    { type: 'group', name: 'fit1', elements: [{ name: 'x', type: 'int', required: false }] }
+  ],
+  model: [
+    { id: 'gen1', scope: 'gen1', type: 'function', code: 'input => ({ count: input.n })' },
+    { id: 'fit1', scope: 'fit1', type: 'function', code: 'input => ({ result: input.x * 2 })',
+      bindings: { x: { stage: 'gen1', path: ['count'] } } }
+  ],
+  outputs: [{ name: 'fit1.result', type: 'number' }]
+}
+const app = new JSEE({ schema, container: '#app', runtimeURL: '/jsee.core.js' })
+await app.ready
+await app.invoke({ gen1: { n: 5 } }, { target: 'fit1' }) // { 'fit1.result': 10 }
+```
+
+When using IDs, every stage must have a unique ID. `scope` selects a root input
+group; bindings accept `{stage, path: ['output', 'nestedField']}`, `{input: ['publicInput']}`
+or `{value: literal}`. Bindings replace scoped values. `from: 'previous-stage'`
+continues an internal model stack: records merge and `stop` propagates through
+that chain, without stopping independent branches. Cycles/missing stages fail
+before execution. `enabled: false` excludes a stage from full runs; dependents
+require it enabled. Browser-only stages use `render: true` and run after their
+upstream computation. Mark their public outputs `required: false` for headless use.
+
+Default **Run** and `invoke()` reuse current named stages. `{target}` executes
+only its ancestor closure and associated views; `{force: true}` explicitly reruns
+all stages, or just the selected target when provided. The form exposes **Rerun all**.
+Input and upstream revision changes invalidate descendants. `getStages()` reports
+status/revision/results; `planPipeline(target)` returns execution order.
+`getStageInputs(id)` returns mapped, unprepared values. `stop()` cancels execution.
+
+`invoke(undefined, {target, transient: true, overrides: {inspect: true}})` supports
+an author-defined inspection operation without replacing retained trained results.
+JSEE does not interpret the override's meaning. Scoped dynamic input updates stay
+inside the stage's input group. File bindings follow the receiver's text/raw/stream
+contract. Stream sources must be replayable, not live iterators in saved projects.
+
+`getSchema()` captures the document and live defaults. `getPipelineState()` and
+`restorePipelineState(state)` store results separately, with SHA-256 definition
+fingerprints instead of source copies. Restoring compares file bytes once, then
+ordinary edits use immutable file identity. Render functions are not persisted;
+views recreate them on restore. Function outputs may return cleanup functions.
+Hosts own storage and authoring metadata.
+
+`exportSchema()` preserves code references, resolves their URLs and pins loaded
+bytes with `sha256`. File data becomes JSON-safe. `exportHTML({runtime})` embeds
+JavaScript assets once per content hash through JSEE's existing offline DOM cache,
+plus the supplied runtime. Named-pipeline `download()` uses `runtimeURL`.
+HTML export supports JavaScript function models and declared assets, not Python,
+ES-module models or undeclared network dependencies. Exports are recipes, not
+retained run snapshots; random sources need seeds for identical regeneration.
+
+Node CLI, canonical HTTP and MCP execute the same flat schema and skip render
+stages. Remote JavaScript references require SHA-256 pins; model/import bytes are
+verified before execution and `security.allowNetwork: false` blocks fetching.
+Python execution of named stages is not implemented. See
+`test/fixtures/composition.json` and `test/mcp/composition.test.js`.
+
+### Host-owned regions
+
+To keep JSEE’s normal form and Run/Stop, mount an optional host editor inside an
+input group instead of moving the form out of the app:
+
+```js
+await tool.ready
+const target = tool.getInputGroupContainer('fit1')
+// Mount or Teleport your editor into target; publish values with tool.setInputs().
+// Unmount the host editor before tool.destroy().
+```
+
+Input groups accept `direction: 'column'` to stack fields vertically; the default
+remains a row. Scoped model input updates recurse through declared groups, for
+example `{diff1: {column: {options: ['', 'price'], value: 'price'}}}`.
+Updates cannot create undeclared fields or modify another stage's scope.
+
+In the normal form, `selectInputGroup(name)` finds nested groups and expands
+the selected section and its ancestors/children, collapsing unrelated sections.
+Selection changes presentation without executing or remounting models.
+
+`getInputGroupContainer(name)` returns the group’s editor element, or `null` when
+it is not rendered. The target lives until the group or app is removed and follows
+accordion visibility. The host retains its own framework context; JSEE does not
+load the editor’s framework. Editors are authoring UI and are not serialized into
+schema/HTML exports; their settings remain ordinary input values.
+
+
+For a shared inspector use `regions: {inputGroups: '#inspector'}` and call
+`selectInputGroup('fit1')` after `ready`. It changes field visibility without
+rerunning or disposing stages. Use `controls: false` when the host owns Run/Stop.
+
+
+```js
+const tool = new JSEE({
+  schema,
+  container: '#tool-root',
+  regions: { inputs: '#tool-controls', outputs: '#tool-results' }
+})
+await tool.ready
+const unsubscribe = tool.on('result', outputs => console.log(outputs))
+const outputs = await tool.invoke({ x: 4 })
+// Later: unsubscribe(); tool.destroy()
+```
+
+Create connected, instance-specific region elements outside `container` before
+construction, and retain them until `destroy()`. Either region is optional.
+JSEE uses its own Vue root and Teleport; host Vue/Vuetify providers are not inherited.
+Each region carries JSEE's theme variables from `schema.design`. Hide the host's
+region elements to switch views without rerunning or disposing the tool. Destroy
+removes teleported content and listeners. Run/Stop controls remain with inputs.
+
+The `inputs` event reports current values after Vue updates, including UI edits,
+programmatic patches, reset and model-driven input updates. `start` receives the
+input snapshot; `result` receives the same values returned by `invoke`; `error`
+and `cancel` receive errors. Reactive schemas retain their automatic-run behavior;
+use `reactive: false` and no reactive input flags for manual workspace tools.
+Plain objects/arrays are copied; opaque runtime values retain their identities.
+`invoke()` never queues behind another run. Existing `run()` queue/interval
+behavior remains available to standalone applications.
+
 JSEE is part of the [StatSim](https://statsim.com) ecosystem. The schema/runtime contract is the public surface; lower-level packaging and renderer internals may continue to evolve.
 
 ## CLI — Node.js
@@ -609,6 +744,12 @@ JSEE is part of the [StatSim](https://statsim.com) ecosystem. The schema/runtime
 jsee [schema.json|package] [data...] [options]
 jsee init [template] [--html]
 ```
+
+Embedded hosts can pass `controls: false` to omit JSEE's Run/Stop/Reset footer and
+`toasts: false` to suppress this instance's toast messages (including loading and
+error toasts). Both default to `true`. Invocation errors still reject and emit
+`error`; the host must display them. These options do not change `schema.notify`,
+which controls browser notifications, or the computation's execution policy.
 
 ### Commands
 

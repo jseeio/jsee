@@ -554,7 +554,7 @@ test.describe('Load code directly', () => {
     await installModuleCspRoutes(page)
 
     const mainResult = await runModuleCspCase(page, 'main', 'none')
-    expect(mainResult.ok).toBe(true)
+    expect(mainResult.ok, JSON.stringify(mainResult)).toBe(true)
     expect(mainResult.text).toContain('24')
     expect(mainResult.text).toContain('false')
 

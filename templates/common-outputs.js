@@ -72,6 +72,8 @@ const component = {
     document.addEventListener('fullscreenchange', this.onFullScreenChange)
   },
   beforeUnmount() {
+    this._renderDispose?.()
+    this._renderDispose = null
     document.removeEventListener('fullscreenchange', this.onFullScreenChange)
     if (this._threeAnimId) cancelAnimationFrame(this._threeAnimId)
     if (this._threeRenderer) this._threeRenderer.dispose()
@@ -574,11 +576,14 @@ const component = {
       this.renderNativePDF(container, data)
     },
     executeRenderFunction() {
+      this._renderDispose?.()
+      this._renderDispose = null
       if (this.isRenderFunction && this.$refs.customContainer) {
         // Clear previous content
         this.$refs.customContainer.innerHTML = ''
         // Execute the render function with the container
-        this.output.value(this.$refs.customContainer)
+        const dispose = this.output.value(this.$refs.customContainer)
+        if (typeof dispose === 'function') this._renderDispose = dispose
       }
     }
   },

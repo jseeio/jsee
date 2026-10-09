@@ -5,7 +5,9 @@ import classicWorkerSource from '../dist/jsee.worker.js?worker-source'
 const utils = require('./utils')
 const { outputLookupNames, collectOutputNames, cleanOutputMetadata } = utils
 const { assertShapedValue, cloneSchema, collectInputValues, prepareInputs } = require('./schema')
-const { runPipeline } = require('./pipeline')
+const { Pipeline, validatePipeline, stageSchema, projectResults, identified } = require('./pipeline')
+const { fingerprint } = require('./fingerprint')
+const { prepareStageInputs, portableValue, decodeFileDefaults } = require('./pipeline-data')
 const isObject = utils.isObject
 const { DEFAULT_CONTAINER, DEFAULT_WORKER_TIMEOUT } = require('./constants')
 
@@ -150,10 +152,25 @@ export default class JSEE {
     }
 
     this.verbose = params.verbose !== false
+    this.controls = params.controls !== false
+    this.toasts = params.toasts !== false
     this.log = this.log.bind(this)
     this.uid = makeInstanceUid(params.id || params.uid)
     this.progressId = `${this.uid}-progress`
     this.overlayId = `${this.uid}-overlay`
+    this._listeners = new Map()
+    this.regions = {}
+    for (const name of ['inputs', 'outputs', 'inputGroups']) {
+      const target = params.regions && params.regions[name]
+      if (target !== undefined) {
+        const element = typeof target === 'string' ? document.querySelector(target) : target
+        if (!element || element.nodeType !== 1 || !element.isConnected) {
+          throw new Error(`regions.${name} must reference a connected element`)
+        }
+        this.regions[name] = element
+      }
+    }
+    this.runtimeURL = params.runtimeURL
     this.container = params.container
     this.schema = params.schema || params.config // Previous naming
     this.security = utils.normalizeSecurityOptions()
@@ -172,12 +189,14 @@ export default class JSEE {
     this._intervalPromise = null
     this._needsModelReinit = false
     this._destroyed = false
+    this._initialized = false
+    this._cancelEpoch = 0
     this._initController = new AbortController()
     this._reinitController = null
 
     // Check if schema is provided
     if (typeof this.schema === 'undefined') {
-      notyf.error('No schema provided')
+      this.toast('error', 'No schema provided')
       throw new Error('No schema provided')
     }
 
@@ -188,13 +207,108 @@ export default class JSEE {
         this.container = DEFAULT_CONTAINER
         this.log(`Using default container: ${this.container}`)
       } else {
-        notyf.error('No container provided')
+        this.toast('error', 'No container provided')
         throw new Error('No container provided')
       }
     }
 
+    const root = typeof this.container === 'string' ? document.querySelector(this.container) : this.container
+    const targets = Object.values(this.regions)
+    if (new Set(targets).size !== targets.length || targets.some(target => root && (target.contains(root) || root.contains(target)))) {
+      throw new Error('JSEE regions must be distinct elements outside the root container')
+    }
+
     this._initPromise = this.init()
   }
+
+  get ready () {
+    return this._initPromise.then(() => {
+      this._assertReady()
+      return this
+    })
+  }
+
+  _assertReady () {
+    if (this._destroyed) throw new Error('JSEE instance has been destroyed')
+    if (!this.data || !this.pipeline) throw new Error('Await instance.ready before accessing inputs')
+  }
+
+  on (event, listener) {
+    if (this._destroyed) throw new Error('JSEE instance has been destroyed')
+    if (!['inputs', 'start', 'result', 'error', 'cancel', 'destroy', 'stage'].includes(event)) {
+      throw new Error(`Unknown JSEE event: ${event}`)
+    }
+    if (typeof listener !== 'function') throw new TypeError('Listener must be a function')
+    if (!this._listeners.has(event)) this._listeners.set(event, new Set())
+    this._listeners.get(event).add(listener)
+    return () => this._listeners.get(event)?.delete(listener)
+  }
+
+  _emit (event, value) {
+    if (event === 'inputs' && this.executor && !this.executor.busy) this.executor.refresh(value)
+    // Observer failures must not alter execution or prevent other observers running.
+    for (const listener of [...(this._listeners.get(event) || [])]) {
+      try { listener(cloneSchema(value)) } catch (error) { this.log('Event listener error:', error) }
+    }
+  }
+
+  getInputs () {
+    this._assertReady()
+    return cloneSchema(collectInputValues(this.data.inputs))
+  }
+
+  async setInputs (values) {
+    await this.ready
+    if (!values || typeof values !== 'object' || Array.isArray(values)) throw new TypeError('Inputs must be an object')
+    const updates = []
+    const visit = (inputs, supplied) => {
+      const fields = new Map()
+      const flatten = list => list.forEach(input => {
+        if (input.type === 'group' && !input.name) flatten(input.elements || [])
+        else if (input.name) fields.set(input.name, input)
+      })
+      flatten(inputs)
+      for (const [name, value] of Object.entries(supplied)) {
+        const field = fields.get(name)
+        if (!field || ['button', 'action'].includes(field.type)) throw new Error(`Unknown input: ${name}`)
+        if (field.type === 'group') {
+          if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`Input group ${name} must be an object`)
+          visit(field.elements || [], value)
+        } else updates.push([field, cloneSchema(value)])
+      }
+    }
+    visit(this.data.inputs, values)
+    // Resolve all paths first so an invalid patch cannot partially update state.
+    for (const [field, value] of updates) field.value = value
+    await this.app.$nextTick()
+  }
+
+  async invoke (values, options) {
+    const epoch = this._cancelEpoch
+    const checkStopped = () => {
+      if (epoch !== this._cancelEpoch) throw new DOMException('Run cancelled', 'AbortError')
+    }
+    await this.ready
+    checkStopped()
+    if (this.running || this._invoking) throw new Error('A run is already in progress')
+    this._invoking = true
+    try {
+      if (values !== undefined) await this.setInputs(values)
+      checkStopped()
+      // Invocation owns exactly one run; never resolve with a queued run's result.
+      this._pipelineOptions = options
+      return await this.runOnce('invoke', true)
+    } finally {
+      this._invoking = false
+      if (this._pendingRun && !this._destroyed) {
+        const pending = this._pendingRun
+        this._pendingRun = null
+        this.run(pending).catch(error => this.log('Queued run error:', error))
+      }
+    }
+  }
+
+  stop () { this.cancelCurrentRun() }
 
   log (...args) {
     if (!this.verbose) return
@@ -208,8 +322,13 @@ export default class JSEE {
     }
   }
 
+  // A host may own messages while invoke rejections and error events remain intact.
+  toast (level, text) {
+    if (this.toasts) notyf[level](text)
+  }
+
   notify (txt) {
-    notyf.success(txt)
+    this.toast('success', txt)
   }
 
   stopInterval () {
@@ -225,6 +344,8 @@ export default class JSEE {
   }
 
   cancelCurrentRun () {
+    this._cancelEpoch++
+    this.executor?.cancel()
     this.log('Stopping current run')
     const cancelError = new Error('Cancelled')
     this.stopInterval()
@@ -261,12 +382,12 @@ export default class JSEE {
     if (hadWorkers) this._needsModelReinit = true
   }
 
-  _createRunContext () {
+  _createRunContext (scope) {
     const token = this._runToken
     const active = () => !this._destroyed && token && token.active && this._runToken === token
     const callbacks = { isCancelled: () => !active() }
     for (const name of ['log', 'progress', 'output', 'outputAsync']) {
-      callbacks[name] = (...args) => active() ? this[name](...args) : undefined
+      callbacks[name] = (...args) => active() ? scope && ['output', 'outputAsync'].includes(name) ? this._scopeOutput(scope, ...args) : this[name](...args) : undefined
     }
     // Retain browser context fields/methods while binding callbacks to this invocation.
     // Other methods must still mutate the actual instance, not a shadow context object.
@@ -286,6 +407,8 @@ export default class JSEE {
   destroy () {
     if (this._destroyed) return
     this._destroyed = true
+    this._emit('destroy')
+    this._listeners.clear()
     this._initController.abort()
     this.log('Destroying JSEE instance')
     // Cancel any running computation
@@ -310,6 +433,7 @@ export default class JSEE {
     this.app = null
     this.data = null
     this.pipeline = null
+    this.executor?.dispose()
     this.model = null
     this.schema = null
     this._cancelWorkerRun = null
@@ -380,6 +504,7 @@ export default class JSEE {
       if (!this._destroyed) throw error
     }
     if (this._destroyed) return false
+    this._initialized = true
 
     // Request notification permission if schema opts in
     if (this.schema.notify && this.security.allowNotifications !== false
@@ -432,12 +557,16 @@ export default class JSEE {
 
     // At this point schema should be an object
     if (!isObject(this.schema)) {
-      notyf.error('Schema is in a wrong format')
+      this.toast('error', 'Schema is in a wrong format')
       throw new Error(`Schema is in a wrong format: ${this.schema}`)
     }
 
     // Model normalization owns its descriptor copy, independently of the caller and other instances.
     this.schema = cloneSchema(this.schema)
+    validatePipeline(this.schema)
+    this._namedPipeline = identified(this.schema)
+    this._sourceSchema = cloneSchema(this.schema)
+    decodeFileDefaults(this.schema.inputs)
     // Validate schema shape early so init stages fail fast on critical issues
     const schemaValidation = utils.validateSchema(this.schema)
     schemaValidation.warnings.forEach(warning => {
@@ -445,7 +574,7 @@ export default class JSEE {
     })
     if (schemaValidation.errors.length) {
       const firstError = schemaValidation.errors[0]
-      notyf.error(firstError)
+      this.toast('error', firstError)
       throw new Error(`Schema validation failed: ${schemaValidation.errors.join('; ')}`)
     }
 
@@ -500,7 +629,7 @@ export default class JSEE {
     })
 
     // Check if autorun is defined
-    if (typeof this.model[0]['autorun'] !== 'undefined') {
+    if (!this._namedPipeline && typeof this.model[0]['autorun'] !== 'undefined') {
       this.schema.autorun = this.model[0]['autorun']
       delete this.model[0]['autorun']
     }
@@ -593,7 +722,7 @@ export default class JSEE {
           if (!m.type.includes('py')) {
             const rawImportUrl = imp.url
             imp._rawUrl = rawImportUrl
-            imp.code = utils.loadFromDOM(rawImportUrl)  // Try raw path first (matches --fetch data-src)
+            imp.code = imp.code || utils.loadFromDOM(rawImportUrl)  // Try raw path first (matches --fetch data-src)
             imp.url = utils.getUrl(rawImportUrl)        // Resolve to absolute URL for network/worker
             if (!imp.code) {
               imp.code = utils.loadFromDOM(imp.url)     // Fallback: resolved URL (legacy compat)
@@ -603,6 +732,17 @@ export default class JSEE {
             }
           }
         }
+      }
+      if (m.sha256 && (!m.code || fingerprint(typeof m.code === 'function' ? String(m.code) : m.code) !== m.sha256)) throw new Error('Model SHA-256 mismatch: ' + (m.id || m.url))
+      for (const imp of m.imports || []) {
+        if (!imp.sha256) continue
+        if (!imp.code) {
+          utils.assertNetworkAllowed(imp.url, this.security, 'pinned import')
+          const response = await fetch(imp.url, { signal })
+          if (!response.ok) throw new Error('Failed to load pinned import: ' + imp.url)
+          imp.code = await response.text()
+        }
+        if (fingerprint(imp.code) !== imp.sha256) throw new Error('Import SHA-256 mismatch: ' + imp.url)
       }
       // Inject CSS imports into <head> for worker models (workers have no DOM)
       if (m.imports && Array.isArray(m.imports) && m.imports.length && m.worker) {
@@ -675,8 +815,8 @@ export default class JSEE {
         this.app = createVueApp(this, (container) => {
           // Called when the app is mounted
           // FYI "this" here refers to port object
-          this.outputsContainer = container.querySelector('#outputs')
-          this.inputsContainer = container.querySelector('#inputs')
+          this.outputsContainer = (this.regions.outputs || container).querySelector('#outputs')
+          this.inputsContainer = (this.regions.inputs || container).querySelector('#inputs')
           this.modelContainer = container.querySelector('#model')
           // Init overlay
           this.overlay = new Overlay(this.inputsContainer ? this.inputsContainer : this.outputsContainer, this.overlayId)
@@ -693,10 +833,10 @@ export default class JSEE {
     const stages = []
     this.pipeline = inputs => {
       const runToken = this._runToken
-      return runPipeline(stages, inputs, () => {
-        // Cancellation remains attached to this invocation even after the next Run resets state.
+      const check = () => {
         if (this._runToken !== runToken) throw new Error('Cancelled')
-      })
+      }
+      return this.executor.run(inputs, this._pipelineOptions, check)
     }
     // Async for-loop over this.model (again)
     for (const [i, m] of this.model.entries()) {
@@ -726,12 +866,12 @@ export default class JSEE {
             modelFunc = await this.initAPI(m)
             break
           default:
-            notyf.error('No type information')
+            this.toast('error', 'No type information')
             throw new Error(`No type information: ${m.type}`)
         }
 
         if (this._destroyed) return
-        const streamInputConfig = this.streamInputConfig || {}
+        const streamInputConfig = collectStreamInputConfig(stageSchema(this.schema, m).inputs)
         const hasStreamInputs = Object.keys(streamInputConfig).length > 0
         if (hasStreamInputs) {
           const originalModelFunc = modelFunc
@@ -750,10 +890,28 @@ export default class JSEE {
       checkCancelled()
       stages.push(modelFunc)
 
-      notyf.success('Pipeline initialized')
+      this.toast('success', 'Pipeline initialized')
       this.overlay.hide()
     }
 
+    const previous = this.executor?.snapshot()
+    this.executor = new Pipeline(this._namedPipeline ? this._sourceSchema : { ...this.schema, model: this.model }, stages.map((run, index) => async values => {
+      const id = this.model[index].id
+      this._stagePartials = this._stagePartials || {}
+      this._stagePartials[id] = {}
+      const result = await run(values)
+      return id && utils.isRecordObject(result) ? { ...this._stagePartials[id], ...result } : result
+    }), { prepare: async (schema, values, id) => {
+      const model = this.model.find(model => model.id === id)
+      const live = stageSchema({ inputs: this.data.inputs }, model).inputs
+      return utils.wrapTypedArrayInputs(await prepareStageInputs({ ...schema, inputs: live }, values), live)
+    }, output: (id, result) => this._scopeOutput(id, result), changed: (id, state) => {
+      if (!this._namedPipeline) return
+      const group = this.data.outputs.find(output => output._stage === id)
+      if (group) group.status = state.status
+      this._emit('stage', { id, ...state })
+    } })
+    if (previous) this.executor.restore(previous)
     if (this.model.length === 0) {
       this.log('Identity pipeline ready (no model)')
       this.overlay.hide()
@@ -825,10 +983,10 @@ export default class JSEE {
                 resolve(res.value)
                 break
               case 'partial':
-                this.output(res.value, true)
+                this._modelOutput(model, res.value, true)
                 break
               case 'loaded':
-                notyf.success('Loaded model (in worker)')
+                this.toast('success', 'Loaded model (in worker)')
                 this.log('Loaded model (in worker):', res)
                 this.progress(0)
                 workerInitialized = true
@@ -841,7 +999,7 @@ export default class JSEE {
                 this.progress(res._progress)
                 break
               case 'error':
-                notyf.error(res._error)
+                this.toast('error', res._error)
                 this.log('Error from worker:', res._error)
                 this.progress(0)
                 reject(res._error)
@@ -855,7 +1013,7 @@ export default class JSEE {
             this.log('Partial result from worker:', Object.keys(res))
             const partial = { ...res }
             delete partial._partial
-            this.output(partial, true)
+            this._modelOutput(model, partial, true)
           } else {
             this.log('Response from worker:', res)
             this.progress(0)
@@ -864,7 +1022,7 @@ export default class JSEE {
         }
         worker.onerror = (e) => {
           if (!acceptingMessages) return
-          notyf.error(e.message)
+          this.toast('error', e.message)
           this.log('Error from worker:', e)
           this.progress(0)
           reject(e)
@@ -921,8 +1079,8 @@ export default class JSEE {
 
     // Initial worker call with model definition and stream input config
     const modelInitPayload = Object.assign({}, model, {
-      _streamInputConfig: this.streamInputConfig || {},
-      _inputNames: Object.keys(collectInputValues(this.schema.inputs, () => null)),
+      _streamInputConfig: collectStreamInputConfig(stageSchema(this.schema, model).inputs),
+      _inputNames: Object.keys(collectInputValues(stageSchema(this.schema, model).inputs, () => null)),
       _security: this.security
     })
     try { await modelFunc(modelInitPayload) } catch (error) { this._terminateWorkers(); throw error }
@@ -1008,7 +1166,7 @@ export default class JSEE {
       })
       await utils.importScripts(...model.imports)
       if (this._destroyed) return
-      notyf.success('Loaded: JS imports')
+      this.toast('success', 'Loaded: JS imports')
     }
 
     // Target here represents raw JS object (e.g. class), not the final callable function
@@ -1052,8 +1210,8 @@ export default class JSEE {
       target = window[model.name]
     }
 
-    const inputNames = Object.keys(collectInputValues(this.schema.inputs, () => null))
-    const modelFunc = await utils.getModelFuncJS(model, target, this, inputNames, () => this._createRunContext())
+    const inputNames = Object.keys(collectInputValues(stageSchema(this.schema, model).inputs, () => null))
+    const modelFunc = await utils.getModelFuncJS(model, target, this, inputNames, () => this._createRunContext(model.id))
     return modelFunc
   }
 
@@ -1133,6 +1291,11 @@ export default class JSEE {
   }
 
   async run (caller='run') {
+    // Once initialized, reserve the run synchronously so immediate Stop and queue
+    // ordering retain their existing behavior. Only startup needs an extra await.
+    const epoch = this._cancelEpoch
+    if (!this._initialized) await this._initPromise
+    if (this._destroyed || epoch !== this._cancelEpoch) return false
     const runCaller = caller || 'run'
     if (this.shouldUseInterval(runCaller)) {
       return this.startInterval(runCaller)
@@ -1140,8 +1303,11 @@ export default class JSEE {
     return this.runOnce(runCaller)
   }
 
-  async runOnce (caller='run') {
-    if (this._destroyed) return false
+  async runOnce (caller='run', returnResult=false) {
+    if (this._destroyed) {
+      if (returnResult) throw new Error('JSEE instance has been destroyed')
+      return false
+    }
     // caller can be:
     // 1. custom input button name
     // 2. `run`
@@ -1149,7 +1315,8 @@ export default class JSEE {
     // 4. `interval`
 
     // Prevent overlapping runs: automatic calls are dropped, manual clicks queue
-    if (this.running) {
+    if (this.running || (this._invoking && !returnResult)) {
+      if (returnResult) throw new Error('A run is already in progress')
       if (caller === 'autorun' || caller === 'reactive' || caller === 'interval') return false
       this.log('Run already in progress, queuing', caller)
       this._pendingRun = caller
@@ -1157,16 +1324,22 @@ export default class JSEE {
     }
 
     // Programmatic, queued, and UI calls share the browser's control validation.
-    if (this.app && this.app.validateInputs()) return false
+    if (!this._namedPipeline && this.app && this.app.validateInputs()) {
+      if (returnResult) throw new Error('Invalid inputs')
+      return false
+    }
 
     const schema = this.schema
     const data = this.data
     this.running = true
     this.cancelled = false
     let runSucceeded = false
+    let runResult
+    let runError
     let rejectCurrentRun = null
     // Run token to detect stale results when worker.onmessage gets rebound
     const runToken = this._runToken = { active: true }
+    this._emit('start', this.getInputs())
     const checkCancelled = () => {
       if (this._destroyed || this._runToken !== runToken) throw new Error('Cancelled')
     }
@@ -1189,7 +1362,8 @@ export default class JSEE {
       this.log('Running the pipeline...')
       // Collect input values
       let inputValues = collectInputValues(data.inputs)
-      inputValues = prepareInputs(schema.inputs, inputValues)
+      // Model-driven option updates are part of the live form contract.
+      if (!this._namedPipeline) inputValues = prepareInputs(data.inputs, inputValues)
       inputValues = await utils.prepareBrowserFiles(schema.inputs, inputValues, this.model.some(model => model._jseeCanonical))
       checkCancelled()
       // For folder inputs with select mode, filter to selected files
@@ -1238,10 +1412,17 @@ export default class JSEE {
       const results = await Promise.race([pipelinePromise, cancelPromise])
 
       // Drop stale results if a newer run started (e.g. worker.onmessage rebound race)
-      if (this._runToken !== runToken) return
+      checkCancelled()
 
       // Output results
-      this.output(results)
+      this.output(results, this._namedPipeline)
+      const outputs = utils.flattenJseeOutputs(schema.outputs)
+      runResult = outputs.length ? {} : cloneSchema(results)
+      for (const field of outputs) {
+        const resolved = isObject(results) ? resolveOutputResult(results, field) : { found: outputs.length === 1, value: results }
+        if (resolved.found) Object.defineProperty(runResult, field.name, { value: cloneSchema(resolved.value), enumerable: true })
+      }
+      this._emit('result', runResult)
 
       // Chat mode: clear the text input for next message
       if (chatOutput && this._lastChatMessage) {
@@ -1257,11 +1438,15 @@ export default class JSEE {
     } catch (err) {
       // Silently ignore cancellation errors from cancelCurrentRun()
       if (this._runToken !== runToken) {
+        runError = new DOMException('Run cancelled', 'AbortError')
+        this._emit('cancel', runError)
         this.log('Run cancelled by user')
       } else {
         // Surface pipeline/worker errors so they don't silently swallow failures
+        runError = err instanceof Error ? err : new Error(String(err))
+        this._emit('error', runError)
         this.log('Pipeline error:', err)
-        notyf.error(typeof err === 'string' ? err : (err.message || 'Pipeline error'))
+        this.toast('error', typeof err === 'string' ? err : (err.message || 'Pipeline error'))
       }
     } finally {
       runToken.active = false
@@ -1271,6 +1456,7 @@ export default class JSEE {
       // Always clean up UI state so overlay and running flag don't get stuck
       this.overlay.hide()
       this.running = false
+      this._pipelineOptions = undefined
       if (this.data) this.data.running = this._intervalLoop === true
 
       // Notify user when tab is hidden and run succeeded
@@ -1281,11 +1467,15 @@ export default class JSEE {
       }
 
       // Drain queued run if a manual click arrived while we were running
-      if (this._pendingRun) {
+      if (this._pendingRun && !this._invoking) {
         const pending = this._pendingRun
         this._pendingRun = null
         this.run(pending).catch(err => this.log('Queued run error:', err))
       }
+    }
+    if (returnResult) {
+      if (runError) throw runError
+      return runResult
     }
     return runSucceeded
   }
@@ -1380,12 +1570,12 @@ export default class JSEE {
 
     const inputNames = this.schema.inputs ? this.schema.inputs.map(i => i.name) : []
     const outputNames = collectOutputNames(this.data.outputs || this.schema.outputs || [])
-    const resultKeys = isObject(res) ? Object.keys(res) : []
     this.log('Input names:', inputNames)
 
     if (isObject(res)) {
       // UI routing consumes fields; keep the computation's result intact for later stages.
       res = cleanOutputMetadata(res, this.data.outputs || this.schema.outputs)
+      const resultKeys = Object.keys(res)
       this.log('Processing results as an object:', res)
 
       // Chat mode: accumulate messages instead of replacing output
@@ -1437,7 +1627,7 @@ export default class JSEE {
           if (input.name && (typeof res[input.name] !== 'undefined')) {
             this.log(`Updating input: ${input.name} with data: ${res[input.name]}`)
             const r = res[input.name]
-            if (typeof r === 'object') {
+            if (r && typeof r === 'object') {
               Object.keys(r).forEach(k => {
                 input[k] = r[k]
               })
@@ -1495,7 +1685,185 @@ export default class JSEE {
     }
   }
 
+  _modelOutput (model, result, partial) {
+    return model.id ? this._scopeOutput(model.id, result, partial) : this.output(result, partial)
+  }
+
+  _scopeOutput (id, result, partial=true) {
+    if (!result || typeof result !== 'object') return
+    const stage = this.model.find(model => model.id === id)
+    const live = stageSchema({ inputs: this.data.inputs }, stage).inputs
+    const outputNames = new Set(Object.keys(result).filter(name => !live.some(input => input.name === name)))
+    // Grouped parameters retain their schema/identity; updates only reach
+    // declared descendants within this stage's input scope.
+    const update = (fields, values) => {
+      for (const input of fields) {
+        const value = input.name ? hasOwn(values, input.name) && values[input.name] : values
+        if (!isObject(value)) continue
+        if (input.type === 'group') update(input.elements || [], value)
+        else if (hasOwn(value, 'options') || hasOwn(value, 'value')) Object.assign(input, value)
+      }
+    }
+    update(live, result)
+    if (this.executor?.busy && this._stagePartials?.[id]) {
+      for (const name of outputNames) if (hasOwn(result, name) && typeof result[name] !== 'function') this._stagePartials[id][name] = result[name]
+    }
+    this.output(projectResults(this.schema, { [id]: result }), partial)
+  }
+
+  // Hosts own children mounted here and must unmount them before destroy().
+  // The target is presentation only; values still enter through setInputs().
+  getInputGroupContainer (name) {
+    this._assertReady()
+    const root = this.regions.inputGroups || this.regions.inputs || this.container
+    const element = typeof root === 'string' ? document.querySelector(root) : root
+    return [...element.querySelectorAll('[data-jsee-group-editor]')].find(target => target.getAttribute('data-jsee-group-editor') === name) || null
+  }
+
+  selectInputGroup (name) {
+    this._assertReady()
+    const groups = []
+    const visit = (inputs, ancestors=[]) => {
+      for (const input of inputs || []) if (input.type === 'group') {
+        groups.push({ input, ancestors })
+        visit(input.elements, [...ancestors, input])
+      }
+    }
+    visit(this.data.inputs)
+    const selected = groups.find(group => group.input.name === name)
+    if (name !== null && !selected) throw new Error('Unknown input group: ' + name)
+    this.data.selectedInputGroup = selected?.ancestors[0]?.name || name
+    if (!this.regions.inputGroups && selected) {
+      const visible = new Set([...selected.ancestors, selected.input,
+        ...groups.filter(group => group.ancestors.includes(selected.input)).map(group => group.input)])
+      for (const { input } of groups) if (['accordion', 'section'].includes(input.style) || input.collapsed !== undefined) {
+        input.collapsed = !visible.has(input)
+      }
+    }
+  }
+
+  getStageInputs (id) {
+    this._assertReady()
+    if (!this.executor.nodes.has(id)) throw new Error('Unknown stage: ' + id)
+    return cloneSchema(this.executor.values(id, this.getInputs()))
+  }
+
+  getStages () {
+    this._assertReady()
+    if (!this._namedPipeline) return {}
+    if (!this.executor.busy) this.executor.refresh(this.getInputs())
+    return Object.fromEntries([...this.executor.states].map(([id]) => {
+      const state = this.executor.describe(id)
+      const group = this.data.outputs.find(output => output._stage === id)
+      if (group) group.status = state.status
+      return [id, state]
+    }))
+  }
+
+  planPipeline (target) {
+    this._assertReady()
+    if (!this.executor) throw new Error('Pipeline is not ready')
+    return this.executor.plan(this.getInputs(), target)
+  }
+
+  getPipelineState () {
+    this._assertReady()
+    if (!this.executor) throw new Error('Pipeline is not ready')
+    this.executor.refresh(this.getInputs())
+    return this.executor.snapshot()
+  }
+
+  async restorePipelineState (state) {
+    await this.ready
+    if (!this.executor) throw new Error('Pipeline is not ready')
+    this.executor.restore(state)
+    await this.executor.reconcile(this.getInputs())
+    for (const [id, saved] of this.executor.states) {
+      if (saved.result) { this._scopeOutput(id, saved.result) }
+    }
+    await this.executor.run(this.getInputs(), { renderOnly: true })
+  }
+
+  getSchema () {
+    this._assertReady()
+    const schema = cloneSchema(this._namedPipeline ? this._sourceSchema : this.schema)
+    const capture = inputs => inputs.map(input => {
+      const { value, ...field } = cloneSchema(input)
+      if (field.type === 'group') field.elements = capture(field.elements || [])
+      else if (value !== undefined) field.default = value
+      return field
+    })
+    schema.inputs = capture(this.data.inputs)
+    return schema
+  }
+
+  async exportSchema () {
+    await this.ready
+    if (this.running || this._invoking) throw new Error('Stop execution before exporting')
+    const schema = this.getSchema()
+    const targets = Array.isArray(schema.model) ? schema.model : [schema.model]
+    for (const [index, target] of targets.entries()) {
+      const loaded = this.model[index]
+      if (target.url) {
+        target.url = new URL(loaded.url, window.location.href).href
+        if (loaded.code) target.sha256 = fingerprint(typeof loaded.code === 'function' ? String(loaded.code) : loaded.code)
+        delete target.code
+      }
+      if (loaded.imports) target.imports = loaded.imports.map(imp => ({ url: new URL(imp.url, window.location.href).href,
+        ...(imp.code ? { code: imp.code } : {}), ...(imp.sha256 ? { sha256: imp.sha256 } : {}) }))
+    }
+    return portableValue(schema)
+  }
+
+  async exportHTML ({ runtime, title='JSEE application' }={}) {
+    if (!runtime) throw new Error('Provide the pinned JSEE runtime URL for export')
+    const schema = await this.exportSchema()
+    const assets = new Map()
+    const store = (code, css=false) => {
+      const sha256 = fingerprint(code), url = 'jsee-asset-' + sha256 + (css ? '.css' : '.js')
+      assets.set(url, code)
+      return { url, sha256 }
+    }
+    const targets = Array.isArray(schema.model) ? schema.model : [schema.model]
+    for (const [index, target] of targets.entries()) {
+      const loaded = this.model[index]
+      if (loaded.type === 'module' || loaded.type === 'py') throw new Error('HTML export currently requires JavaScript function models')
+      if (!loaded.code) throw new Error('Model code is unavailable for export')
+      Object.assign(target, store(typeof loaded.code === 'function' ? String(loaded.code) : loaded.code))
+      delete target.code
+      if (loaded.imports) target.imports = await Promise.all(loaded.imports.map(async imp => {
+        let code = imp.code || utils.loadFromDOM(imp._rawUrl || imp.url)
+        if (!code) {
+          utils.assertNetworkAllowed(imp.url, this.security, 'export import')
+          const response = await fetch(imp.url)
+          if (!response.ok) throw new Error('Failed to export import: ' + imp.url)
+          code = await response.text()
+        }
+        return store(code, utils.isCssImport(imp.url))
+      }))
+    }
+    const response = await fetch(runtime)
+    if (!response.ok) throw new Error('Failed to load the pinned runtime: ' + response.status)
+    const code = (await response.text()).replace(/<\/script/gi, '<\\/script')
+    const json = JSON.stringify(schema).replace(/</g, '\\u003c')
+    const escapedTitle = title.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]))
+    // Reuse the existing offline DOM cache. Identical model/import bytes are
+    // stored once, even when several stage instances use the same package.
+    const hidden = (await Promise.all([...assets].map(async ([url, text]) => {
+      const encoded = await portableValue(new Blob([text]))
+      return `<script type="application/json" data-src="${url}" data-encoding="base64">${encoded.content}</script>`
+    }))).join('')
+    return new Blob([`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapedTitle}</title></head><body><div hidden>${hidden}</div><div id="app"></div><script>${code}</script><script>window.env=new JSEE({container:'#app',schema:${json},toasts:false})</script></body></html>`], { type: 'text/html' })
+  }
+
   async download (title='output') {
+    if (this._namedPipeline) {
+      const blob = await this.exportHTML({ runtime: this.runtimeURL, title })
+      const url = URL.createObjectURL(blob), link = document.createElement('a')
+      link.href = url; link.download = title + '.html'; link.click()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      return
+    }
     for (const model of this.model) {
       if (model.type === 'py' && !utils.loadPyodideEmbeddedAssets(utils.normalizePyodideOptions(model))) {
         throw new Error('Python download requires embedded runtime assets; generate the app with --bundle=pyodide-single first')

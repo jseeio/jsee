@@ -6,6 +6,7 @@ export type OutputType = 'text' | 'string' | 'int' | 'float' | 'bool' | 'table' 
 export type DType = 'float32' | 'float64' | 'int8' | 'uint8' | 'int16' | 'uint16' | 'int32' | 'uint32'
 export type Alias = string | string[]
 export type GroupStyle = 'blocks' | 'accordion' | 'tabs'
+export type InputGroupStyle = GroupStyle | 'section'
 export type Columns = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12
 
 export type JsonType = 'object' | 'array' | 'string' | 'number' | 'integer' | 'boolean' | 'null'
@@ -61,12 +62,13 @@ export interface InputProperties {
 }
 
 export type Input = InputProperties & (
-  | { type: 'group'; elements: Input[]; style?: GroupStyle; collapsed?: boolean }
+  | { type: 'group'; elements: Input[]; style?: InputGroupStyle; collapsed?: boolean; direction?: 'row' | 'column' }
   | { type: 'button' | 'action' }
   | { name: string; type?: Exclude<InputType, 'group' | 'button' | 'action'> }
 )
 
 export interface OutputProperties {
+  required?: boolean
   valueSchema?: ValueSchema
   name?: string
   label?: string
@@ -111,6 +113,13 @@ export interface PyodideOptions {
 }
 
 export interface Model {
+  sha256?: string
+  id?: string
+  scope?: string
+  from?: string
+  bindings?: Record<string, StageBinding>
+  enabled?: boolean
+  render?: boolean
   name?: string
   title?: string
   description?: string
@@ -132,6 +141,7 @@ export interface Model {
   pyodide?: string | PyodideOptions
   [extension: string]: unknown
 }
+export type StageBinding = { stage: string; path: string[] } | { input: string[] } | { value: unknown }
 export type Models = Model | ModelFunction | Model[]
 
 export interface Design {
@@ -218,4 +228,4 @@ export function jseeInputsToJsonSchema(inputs?: Input[]): InputJsonSchema
 export function prepareInputs(inputs: Input[] | undefined, data: unknown): Record<string, unknown>
 
 export function matchesFileAccept(accept?: string, name?: string, mime?: string): boolean
-export function tableOutputJsonSchema(): Record<string, unknown>
+export function tableOutputJsonSchema(allowMatrix?: boolean): Record<string, unknown>

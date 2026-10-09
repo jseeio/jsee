@@ -101,7 +101,7 @@ function optionSchema (options) {
   return { type: types.length === 1 ? types[0] : types, enum: values }
 }
 
-function tableOutputJsonSchema () {
+function tableOutputJsonSchema (allowMatrix=true) {
   return {
     oneOf: [
       {
@@ -116,7 +116,11 @@ function tableOutputJsonSchema () {
       {
         type: 'array',
         items: { type: 'object', additionalProperties: true }
-      }
+      },
+      ...(allowMatrix ? [{
+        // The browser table also accepts a header row followed by array rows.
+        type: 'array', minItems: 1, items: { type: 'array', items: {} }
+      }] : [])
     ]
   }
 }
@@ -197,7 +201,7 @@ function jseeInputsToJsonSchema (inputs) {
         Object.assign(prop, jseeInputsToJsonSchema(inp.elements))
         break
       case 'table':
-        Object.assign(prop, tableOutputJsonSchema())
+        Object.assign(prop, tableOutputJsonSchema(false))
         break
       case 'object':
         if (valueSchema) Object.assign(prop, valueSchema)

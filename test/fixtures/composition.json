@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "persist": false,
+  "model": [
+    {
+      "name": "generate",
+      "type": "function",
+      "worker": true,
+      "code": "function generate(input) { return { file: { content: 'x\\n' + Array.from({length: input.count}, (_, i) => i + 1).join('\\n'), filename: 'data.csv', mime: 'text/csv' } } }",
+      "id": "source",
+      "scope": "source",
+      "bindings": {}
+    },
+    {
+      "name": "sum",
+      "type": "function",
+      "worker": true,
+      "code": "function sum(input) { return { total: input.file.split('\\n').slice(1).reduce((n, s) => n + Number(s), 0) } }",
+      "id": "left-step1",
+      "scope": "left",
+      "bindings": {
+        "file": {
+          "stage": "source",
+          "path": [
+            "file"
+          ]
+        }
+      }
+    },
+    {
+      "name": "scale",
+      "type": "function",
+      "worker": false,
+      "code": "function scale(input) { return { value: input.total * input.scale } }",
+      "id": "left",
+      "scope": "left",
+      "from": "left-step1"
+    },
+    {
+      "name": "sum",
+      "type": "function",
+      "worker": true,
+      "code": "function sum(input) { return { value: input.file.split('\\n').length - 1 } }",
+      "id": "right",
+      "scope": "right",
+      "bindings": {
+        "file": {
+          "stage": "source",
+          "path": [
+            "file"
+          ]
+        }
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "type": "group",
+      "name": "source",
+      "elements": [
+        {
+          "name": "count",
+          "type": "int",
+          "default": 3
+        }
+      ]
+    },
+    {
+      "type": "group",
+      "name": "left",
+      "elements": [
+        {
+          "name": "file",
+          "type": "file"
+        },
+        {
+          "name": "scale",
+          "type": "int",
+          "default": 2
+        }
+      ]
+    },
+    {
+      "type": "group",
+      "name": "right",
+      "elements": [
+        {
+          "name": "file",
+          "type": "file"
+        }
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "type": "group",
+      "_stage": "source",
+      "elements": [
+        {
+          "name": "source.file",
+          "type": "file"
+        }
+      ]
+    },
+    {
+      "type": "group",
+      "_stage": "left",
+      "elements": [
+        {
+          "name": "left.value",
+          "type": "number"
+        }
+      ]
+    },
+    {
+      "type": "group",
+      "_stage": "right",
+      "elements": [
+        {
+          "name": "right.value",
+          "type": "number"
+        }
+      ]
+    }
+  ]
+}

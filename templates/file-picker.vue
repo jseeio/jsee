@@ -155,6 +155,20 @@ export default {
         return
       }
       this.tryAutoLoadUrl()
+    },
+    // Values can also arrive from defaults, setInputs, reset or a restored
+    // project. Describe files and clear the label; text content (which has no
+    // file name) keeps whatever the last selection displayed.
+    modelValue: {
+      immediate: true,
+      handler (value) {
+        const files = (Array.isArray(value) ? value : [value]).filter(file => typeof Blob !== 'undefined' && file instanceof Blob)
+        if (files.length) this.describeFiles(files)
+        else if (value === null || value === undefined || value === '' || (Array.isArray(value) && !value.length)) {
+          this.label = this.labelValue
+          this.info = 'or drag and drop it here'
+        }
+      }
     }
   },
   mounted () {
@@ -166,6 +180,12 @@ export default {
     setActive (e) { this.isActive = true; this.cancelHandlers(e) },
     cancelActive (e) { this.isActive = false; this.cancelHandlers(e) },
 
+    describeFiles (files) {
+      this.label = files.map(f => f.name || 'Selected data').join(', ')
+      const totalSizeinKB = files.reduce((acc, f) => acc + f.size / 1024, 0).toFixed(2)
+      this.info = `Selected ${files.length} file(s) of size ${totalSizeinKB} KB`
+    },
+
     fileAdded (e) {
       this.isActive = false
       this.cancelHandlers(e)
@@ -175,9 +195,7 @@ export default {
         return
       }
       const files = wasDropped ? e.dataTransfer.files : e.target.files
-      this.label = Array.from(files).map(f => f.name).join(', ')
-      const totalSizeinKB = Array.from(files).reduce((acc, f) => acc + f.size / 1024, 0).toFixed(2)
-      this.info = `Selected ${files.length} file(s) of size ${totalSizeinKB} KB`
+      this.describeFiles(Array.from(files))
 
       if (wasDropped && !this.allowMultiple && files.length > 1)
         throw new Error('vue-file-picker: Multiple files are not allowed')

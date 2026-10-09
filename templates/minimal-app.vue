@@ -40,9 +40,11 @@
     color: var(--jsee-text-secondary);
   }
 
+  /* design.grid arrives as --jsee-grid-columns rather than an inline
+     grid-template-columns, so the narrow-screen rules below still apply. */
   .jsee-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+    grid-template-columns: var(--jsee-grid-columns, minmax(0, 1fr) minmax(0, 2fr));
     gap: 20px;
   }
   @media (max-width: 768px) {
@@ -50,15 +52,17 @@
   }
 
   .jsee-grid[data-layout="sidebar"] {
-    grid-template-columns: 280px minmax(0, 1fr);
+    grid-template-columns: var(--jsee-grid-columns, 280px minmax(0, 1fr));
   }
   .jsee-grid > div {
     min-width: 0;
   }
+  /* Hosts that place the app below their own header bound the panel with
+     --jsee-sidebar-max-height so its footer stays on screen. */
   .jsee-grid[data-layout="sidebar"] > div:first-child {
     position: sticky;
     top: 0;
-    max-height: 100vh;
+    max-height: var(--jsee-sidebar-max-height, 100vh);
     overflow-y: auto;
   }
   @media (max-width: 768px) {
@@ -115,7 +119,12 @@
     justify-content: center;
   }
 
+  /* Long forms keep Run/Stop reachable: the footer sticks to the bottom of the
+     nearest scroll container (page or sidebar panel) while the card is in view. */
   .jsee-card-footer {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
     display: flex;
     border-top: 1px solid var(--jsee-border);
     background: linear-gradient(90deg, var(--jsee-gradient-start) 0%, var(--jsee-gradient-end) 100%);
@@ -207,15 +216,16 @@
         <p class="jsee-description" v-if="model.description">{{ model.description }}</p>
       </div>
       <div class="jsee-grid" :data-layout="design && design.layout ? design.layout : undefined" :style="gridStyle">
-        <div>
+        <component :is="regions.inputs ? Teleport : 'div'" :to="regions.inputs" :style="regions.inputGroups ? { display: 'none' } : undefined">
+        <div :class="{ 'jsee-app': regions.inputs }" :style="designStyle" :data-theme="design && design.theme">
           <!-- Inputs -->
           <div class="jsee-card">
             <div class="jsee-card-body" id="inputs" v-if="inputs && inputs.length > 0"
               :class="{ 'jsee-12-grid': hasInputColumns }">
-              <div
-                v-for="(input, index) in inputs"
-                :key="index"
-                class="jsee-input-col"
+              <component v-for="(input, index) in inputs" :key="index"
+                :is="regions.inputGroups ? Teleport : 'div'" :to="regions.inputGroups">
+              <div v-show="!regions.inputGroups || state.selectedInputGroup === input.name"
+                class="jsee-input-col" :data-theme="design && design.theme"
                 :style="input.columns ? { gridColumn: 'span ' + input.columns } : undefined"
               >
                 <vue-input
@@ -225,9 +235,10 @@
                   v-on:inchange="run()"
                 ></vue-input>
               </div>
+              </component>
               <pre v-if="model && model.debug">{{ inputs }}</pre>
             </div>
-            <div class="jsee-card-footer" v-bind:class="{ reset: dataChanged }">
+            <div v-if="!jsee || jsee.controls !== false" class="jsee-card-footer" v-bind:class="{ reset: dataChanged }">
               <button
                 v-on:click="reset()"
                 v-if="inputs && inputs.length > 0 && dataChanged"
@@ -242,8 +253,9 @@
               >
                 Run
               </button>
+              <button v-if="!running && jsee && jsee.namedPipeline" v-on:click="jsee.rerun()" class="jsee-rerun-btn">Rerun all</button>
               <button
-                v-else
+                v-if="running"
                 v-on:click="stop()"
                 class="jsee-run-btn jsee-stop-btn"
               >
@@ -264,7 +276,9 @@
             </div>
           </div>
         </div>
-        <div id="outputs">
+        </component>
+        <component :is="regions.outputs ? Teleport : 'div'" :to="regions.outputs">
+        <div id="outputs" :class="{ 'jsee-app': regions.outputs }" :style="designStyle" :data-theme="design && design.theme">
           <!-- Outputs -->
           <div v-if="outputs" :class="{ 'jsee-12-grid': hasOutputColumns }">
             <div
@@ -273,6 +287,7 @@
               :style="output.columns ? { gridColumn: 'span ' + output.columns } : undefined"
             >
               <vue-output
+                v-if="output.display !== false"
                 v-bind:output="output"
                 v-bind:security="security"
                 v-on:notification="notify($event)"
@@ -281,12 +296,14 @@
             <pre v-if="debug">{{ outputs }}</pre>
           </div>
         </div>
+        </component>
       </div>
     </div>
   </section>
 </template>
 
 <script>
+  import { Teleport } from 'vue'
   function hexToRgb (hex) {
     if (typeof hex !== 'string' || hex[0] !== '#') return null
     const n = parseInt(hex.slice(1), 16)
@@ -315,10 +332,14 @@
   }
 
   export default {
+    // Vue 3.2 skips descendant cleanup for a disabled Teleport nested in a removed
+    // element. Use ordinary elements for the standalone layout instead.
+    setup () { return { Teleport } },
     inject: {
       jsee: { default: null }
     },
     computed: {
+      regions () { return this.jsee && this.jsee.regions || {} },
       state () {
         return this.jsee && this.jsee.state ? this.jsee.state : {}
       },
@@ -386,9 +407,20 @@
         return Object.keys(s).length ? s : undefined
       },
       gridStyle () {
+        if (this.regions.inputGroups) return { gridTemplateColumns: 'minmax(0, 1fr)' }
         const d = this.design
-        if (!d || !d.grid || !Array.isArray(d.grid) || d.grid.length < 2) return undefined
-        return { gridTemplateColumns: d.grid.map(n => `minmax(0, ${n}fr)`).join(' ') }
+        if (d && d.grid && Array.isArray(d.grid) && d.grid.length >= 2) {
+          return { '--jsee-grid-columns': d.grid.map(n => `minmax(0, ${n}fr)`).join(' ') }
+        }
+        // Grid editors need room, so a schema with one defaults to even columns
+        // instead of the narrow 1fr/2fr form column. An explicit grid or layout
+        // still wins.
+        if (!d || !d.layout) {
+          if (this.inputs.some(i => i && i.type === 'table' && i.display !== false)) {
+            return { '--jsee-grid-columns': 'minmax(0, 1fr) minmax(0, 1fr)' }
+          }
+        }
+        return undefined
       },
       hasInputColumns () {
         const inputs = this.inputs

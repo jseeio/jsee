@@ -1457,3 +1457,138 @@ test('object valueSchema validates browser inputs and outputs without coercion',
   expect(await page.evaluate(() => window.app.run())).toBe(false)
   expect(await page.evaluate(() => window.app.data.outputs[0].value)).toEqual([])
 })
+
+test('a host editor mounts in its input group without owning the form or execution', async ({ page }) => {
+  await page.goto('http://localhost:8484/load/')
+  await page.evaluate(async () => {
+    window.app?.destroy()
+    document.body.innerHTML = '<div id="editor-test"></div>'
+    window.app = new JSEE({ container: '#editor-test', schema: {
+      persist: false, model: { worker: false, autorun: false, code: 'function model(data) { return data.fit.config }' },
+      inputs: [{ type: 'group', name: 'fit', style: 'accordion', collapsed: false,
+        elements: [{ name: 'config', type: 'string', default: 'original', display: false }] }],
+      outputs: [{ name: 'result', type: 'string' }]
+    } })
+    await window.app.ready
+    const target = window.app.getInputGroupContainer('fit')
+    const editor = document.createElement('button')
+    editor.textContent = 'Host editor'
+    editor.onclick = () => window.app.setInputs({ fit: { config: 'edited' } })
+    target.append(editor)
+    window.editorTarget = target
+  })
+  await page.getByRole('button', { name: 'Host editor' }).click()
+  await page.getByRole('button', { name: /^Run\b/ }).click()
+  await expect(page.locator('#outputs')).toContainText('edited')
+  await page.locator('.jsee-accordion-header').click()
+  await expect(page.getByRole('button', { name: 'Host editor' })).toBeHidden()
+  expect(await page.evaluate(() => window.app.getInputGroupContainer('absent'))).toBeNull()
+  await page.evaluate(() => window.app.destroy())
+  expect(await page.evaluate(() => window.editorTarget.isConnected)).toBe(false)
+})
+
+test.describe('Responsive layout and programmatic values', () => {
+  test('custom design grid collapses to one column on narrow screens', async ({ page }) => {
+    const schema = echoSchema([{ name: 'a', type: 'int', default: 1 }])
+    schema.design = { grid: [5, 7] }
+    await page.setViewportSize({ width: 390, height: 800 })
+    await page.goto(urlQueryEscaped(schema))
+    await expect(page.locator('#a')).toBeVisible()
+    const columns = () => page.locator('.jsee-grid').first().evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').map(parseFloat))
+    expect((await columns()).length).toBe(1)
+    await page.setViewportSize({ width: 1100, height: 800 })
+    const wide = await columns()
+    expect(wide.length).toBe(2)
+    expect(wide[1] / wide[0]).toBeCloseTo(7 / 5, 1)
+  })
+
+  test('sidebar layout honours a custom grid and still collapses on narrow screens', async ({ page }) => {
+    const schema = echoSchema([{ name: 'a', type: 'int', default: 1 }])
+    schema.design = { layout: 'sidebar', grid: [1, 1] }
+    await page.setViewportSize({ width: 1100, height: 800 })
+    await page.goto(urlQueryEscaped(schema))
+    await expect(page.locator('#a')).toBeVisible()
+    const columns = () => page.locator('.jsee-grid').first().evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').map(parseFloat))
+    const wide = await columns()
+    expect(wide.length).toBe(2)
+    expect(Math.abs(wide[0] - wide[1])).toBeLessThan(2)
+    await page.setViewportSize({ width: 390, height: 800 })
+    expect((await columns()).length).toBe(1)
+  })
+
+  test('a host can bound the sticky sidebar panel below its own header', async ({ page }) => {
+    const schema = echoSchema(Array.from({ length: 40 }, (_, i) => ({ name: 'n' + i, type: 'int', default: i })))
+    schema.model.autorun = false
+    schema.design = { layout: 'sidebar' }
+    await page.setViewportSize({ width: 1100, height: 600 })
+    await page.goto(urlQueryEscaped(schema))
+    await expect(page.locator('#n0')).toBeVisible()
+    await page.evaluate(() => document.querySelector('#jsee-container').style.setProperty('--jsee-sidebar-max-height', '400px'))
+    const height = await page.locator('.jsee-grid > div').first().evaluate(el => el.getBoundingClientRect().height)
+    expect(height).toBeLessThanOrEqual(401)
+    const box = await page.locator('.jsee-run-btn').boundingBox()
+    expect(box.y + box.height).toBeLessThanOrEqual(600)
+  })
+
+  test('run controls stay visible while scrolling a long form', async ({ page }) => {
+    const schema = echoSchema(Array.from({ length: 40 }, (_, i) => ({ name: 'n' + i, type: 'int', default: i })))
+    schema.model.autorun = false
+    await page.setViewportSize({ width: 1100, height: 600 })
+    await page.goto(urlQueryEscaped(schema))
+    await expect(page.locator('#n0')).toBeVisible()
+    for (const field of ['#n0', '#n15']) {
+      await page.locator(field).scrollIntoViewIfNeeded()
+      const box = await page.locator('.jsee-run-btn').boundingBox()
+      expect(box.y).toBeGreaterThanOrEqual(0)
+      expect(box.y + box.height).toBeLessThanOrEqual(600)
+    }
+  })
+
+  test('file picker shows a file supplied programmatically and clears with it', async ({ page }) => {
+    await page.goto('/load/')
+    await page.evaluate(async () => {
+      document.body.innerHTML = '<div id="app"></div>'
+      window.app = new JSEE({ container: '#app', verbose: false, schema: { persist: false,
+        model: { worker: false, autorun: false, code: 'function (data) { return { size: data.file ? data.file.size : 0 } }' },
+        inputs: [{ name: 'file', type: 'file', raw: true }], outputs: [{ name: 'size', type: 'number' }] } })
+      await window.app.ready
+      await window.app.setInputs({ file: new File(['x,y\n1,2\n'], 'data.csv', { type: 'text/csv' }) })
+    })
+    try {
+      await expect(page.locator('#app .vfp-label strong')).toHaveText('data.csv')
+      await page.evaluate(() => window.app.setInputs({ file: null }))
+      await expect(page.locator('#app .vfp-label strong')).toHaveText('Choose File')
+    } finally { await page.evaluate(() => window.app.destroy()) }
+  })
+})
+
+test.describe('Pipeline presentation', () => {
+  test('section groups show a prominent collapsible heading', async ({ page }) => {
+    const schema = echoSchema([{ type: 'group', name: 'model', label: 'Model settings', style: 'section',
+      elements: [{ name: 'depth', type: 'int', default: 3 }] }])
+    schema.model.autorun = false
+    await page.goto(urlQueryEscaped(schema))
+    const header = page.locator('.jsee-section .jsee-accordion-header')
+    await expect(header).toContainText('Model settings')
+    const size = await header.evaluate(el => parseFloat(getComputedStyle(el).fontSize))
+    expect(size).toBeGreaterThanOrEqual(15)
+    await expect(page.locator('#depth')).toBeVisible()
+    await header.click()
+    // Accordion bodies collapse by clipping to zero height, like existing accordions.
+    const body = page.locator('.jsee-section .jsee-accordion-body')
+    await expect(body).toHaveClass(/collapsed/)
+    await expect.poll(() => body.evaluate(el => el.getBoundingClientRect().height)).toBe(0)
+  })
+
+  test('stage result titles show a status chip', async ({ page }) => {
+    await page.goto(urlQueryEscaped({ persist: false,
+      model: [{ id: 'a', worker: false, code: 'function (data) { return { value: 7 } }' }],
+      inputs: [{ name: 'n', type: 'int', default: 1 }],
+      outputs: [{ type: 'group', _stage: 'a', label: 'Stage A', elements: [{ name: 'a.value', type: 'number' }] }] }))
+    const chip = page.getByRole('region', { name: 'Stage A results' }).locator('.jsee-stage-status')
+    await expect(chip).toHaveAttribute('data-status', 'idle')
+    await page.locator('.jsee-run-btn').click()
+    await expect(chip).toHaveAttribute('data-status', 'current')
+    await expect(chip).toHaveText('current')
+  })
+})

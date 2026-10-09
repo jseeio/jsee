@@ -16,6 +16,9 @@ const component = {
       activeTab: 0
     }
   },
+  watch: {
+    'input.collapsed' (value) { this.collapsed = value === true }
+  },
   computed: {
     effectiveStyle () {
       if (this.input.style) return this.input.style
@@ -31,6 +34,7 @@ const component = {
     },
     toggleCollapsed () {
       this.collapsed = !this.collapsed
+      this.input.collapsed = this.collapsed
     },
     autosize (e) {
       const el = e.target

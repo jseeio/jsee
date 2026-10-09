@@ -259,6 +259,17 @@
   transition: max-height 0.25s ease;
   &.collapsed { max-height: 0 !important; }
 }
+.jsee-section > .jsee-accordion-header {
+  font-size: 15px;
+  padding: 12px 0 8px;
+  margin-top: 6px;
+  border-top: 1px solid var(--jsee-border, #e5e5e5);
+}
+.jsee-input-col:first-child .jsee-section > .jsee-accordion-header {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 2px;
+}
 .jsee-input-error {
   display: block;
   font-size: 11px;
@@ -316,10 +327,10 @@
   <structured-input v-if="['object', 'table'].includes(input.type)" :input="input" @change="changeHandler" />
   <media-input v-if="['image', 'audio', 'video'].includes(input.type)" :input="input" @change="changeHandler" />
   <div class="jsee-field" v-if="input.type == 'int' || input.type == 'float' || input.type == 'number'">
-    <label v-bind:for="input.name" class="jsee-label">{{ input.name }}</label>
+    <label v-bind:for="input._id || input.name" class="jsee-label">{{ input.label || input.name }}</label>
     <input
       v-model="input.value"
-      v-bind:id="input.name"
+      v-bind:id="input._id || input.name"
       v-bind:step="input.type == 'int' ? 1 : 0.001"
       v-bind:placeholder="input.placeholder ? input.placeholder : input.name"
       v-bind:min="input.min"
@@ -334,10 +345,10 @@
   </div>
 
   <div class="jsee-field" v-if="input.type == 'string' || input.type == 'color'">
-    <label v-bind:for="input.name" class="jsee-label">{{ input.name }}</label>
+    <label v-bind:for="input._id || input.name" class="jsee-label">{{ input.label || input.name }}</label>
     <input
       v-model="input.value"
-      v-bind:id="input.name"
+      v-bind:id="input._id || input.name"
       v-bind:type="input.type == 'color' ? 'color' : 'text'"
       v-bind:placeholder="input.placeholder ? input.placeholder : input.name"
       v-bind:disabled="input.disabled"
@@ -350,11 +361,11 @@
   </div>
 
   <div class="jsee-field" v-if="input.type == 'text'">
-    <label v-bind:for="input.name" class="jsee-label">{{ input.name }}</label>
+    <label v-bind:for="input._id || input.name" class="jsee-label">{{ input.label || input.name }}</label>
     <textarea
       ref="textarea"
       v-model="input.value"
-      v-bind:id="input.name"
+      v-bind:id="input._id || input.name"
       v-bind:placeholder="input.placeholder ? input.placeholder : input.name"
       v-bind:disabled="input.disabled"
       v-on:change="changeHandler"
@@ -366,13 +377,13 @@
   </div>
 
   <div class="jsee-field" v-if="input.type == 'slider'">
-    <label v-bind:for="input.name" class="jsee-label">
-      {{ input.name }}: <strong>{{ input.value }}</strong>
+    <label v-bind:for="input._id || input.name" class="jsee-label">
+      {{ input.label || input.name }}: <strong>{{ input.value }}</strong>
     </label>
     <div class="jsee-slider-track">
       <input
         v-model.number="input.value"
-        v-bind:id="input.name"
+        v-bind:id="input._id || input.name"
         v-bind:min="input.min || 0"
         v-bind:max="input.max || 100"
         v-bind:step="input.step || 1"
@@ -385,7 +396,7 @@
 
   <div class="jsee-field" v-if="input.type == 'range'">
     <label class="jsee-label">
-      {{ input.name }}: <strong>{{ (input.value || [])[0] }} - {{ (input.value || [])[1] }}</strong>
+      {{ input.label || input.name }}: <strong>{{ (input.value || [])[0] }} - {{ (input.value || [])[1] }}</strong>
     </label>
     <div class="jsee-range">
       <span class="jsee-range-value">{{ (input.value || [])[0] }}</span>
@@ -419,10 +430,10 @@
   </div>
 
   <div class="jsee-field" v-if="input.type == 'date'">
-    <label v-bind:for="input.name" class="jsee-label">{{ input.name }}</label>
+    <label v-bind:for="input._id || input.name" class="jsee-label">{{ input.label || input.name }}</label>
     <input
       v-model="input.value"
-      v-bind:id="input.name"
+      v-bind:id="input._id || input.name"
       v-bind:disabled="input.disabled"
       v-on:change="changeHandler"
       class="jsee-input"
@@ -436,31 +447,31 @@
     <label class="jsee-checkbox-label">
       <input
         v-model="input.value"
-        v-bind:id="input.name"
+        v-bind:id="input._id || input.name"
         v-bind:disabled="input.disabled"
         v-on:change="changeHandler"
         type="checkbox"
       >
-      {{ input.name }}
+      {{ input.label || input.name }}
     </label>
   </div>
 
   <div class="jsee-field" v-if="input.type == 'toggle'">
     <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px;">
       <span class="jsee-toggle">
-        <input type="checkbox" v-model="input.value" v-bind:id="input.name" v-bind:disabled="input.disabled" v-on:change="changeHandler">
+        <input type="checkbox" v-model="input.value" v-bind:id="input._id || input.name" v-bind:disabled="input.disabled" v-on:change="changeHandler">
         <span class="jsee-toggle-track" v-bind:class="{ active: input.value }"></span>
         <span class="jsee-toggle-thumb" v-bind:class="{ active: input.value }"></span>
       </span>
-      {{ input.name }}
+      {{ input.label || input.name }}
     </label>
   </div>
 
   <div class="jsee-field" v-if="input.type == 'categorical' || input.type == 'select'">
-    <label v-bind:for="input.name" class="jsee-label">{{ input.name }}</label>
+    <label v-bind:for="input._id || input.name" class="jsee-label">{{ input.label || input.name }}</label>
     <select
       v-model="input.value"
-      v-bind:id="input.name"
+      v-bind:id="input._id || input.name"
       v-bind:disabled="input.disabled"
       v-on:change="changeHandler"
       class="jsee-select"
@@ -472,7 +483,7 @@
   </div>
 
   <div class="jsee-field" v-if="input.type == 'radio'">
-    <label class="jsee-label">{{ input.name }}</label>
+    <label class="jsee-label">{{ input.label || input.name }}</label>
     <label v-for="option in input.options" :key="option" class="jsee-radio-label">
       <input type="radio" v-model="input.value" :value="option" :name="input.name" v-bind:disabled="input.disabled" v-on:change="changeHandler">
       {{ option }}
@@ -480,7 +491,7 @@
   </div>
 
   <div class="jsee-field" v-if="input.type == 'multi-select'">
-    <label class="jsee-label">{{ input.name }}</label>
+    <label class="jsee-label">{{ input.label || input.name }}</label>
     <label v-for="option in input.options" :key="option" class="jsee-checkbox-label">
       <input type="checkbox" :value="option" v-model="input.value" v-bind:disabled="input.disabled" v-on:change="changeHandler">
       {{ option }}
@@ -488,7 +499,7 @@
   </div>
 
   <div class="jsee-field" v-if="input.type == 'file'">
-    <label v-bind:for="input.name" class="jsee-label">{{ input.name }}</label>
+    <label v-bind:for="input._id || input.name" class="jsee-label">{{ input.label || input.name }}</label>
     <div v-if="!input.disabled">
       <file-picker
         v-model="input.value"
@@ -504,7 +515,7 @@
     <div v-else>
       <input
         class="jsee-input"
-        v-bind:id="input.name"
+        v-bind:id="input._id || input.name"
         v-bind:value="input.default"
         disabled
       >
@@ -512,7 +523,7 @@
   </div>
 
   <div class="jsee-field" v-if="input.type == 'folder'">
-    <label v-bind:for="input.name" class="jsee-label">{{ input.name }}</label>
+    <label v-bind:for="input._id || input.name" class="jsee-label">{{ input.label || input.name }}</label>
     <div v-if="!input.disabled && (!input.value || input.value.length === 0)">
       <div class="vfp-bgArea" style="min-height: 80px; padding: 15px 10px;"
         @dragover.prevent @dragleave.prevent @drop.prevent="folderDropped">
@@ -557,39 +568,41 @@
     </button>
   </div>
 
-  <div class="jsee-field" v-if="input.type == 'group'">
-    <!-- Accordion -->
-    <div v-if="effectiveStyle === 'accordion'">
+  <div class="jsee-field" v-if="input.type == 'group'" :data-jsee-input-group="input.name">
+    <!-- Accordion; a section is an accordion with a prominent heading -->
+    <div v-if="effectiveStyle === 'accordion' || effectiveStyle === 'section'" :class="{ 'jsee-section': effectiveStyle === 'section' }">
       <div class="jsee-accordion-header" v-on:click="toggleCollapsed">
         <span class="jsee-accordion-arrow" v-bind:class="{ collapsed: collapsed }"></span>
         <strong>{{ input.label || input.name }}</strong>
       </div>
-      <div class="jsee-group jsee-accordion-body" v-bind:class="{ collapsed: collapsed }" style="max-height: 2000px;">
-        <vue-input v-for="(el, index) in input.elements" v-bind:input="el" v-bind:security="security"></vue-input>
+      <div class="jsee-group jsee-accordion-body" :style="{ flexDirection: input.direction }" v-show="!collapsed" v-bind:class="{ collapsed: collapsed }" style="max-height: 2000px;">
+        <vue-input v-for="(el, index) in input.elements.filter(field => field.display !== false)" v-bind:input="el" v-bind:security="security"></vue-input>
       </div>
     </div>
     <!-- Tabs -->
     <div v-else-if="effectiveStyle === 'tabs'">
       <div class="jsee-tabs-header">
-        <button v-for="(el, ti) in input.elements" :key="ti"
+        <button v-for="(el, ti) in input.elements.filter(field => field.display !== false)" :key="ti"
           class="jsee-tab-btn" :class="{ active: activeTab === ti }"
           v-on:click="activeTab = ti">
           {{ el.label || el.name || 'Tab ' + (ti + 1) }}
         </button>
       </div>
       <div class="jsee-tabs-body">
-        <div v-for="(el, ti) in input.elements" :key="ti" v-show="activeTab === ti">
+        <div v-for="(el, ti) in input.elements.filter(field => field.display !== false)" :key="ti" v-show="activeTab === ti">
           <template v-if="el.type === 'group'">
-            <vue-input v-for="(child, ci) in el.elements" :key="ci" :input="child" :security="security"></vue-input>
+            <vue-input v-for="(child, ci) in el.elements.filter(field => field.display !== false)" :key="ci" :input="child" :security="security"></vue-input>
           </template>
           <vue-input v-else :input="el" :security="security"></vue-input>
         </div>
       </div>
     </div>
     <!-- Blocks (default) -->
-    <div v-else class="jsee-group">
-      <vue-input v-for="(el, index) in input.elements" v-bind:input="el" v-bind:security="security"></vue-input>
+    <div v-else class="jsee-group" :style="{ flexDirection: input.direction }">
+      <vue-input v-for="(el, index) in input.elements.filter(field => field.display !== false)" v-bind:input="el" v-bind:security="security"></vue-input>
     </div>
+    <!-- Framework-independent mount point; JSEE owns the group and its visibility. -->
+    <div :data-jsee-group-editor="input.name" v-show="!['accordion', 'section'].includes(effectiveStyle) || !collapsed"></div>
   </div>
 </template>
 

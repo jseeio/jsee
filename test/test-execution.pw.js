@@ -1203,3 +1203,330 @@ test('classic imports preserve each script strictness and model globals', async 
   })
   expect(result).toEqual({ ok: true, answer: true })
 })
+
+test('embedding handle owns inputs, results, cancellation and teleported regions', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    document.body.innerHTML = '<div id="host"></div><aside id="controls"></aside><main id="results"></main>'
+    const events = []
+    const app = new JSEE({ container: '#host', verbose: false,
+      regions: { inputs: '#controls', outputs: '#results' },
+      schema: { persist: false, model: { worker: false, type: 'async-function', code: async data => {
+        await new Promise(resolve => setTimeout(resolve, 50))
+        if (data.x < 0) throw new Error('negative')
+        return { answer: data.x * 2 }
+      } }, inputs: [{ name: 'x', type: 'int', default: 2 }], outputs: [{ name: 'answer', type: 'number' }] }
+    })
+    window.embedding = app
+    await app.ready
+    app.on('inputs', values => events.push(values.x))
+    await app.setInputs({ x: 4 })
+    const values = app.getInputs()
+    values.x = 99
+    const answer = await app.invoke()
+    let failure
+    try { await app.invoke({ x: -1 }) } catch (error) { failure = error.message }
+    const pending = app.invoke({ x: 8 })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    app.stop()
+    let cancelled
+    try { await pending } catch (error) { cancelled = error.name }
+    return { answer, current: app.getInputs().x, failure, cancelled, events,
+      controls: !!document.querySelector('#controls input'), output: !!document.querySelector('#results #outputs') }
+  })
+  expect(result).toMatchObject({ answer: { answer: 8 }, current: 8, failure: 'negative', cancelled: 'AbortError', controls: true, output: true })
+  expect(result.events).toContain(4)
+  await page.evaluate(() => window.embedding.destroy())
+  await expect(page.locator('#controls input')).toHaveCount(0)
+  await expect(page.locator('#results #outputs')).toHaveCount(0)
+})
+
+test('embedding patches are atomic, grouped, isolated and reject overlapping invocations', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    document.body.innerHTML = '<div id="a"></div><div id="b"></div>'
+    const schema = { persist: false,
+      model: { worker: false, type: 'async-function', code: async data => {
+        await new Promise(resolve => setTimeout(resolve, 25))
+        return { answer: data.settings.x }
+      } },
+      inputs: [{ name: 'settings', type: 'group', elements: [{ name: 'x', type: 'int', default: 2 }] }],
+      outputs: [{ name: 'answer', type: 'number' }] }
+    const a = new JSEE({ container: '#a', schema, verbose: false })
+    const b = new JSEE({ container: '#b', schema, verbose: false })
+    await Promise.all([a.ready, b.ready])
+    let invalid
+    try { await a.setInputs({ settings: { x: 9, missing: 1 } }) } catch (error) { invalid = error.message }
+    const before = a.getInputs()
+    const first = a.invoke({ settings: { x: 7 } })
+    let overlap
+    try { await a.invoke({ settings: { x: 99 } }) } catch (error) { overlap = error.message }
+    const answer = await first
+    const other = b.getInputs()
+    let notifications = 0
+    const off = a.on('inputs', () => notifications++)
+    off()
+    await a.setInputs({ settings: { x: 8 } })
+    a.destroy(); b.destroy()
+    let destroyed
+    try { await a.invoke() } catch (error) { destroyed = error.message }
+    return { before, answer, other, invalid, overlap, notifications, destroyed }
+  })
+  expect(result).toEqual({ before: { settings: { x: 2 } }, answer: { answer: 7 }, other: { settings: { x: 2 } },
+    invalid: 'Unknown input: missing', overlap: 'A run is already in progress', notifications: 0, destroyed: 'JSEE instance has been destroyed' })
+})
+
+test('an optional binary file can be empty while another input runs', async ({ page }) => {
+  await page.goto('/load/')
+  const errors = []
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
+  await page.evaluate(async () => {
+    document.body.innerHTML = '<div id="optional-file"></div>'
+    window.optionalFile = new JSEE({ container: '#optional-file', verbose: false, schema: {
+      persist: false, model: { worker: false, code: data => ({ answer: data.bundle === null }) },
+      inputs: [{ name: 'bundle', type: 'file', raw: true, default: null, nullable: true }],
+      outputs: [{ name: 'answer', type: 'object' }]
+    } })
+    await window.optionalFile.ready
+  })
+  await expect(page.locator('#optional-file input[type=file]')).toHaveCount(1)
+  expect(await page.evaluate(() => window.optionalFile.invoke())).toEqual({ answer: true })
+  expect(errors).toEqual([])
+  await page.evaluate(() => window.optionalFile.output({ bundle: null }))
+  expect(await page.evaluate(() => window.optionalFile.getInputs())).toEqual({ bundle: null })
+  await page.evaluate(() => window.optionalFile.destroy())
+})
+
+test('worker input-option updates survive internal caller metadata', async ({ page }) => {
+  await page.goto('/load/')
+  await page.evaluate(async () => {
+    document.body.innerHTML = '<div id="options"></div>'
+    window.optionsApp = new JSEE({ container: '#options', verbose: false, schema: {
+      persist: false, model: { worker: true, code: 'function model () { return { target: { options: ["", "label"], value: "" } } }' },
+      inputs: [{ name: 'target', type: 'select', options: [''] }], outputs: [{ name: 'result', type: 'string' }]
+    } })
+    await window.optionsApp.ready
+    await window.optionsApp.invoke()
+  })
+  await expect(page.locator('#options select option')).toHaveText(['', 'label'])
+  await page.evaluate(() => window.optionsApp.invoke({ target: 'label' }))
+  await page.evaluate(() => window.optionsApp.destroy())
+})
+
+test('Run waits for model initialization and destroy observers cannot reenter disposal', async ({ page }) => {
+  await page.goto('/load/')
+  await page.evaluate(() => {
+    document.body.innerHTML = '<div id="early"></div>'
+    window.early = new JSEE({ container: '#early', verbose: false, schema: {
+      persist: false, model: { worker: false, type: 'async-init', code: async () => {
+        await new Promise(resolve => { window.releaseEarly = resolve })
+        return () => ({ answer: 42 })
+      } }, inputs: [], outputs: [{ name: 'answer', type: 'number' }]
+    } })
+  })
+  await expect.poll(() => page.evaluate(() => typeof window.releaseEarly)).toBe('function')
+  const settled = await page.evaluate(async () => {
+    window.earlySettled = false
+    window.earlyRun = window.early.run().then(value => { window.earlySettled = true; return value })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    return window.earlySettled
+  })
+  expect(settled).toBe(false)
+  expect(await page.evaluate(async () => { window.releaseEarly(); return window.earlyRun })).toBe(true)
+  await expect(page.locator('#early #outputs')).toContainText('42')
+  expect(await page.evaluate(() => {
+    let calls = 0
+    window.early.on('destroy', () => { if (++calls === 1) window.early.destroy() })
+    window.early.destroy()
+    return calls
+  })).toBe(1)
+})
+
+test('Stop cancels invoke before input patching reaches the pipeline', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    document.body.innerHTML = '<div id="invoke-stop"></div>'
+    window.invokeStopCalls = 0
+    const app = new JSEE({ container: '#invoke-stop', verbose: false, schema: {
+      persist: false, inputs: [{ name: 'x', type: 'int', default: 1 }], outputs: [{ name: 'answer', type: 'number' }],
+      model: { worker: false, code: data => { window.invokeStopCalls++; return { answer: data.x } } }
+    } })
+    await app.ready
+    const pending = app.invoke({ x: 2 })
+    app.stop()
+    let error
+    try { await pending } catch (caught) { error = caught.name }
+    const calls = window.invokeStopCalls
+    const next = await app.invoke({ x: 3 })
+    app.destroy()
+    return { error, calls, next }
+  })
+  expect(result).toEqual({ error: 'AbortError', calls: 0, next: { answer: 3 } })
+})
+
+test('embedded controls and toasts are independently owned by each host', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    document.body.insertAdjacentHTML('beforeend', '<div id="quiet"></div><div id="normal"></div>')
+    const schema = { persist: false, inputs: [{ name: 'x', type: 'int', default: 1 }], outputs: [{ name: 'answer', type: 'int' }],
+      model: { worker: false, code: data => { if (data.x < 0) throw new Error('host-visible failure'); return { answer: data.x + 1 } } } }
+    const quiet = new JSEE({ container: '#quiet', schema, controls: false, toasts: false, verbose: false })
+    await quiet.ready
+    quiet.notify('quiet host marker')
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    const messages = document.body.textContent
+    let error = ''
+    try { await quiet.invoke({ x: -1 }) } catch (e) { error = e.message }
+    const normal = new JSEE({ container: '#normal', schema, verbose: false })
+    await normal.ready
+    normal.notify('normal host marker')
+    window.embeddedQuiet = quiet
+    window.embeddedNormal = normal
+    return { messages, error, outputs: await quiet.invoke({ x: 4 }) }
+  })
+  expect(result.messages).not.toContain('quiet host marker')
+  expect(result.error).toContain('host-visible failure')
+  expect(result.outputs.answer).toBe(5)
+  await expect(page.locator('#quiet .jsee-card-footer')).toHaveCount(0)
+  await expect(page.locator('#normal .jsee-run-btn')).toBeVisible()
+  await expect(page.locator('.notyf')).toContainText('normal host marker')
+  await page.evaluate(() => { window.embeddedQuiet.destroy(); window.embeddedNormal.destroy() })
+})
+
+test('one composed JSEE runs scoped module chains and branches, reuses ancestors and restores results', async ({ page }) => {
+  await page.goto('/load/')
+  const schema = require('./fixtures/composition.json')
+  const result = await page.evaluate(async schema => {
+    const container = document.createElement('div'); document.body.append(container)
+    const app = window.composite = new JSEE({ container, schema, toasts: false })
+    await app.ready
+    const first = await app.invoke({ source: { count: 4 }, left: { scale: 3 } }, { target: 'left' })
+    const sourceRevision = app.getPipelineState().stages.source.revision
+    const second = await app.invoke(undefined, { target: 'right' })
+    const state = app.getPipelineState()
+    await app.setInputs({ left: { scale: 4 } })
+    const stale = app.getPipelineState().stages.left.status
+    return { first, second, sourceRevision, nextRevision: state.stages.source.revision, stale,
+      roots: container.querySelectorAll('.jsee-app').length }
+  }, schema)
+  expect(result.first['left.value']).toBe(30)
+  expect(result.second['right.value']).toBe(4)
+  expect(result.sourceRevision).toBe(result.nextRevision)
+  expect(result.stale).toBe('stale')
+  expect(result.roots).toBe(1)
+})
+
+test('module inspection scopes dynamic input updates and partial outputs to the selected module', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const container = document.createElement('div'); document.body.append(container)
+    const module = {
+      inputs: [{ name: 'target', type: 'select', options: [''], default: '' }, { name: 'inspect', type: 'checkbox', default: false, display: false }],
+      model: { type: 'async-function', name: 'model', worker: true,
+        code: `async function model(input) { if (input.inspect) { postMessage({_partial:true, report:'inspected'}); return {target:{options:['','x','y'],value:''}} } return {report:input.target} }` },
+      outputs: [{ name: 'report', type: 'string' }]
+    }
+    const app = new JSEE({ container, toasts: false, schema: { persist: false,
+      inputs: ['a','b'].map(id => ({ type: 'group', name: id, elements: module.inputs.map(field => ({...field, _id:id+'--'+field.name})) })),
+      outputs: ['a','b'].map(id => ({ type: 'group', elements: module.outputs.map(field => ({ ...field, name:id+'.'+field.name })) })),
+      model: ['a','b'].map(id => ({ ...module.model, id, scope:id })) } })
+    await app.ready
+    await app.invoke(undefined, { target: 'a', transient: true, overrides: { inspect: true, target: '' } })
+    const options = app.data.inputs.map(group => group.elements[0].options)
+    await app.setInputs({ a: { target: 'y' } })
+    const output = await app.invoke(undefined, { target: 'a' })
+    return { options, output, hiddenControls: container.querySelectorAll('input[type=checkbox]').length, ids: [...container.querySelectorAll('select')].map(element => element.id) }
+  })
+  expect(result.hiddenControls).toBe(0)
+  expect(new Set(result.ids).size).toBe(result.ids.length)
+  expect(result.options).toEqual([['', 'x', 'y'], ['']])
+  expect(result.output['a.report']).toBe('y')
+})
+
+test('composed schema exports as one offline JSEE application without the composer', async ({ page }) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'jsee-composite-'))
+  try {
+    await page.goto('/load/')
+    const schema = require('./fixtures/composition.json')
+    const html = await page.evaluate(async schema => {
+      const container = document.createElement('div'); document.body.append(container)
+      const app = new JSEE({ container, schema, toasts: false })
+      await app.ready
+      await app.invoke({ source: { count: 4 }, left: { scale: 3 } })
+      return (await app.exportHTML({ runtime: '/dist/jsee.core.js' })).text()
+    }, schema)
+    const file = path.join(directory, 'index.html'); fs.writeFileSync(file, html)
+    const requests = []
+    await page.route(/^https?:\/\//, route => { requests.push(route.request().url()); return route.abort() })
+    await page.goto(pathToFileURL(file).href)
+    const result = await page.evaluate(async () => { await window.env.ready; return window.env.invoke() })
+    expect(result['left.value']).toBe(30)
+    expect(result['right.value']).toBe(4)
+    expect(requests).toEqual([])
+    expect(await page.locator('.jsee-app').count()).toBe(1)
+  } finally { await page.goto('about:blank'); fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('function outputs dispose the previous render and their mounted resources', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const container = document.createElement('div'); document.body.append(container)
+    let disposed = 0
+    const app = new JSEE({ container, toasts: false, schema: { inputs: [], outputs: [{ name: 'report', type: 'function' }],
+      model: { type: 'function', worker: false, code: () => ({ report: element => { element.textContent = 'report'; return () => { disposed++ } } }) } } })
+    await app.ready; await app.invoke(); await new Promise(requestAnimationFrame)
+    await app.invoke(); await new Promise(requestAnimationFrame)
+    const rerendered = disposed
+    app.destroy()
+    return { rerendered, disposed }
+  })
+  expect(result).toEqual({ rerendered: 1, disposed: 2 })
+})
+
+test('selected input groups share a host inspector without reruns or remounts', async ({ page }) => {
+  await page.goto('/load/')
+  const schema = require('./fixtures/composition.json')
+  const result = await page.evaluate(async schema => {
+    const container = document.createElement('div'), inspector = document.createElement('div')
+    document.body.append(container, inspector)
+    const app = new JSEE({ container, schema, controls: false, toasts: false, regions: { inputGroups: inspector } })
+    await app.ready
+    app.selectInputGroup('source')
+    await app.invoke(undefined, { target: 'left' })
+    const before = app.getPipelineState()
+    app.selectInputGroup('left')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const visible = [...inspector.querySelectorAll('.jsee-input-col')].filter(element => getComputedStyle(element).display !== 'none').length
+    const after = app.getPipelineState()
+    await app.invoke()
+    const full = app.getPipelineState()
+    await app.invoke()
+    const reused = app.getPipelineState()
+    app.destroy()
+    return { visible, before, after, full, reused, remaining: inspector.childElementCount }
+  }, schema)
+  expect(result.visible).toBe(1)
+  expect(result.after).toEqual(result.before)
+  expect(result.reused).toEqual(result.full)
+  expect(result.remaining).toBe(0)
+})
+
+test('nested parameter groups receive scoped inspection updates and selection changes only presentation', async ({ page }) => {
+  await page.goto('/load/')
+  await page.evaluate(async () => {
+    document.body.innerHTML = '<div id="nested"></div>'
+    const field = name => ({ name, type: 'group', label: name, style: 'section', collapsed: true,
+      elements: [{ name: 'column', type: 'select', options: [''], default: '' }] })
+    window.nestedApp = new JSEE({ container: '#nested', schema: { persist: false,
+      inputs: [{ name: 'segment', type: 'group', style: 'blocks', elements: [field('rename'), field('diff')] }],
+      model: [{ id: 'transform', scope: 'segment', worker: false,
+        code: 'function model() { return {diff:{column:{options:["","price"],value:"price"}}} }' }], outputs: [] } })
+    await window.nestedApp.ready
+    await window.nestedApp.invoke(undefined, { target: 'transform', transient: true })
+  })
+  expect(await page.evaluate(() => window.nestedApp.getInputs().segment.diff.column)).toBe('price')
+  await page.evaluate(() => window.nestedApp.selectInputGroup('diff'))
+  await expect(page.locator('[data-jsee-input-group="diff"] select')).toBeVisible()
+  await expect(page.locator('[data-jsee-input-group="rename"] select')).not.toBeVisible()
+  expect(await page.evaluate(() => window.nestedApp.getStages().transform.revision)).toBe(0)
+})

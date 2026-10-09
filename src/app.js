@@ -1,4 +1,4 @@
-const { cloneSchema, getOptionValue, getInputDefaultValue } = require('./schema')
+const { cloneSchema, collectInputValues: collectValues, getOptionValue, getInputDefaultValue } = require('./schema')
 // import Vue from 'vue'
 // import { createApp } from 'vue'
 // import { createApp } from 'vue/dist/vue.esm-bundler'
@@ -228,8 +228,10 @@ function clearInputsStorage (storageKey) {
 
 function setInputValue (input, value) {
   if (input.type === 'file') {
-    // For file inputs, we need to set the url
-    input.url = value
+    // Only strings can seed the URL picker; nullable/opaque file defaults remain values.
+    const urlDefault = typeof value === 'string' && !/[\r\n]/.test(value)
+    input.url = urlDefault ? value : ''
+    input.value = urlDefault ? '' : value
     input.file = null // Reset file object
   } else {
     // For other inputs, we can set the value directly
@@ -359,12 +361,16 @@ function createVueApp (env, mountedCallback, logMain) {
   const app = createApp({
     render,
     data () {
-      return dataInit
+      return { ...dataInit, selectedInputGroup: null }
     },
     provide () {
       return {
         jsee: {
           state: this,
+          regions: env.regions,
+          controls: env.controls,
+          namedPipeline: env._namedPipeline,
+          rerun: () => env.invoke(undefined, { force: true }).catch(error => env.toast('error', error.message)),
           display: (index) => this.display(index),
           reset: (example) => this.reset(example),
           run: (caller) => this.run(caller),
@@ -379,22 +385,27 @@ function createVueApp (env, mountedCallback, logMain) {
         immediate: false,
         // schema.reactive enables global re-run on any input change (debounced).
         // Per-input reactivity uses the 'inchange' event from inputs with reactive: true.
-        handler: debounce(function (v) {
-          this.dataChanged = true
-          if (env.schema.persist !== false) {
-            saveInputsToStorage(this.inputs, storageKey)
-          }
-          this.validateInputs()
-          if (env.schema.reactive) {
-            this.run('reactive')
-          }
-        }, 300)
+        handler (v) {
+          env._emit('inputs', collectValues(v))
+          this.inputsChanged()
+        }
       }
     },
     mounted () {
       mountedCallback(container)
     },
     methods: {
+      inputsChanged: debounce(function () {
+        if (env._destroyed) return
+        this.dataChanged = true
+        if (env.schema.persist !== false) {
+          saveInputsToStorage(this.inputs, storageKey)
+        }
+        this.validateInputs()
+        if (env.schema.reactive) {
+          this.run('reactive')
+        }
+      }, 300),
       validateInputs () {
         return runValidation(getValidationInputs(this.inputs), validateFunctions)
       },
@@ -411,7 +422,7 @@ function createVueApp (env, mountedCallback, logMain) {
         clearInputsStorage(storageKey)
         // Clear DOM file inputs so re-uploading the same file triggers change event
         this.$nextTick(() => {
-          const fileInputs = container.querySelectorAll('input[type="file"]')
+          const fileInputs = (env.regions.inputGroups || env.regions.inputs || container).querySelectorAll('input[type="file"]')
           fileInputs.forEach(el => { el.value = '' })
           this.dataChanged = false
         })

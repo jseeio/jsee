@@ -5,10 +5,12 @@ const path = require('path')
 const crypto = require('crypto')
 const { pathToFileURL } = require('url')
 const { resolveInside, makeHttpError } = require('./files')
-const { getValueSchema, jsonShapeErrors, assertSchemaVersion, prepareInputs, jseeInputsToJsonSchema } = require('./schema')
+const { getValueSchema, jsonShapeErrors, assertSchemaVersion, prepareInputs, cloneSchema, jseeInputsToJsonSchema } = require('./schema')
 const { isBinaryLike, isRecordObject, outputLookupNames, normalizeFileOutputValue, flattenJseeOutputs,
   jseeOutputsToJsonSchema, invocationUnsupportedReason } = require('./utils')
 const vocabulary = require('../schema.json').definitions
+const { validatePipeline, activeOutputs } = require('./pipeline')
+const { decodeFileDefaults } = require('./pipeline-data')
 
 const BODY_LIMIT = 50 * 1024 * 1024
 const ARTIFACT_LIMIT = 64 * 1024 * 1024
@@ -25,6 +27,9 @@ function uploadTool (computationId) {
 function validateDescriptor (schema) {
   const errors = []
   const warnings = []
+  schema = cloneSchema(schema)
+  decodeFileDefaults(schema?.inputs)
+  try { validatePipeline(schema) } catch (error) { return { valid: false, errors: [error.message], warnings } }
   if (!isRecordObject(schema)) return { valid: false, errors: ['Schema should be an object'], warnings }
   try { assertSchemaVersion(schema) } catch (error) { errors.push(error.message) }
   for (const key of ['title', 'description']) {
@@ -85,8 +90,8 @@ function validateDescriptor (schema) {
     if (!model.url && !model.code) errors.push(at + ' needs url or code')
     if (model.code !== undefined && !['string', 'function'].includes(typeof model.code)) errors.push(at + '.code should be a string or function')
     if (model.container !== undefined && !['object', 'args'].includes(model.container)) errors.push(at + '.container is invalid')
-    if (model.name && names.has(model.name)) errors.push(at + '.name is duplicated')
-    names.add(model.name)
+    if (model.name && names.has(model.id || model.name)) errors.push(at + '.name is duplicated')
+    names.add(model.id || model.name)
   })
   return { valid: !errors.length, errors, warnings }
 }
@@ -96,7 +101,7 @@ function canonicalOutputSchema (outputs) {
   outputSchema.additionalProperties = false
   outputSchema.required = []
   for (const output of flattenJseeOutputs(outputs)) {
-    outputSchema.required.push(output.name)
+    if (output.required !== false) outputSchema.required.push(output.name)
     const reference = { type: 'object', properties: { artifact: { type: 'string' } }, required: ['artifact'], additionalProperties: false }
     if (output.type === 'file') outputSchema.properties[output.name] = reference
     else if (['image', 'audio', 'video'].includes(output.type)) outputSchema.properties[output.name] = { anyOf: [reference, outputSchema.properties[output.name]] }
@@ -109,7 +114,7 @@ function canonicalOutputSchema (outputs) {
 function inspectSchema (schema) {
   const validation = validateDescriptor(schema)
   if (!validation.valid) throw Object.assign(new Error(validation.errors.join('; ')), { code: 'JSEE_SCHEMA_INVALID' })
-  const outputSchema = canonicalOutputSchema(schema.outputs)
+  const outputSchema = canonicalOutputSchema(activeOutputs(schema))
   const reason = invocationUnsupportedReason(schema)
   return { id: schema.id || 'computation', schemaVersion: schema.schemaVersion || 1,
     title: schema.title || schema.id || 'Computation', description: schema.description || '',
@@ -316,18 +321,39 @@ function resolveArtifactInputs (fields, inputs, store) {
   return result
 }
 
+async function materializeOutputs (schema, result) {
+  const outputs = activeOutputs(schema)
+  let materialized = result
+  for (const output of outputs) {
+    if (!['file', 'image', 'audio', 'video'].includes(output.type)) continue
+    const key = isRecordObject(result) ? outputLookupNames(output).find(name => Object.hasOwn(result, name)) : undefined
+    const value = key === undefined ? outputs.length === 1 ? result : undefined : result[key]
+    const file = normalizeFileOutputValue(output, value)
+    if (typeof Blob === 'undefined' || !(file.value instanceof Blob)) continue
+    const bytes = new Uint8Array(await file.value.arrayBuffer())
+    const normalized = { content: bytes, filename: file.filename, mime: file.mime || file.value.type }
+    if (key === undefined) materialized = normalized
+    else {
+      if (materialized === result) materialized = { ...result }
+      Object.defineProperty(materialized, key, { value: normalized, enumerable: true, writable: true, configurable: true })
+    }
+  }
+  return materialized
+}
+
 function formatRun (schema, run, store) {
   if (run.status !== 'succeeded') return run
   try {
     const entries = []
     const files = []
-    const outputs = flattenJseeOutputs(schema.outputs)
+    const outputs = activeOutputs(schema)
     for (const output of outputs) {
       let value = run.result
       if (isRecordObject(value)) {
         const key = outputLookupNames(output).find(name => Object.prototype.hasOwnProperty.call(value, name))
         value = key === undefined ? output.value : value[key]
       } else if (outputs.length !== 1) throw new Error('Multiple outputs require a result object')
+      if (value === undefined && output.required === false) continue
       if (value === undefined) throw new Error('Missing declared output: ' + output.name)
       const media = ['image', 'audio', 'video'].includes(output.type)
       if (output.type === 'file' || media && (isBinaryLike(value) || isRecordObject(value) && ['content', 'value', 'data'].some(key => Object.hasOwn(value, key)))) {
@@ -348,7 +374,7 @@ function formatRun (schema, run, store) {
     }
     // Validate every output before persisting any file or exposing an artifact handle.
     const projected = Object.fromEntries(entries)
-    const error = outputShapeError(projected, canonicalOutputSchema(schema.outputs))
+    const error = outputShapeError(projected, canonicalOutputSchema(activeOutputs(schema)))
     if (error) throw new Error(error)
     return { runId: run.runId, status: 'succeeded', outputs: projected, artifacts: store.commit(run.runId, files) }
   } catch (error) { return failedRun(error.code || 'JSEE_OUTPUT_INVALID', error.message, run.runId) }
@@ -358,7 +384,7 @@ function runResultSchema (schema) {
   return {
     type: 'object', required: ['runId', 'status', 'outputs', 'artifacts'],
     properties: {
-      runId: { type: 'string' }, status: { const: 'succeeded' }, outputs: canonicalOutputSchema(schema.outputs),
+      runId: { type: 'string' }, status: { const: 'succeeded' }, outputs: canonicalOutputSchema(activeOutputs(schema)),
       artifacts: { type: 'array', items: {
         type: 'object', required: ['id', 'output', 'name', 'mime', 'size', 'sha256', 'uri'],
         properties: {
@@ -384,4 +410,4 @@ function canonicalOpenAPI (schema) {
   } }
 }
 
-module.exports = { uploadTool, resolveArtifactInputs, validateDescriptor, inspectSchema, ArtifactStore, formatRun, failedRun, responseStatus, canonicalOpenAPI, runResultSchema, outputShapeError, BODY_LIMIT, ARTIFACT_LIMIT }
+module.exports = { materializeOutputs, uploadTool, resolveArtifactInputs, validateDescriptor, inspectSchema, ArtifactStore, formatRun, failedRun, responseStatus, canonicalOpenAPI, runResultSchema, outputShapeError, BODY_LIMIT, ARTIFACT_LIMIT }

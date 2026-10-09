@@ -18,6 +18,28 @@
   margin: 0;
   color: var(--jsee-text, #333);
 }
+/* Named pipeline stages: a heading per stage with its execution status. */
+.jsee-stage-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  margin: 18px 0 8px;
+}
+.jsee-stage-status {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 18px;
+  padding: 0 8px;
+  border-radius: 9px;
+  background: rgba(128, 128, 128, 0.14);
+  color: var(--jsee-text-secondary, #666);
+}
+.jsee-stage-status[data-status="current"] { background: rgba(46, 125, 50, 0.14); color: #2e7d32; }
+.jsee-stage-status[data-status="stale"] { background: rgba(237, 108, 2, 0.16); color: #b85600; }
+.jsee-stage-status[data-status="running"] { background: rgba(25, 118, 210, 0.14); color: #1565c0; }
+.jsee-stage-status[data-status="error"] { background: rgba(211, 47, 47, 0.14); color: #c62828; }
 .jsee-output-actions {
   display: flex;
   gap: 4px;
@@ -252,7 +274,8 @@
 
 <template>
   <!-- Group output: no card wrapper, children render as separate vue-output -->
-  <div v-if="output.type === 'group'" :id="outputName">
+  <div v-if="output.type === 'group'" :id="outputName" :role="output._stage ? 'region' : undefined" :aria-label="output._stage ? output.label + ' results' : undefined">
+    <h2 v-if="output._stage" class="jsee-output-title jsee-stage-title">{{ output.label }} <small class="jsee-stage-status" :data-status="output.status || 'idle'">{{ output.status || 'idle' }}</small></h2>
     <template v-if="output.style === 'tabs'">
       <div class="jsee-tabs-header">
         <button v-for="(el, ti) in output.elements" :key="ti"
@@ -279,7 +302,7 @@
     ref="cardRoot"
   >
     <div class="jsee-output-header" v-if="output.type !== 'chat'">
-      <p class="jsee-output-title" v-if="output.name">{{ output.name }}</p>
+      <p class="jsee-output-title" v-if="output.name">{{ output.label || output.name }}</p>
       <div class="jsee-output-actions">
         <button v-on:click="save()">Save</button>
         <button v-on:click="copy()">Copy</button>

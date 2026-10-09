@@ -1,6 +1,7 @@
 const { makeHttpError, resolveInside } = require('./files')
 const { collectInputValues, getInputDefaultValue, prepareInputs, cloneSchema } = require('./schema')
-const { runPipeline } = require('./pipeline')
+const { Pipeline, stageSchema, identified, validatePipeline } = require('./pipeline')
+const { prepareStageInputs, decodeFileDefaults } = require('./pipeline-data')
 const { outputLookupNames, cleanOutputMetadata, invocationUnsupportedReason } = require('./utils')
 const fs = require('fs')
 const path = require('path')
@@ -1203,15 +1204,19 @@ function loadBrowserStyleModelFunction (src, model, modelPath) {
   const filename = modelPath || path.join(dirname, '__jsee_model__.js')
 
   const fn = new Function(
+    'self',
+    'postMessage',
     'require',
     'module',
     'exports',
     '__filename',
     '__dirname',
     `${src}
-return typeof ${toJsIdentifier(modelName)} === 'function' ? ${toJsIdentifier(modelName)} : (module.exports && (module.exports.default || module.exports[${JSON.stringify(modelName)}] || module.exports))`
+return typeof ${toJsIdentifier(modelName)} === 'function' ? ${toJsIdentifier(modelName)} : (typeof self[${JSON.stringify(modelName)}] === 'function' ? self[${JSON.stringify(modelName)}] : (module.exports && (module.exports.default || module.exports[${JSON.stringify(modelName)}] || module.exports)))`
   )
-  const target = fn(localRequire, moduleShim, moduleShim.exports, filename, dirname)
+  const workerGlobal = Object.create(globalThis)
+  workerGlobal.self = workerGlobal
+  const target = fn(workerGlobal, () => {}, localRequire, moduleShim, moduleShim.exports, filename, dirname)
   if (typeof target === 'function') return target
   if (target && typeof target === 'object') {
     if (typeof target[modelName] === 'function') return target[modelName]
@@ -1238,6 +1243,26 @@ async function loadCliModelFunction (model, schemaPath, cwd, log, inputs) {
     throw new Error('--run currently supports local JavaScript models. Python model execution is available through the dev server/API path.')
   }
 
+  model = { ...model }
+  if (model.url && isHttpUrl(model.url) && model.sha256) {
+    const response = await fetch(model.url)
+    if (!response.ok) throw new Error('Failed to load pinned model: ' + model.url)
+    model.code = await response.text()
+  }
+  if (model.sha256) {
+    const source = model.code || fs.readFileSync(path.resolve(schemaPath ? path.dirname(schemaPath) : cwd, model.url), 'utf8')
+    if (crypto.createHash('sha256').update(typeof source === 'function' ? String(source) : source).digest('hex') !== model.sha256) throw new Error('Model SHA-256 mismatch: ' + (model.id || model.url))
+  }
+  if (Array.isArray(model.imports)) model.imports = await Promise.all(model.imports.map(async imp => {
+    if (!imp.sha256) return imp
+    let source = imp.code
+    if (!source) {
+      if (isHttpUrl(imp.url)) { const response = await fetch(imp.url); if (!response.ok) throw new Error('Failed to load pinned import: ' + imp.url); source = await response.text() }
+      else source = fs.readFileSync(path.resolve(schemaPath ? path.dirname(schemaPath) : cwd, imp.url), 'utf8')
+    }
+    if (crypto.createHash('sha256').update(source).digest('hex') !== imp.sha256) throw new Error('Import SHA-256 mismatch: ' + imp.url)
+    return { ...imp, code: source }
+  }))
   let target
   let modelPath = null
 
@@ -1245,7 +1270,8 @@ async function loadCliModelFunction (model, schemaPath, cwd, log, inputs) {
     target = model.code
   } else if (typeof model.code === 'string' && model.code.trim()) {
     try {
-      target = loadBrowserStyleModelFunction(model.code, model, null)
+      const imports = (model.imports || []).filter(imp => typeof imp === 'object' && imp.code && !String(imp.url || '').split('?')[0].endsWith('.css')).map(imp => imp.code).join('\n')
+      target = loadBrowserStyleModelFunction(imports + '\n' + model.code, model, null)
     } catch (error) {
       target = undefined
     }
@@ -1279,15 +1305,35 @@ async function loadCliModelFunction (model, schemaPath, cwd, log, inputs) {
   }, Array.isArray(inputs) ? Object.keys(collectInputValues(inputs, () => null)) : undefined)
 }
 
-async function runSchemaOnce (schema, data, schemaPath, cwd=process.cwd(), log=() => {}) {
-  assertSchemaVersion(schema)
-  const inputs = prepareInputs(schema.inputs, data)
+async function executePipeline (schema, data, { schemaPath, cwd=process.cwd(), log=() => {}, _modelFunctions, artifactStore }={}) {
+  schema = cloneSchema(schema)
+  decodeFileDefaults(schema.inputs)
+  const named = identified(schema)
+  const initial = named ? { ...collectInputValues(schema.inputs, getInputDefaultValue), ...data } : prepareInputs(schema.inputs, data)
+  let inputs
+  try { inputs = require('./transport').resolveArtifactInputs(schema.inputs, initial, artifactStore) }
+  catch (error) { error.code = 'JSEE_INPUT_INVALID'; throw error }
   const models = Array.isArray(schema.model) ? schema.model : [schema.model]
   const stages = models.map(model => async values => {
-    const modelFunc = await loadCliModelFunction(model, schemaPath, cwd, log, schema.inputs)
-    return modelFunc(values)
+    const contract = stageSchema(schema, model)
+    if (model.url) require('./utils').assertNetworkAllowed(model.url, schema.security, 'model')
+    for (const imp of Array.isArray(model.imports) ? model.imports : []) if (imp.url && !imp.code) require('./utils').assertNetworkAllowed(imp.url, schema.security, 'import')
+    const func = _modelFunctions && !named ? _modelFunctions[model.name] : await loadCliModelFunction(model, schemaPath, cwd, log, contract.inputs)
+    const streams = Object.fromEntries(contract.inputs.filter(field => field.stream).map(field => [field.name, { stream: true }]))
+    const result = await func(require('./utils').wrapStreamInputs(values, streams))
+    if (isStreamResult(result)) {
+      if (typeof result.return === 'function') await result.return()
+      throw Object.assign(new Error('Streaming results require a streaming invocation interface'), { code: 'JSEE_CAPABILITY_UNSUPPORTED' })
+    }
+    return result
   })
-  return runPipeline(stages, inputs)
+  const runtime = new Pipeline(schema, stages, { prepare: prepareStageInputs, headless: true })
+  try { return await runtime.run(inputs) } finally { runtime.dispose() }
+}
+
+async function runSchemaOnce (schema, data, schemaPath, cwd=process.cwd(), log=() => {}) {
+  assertSchemaVersion(schema)
+  return executePipeline(schema, data, { schemaPath, cwd, log })
 }
 
 async function invokeSchema (schema, data, { schemaPath, cwd=process.cwd(), log=() => {}, _modelFunctions, artifactStore }={}) {
@@ -1296,6 +1342,7 @@ async function invokeSchema (schema, data, { schemaPath, cwd=process.cwd(), log=
   try {
     if (!isRecordObject(schema)) throw new Error('Schema should be an object')
     assertSchemaVersion(schema)
+    validatePipeline(schema)
     const models = Array.isArray(schema.model) ? schema.model : [schema.model]
     if (!models.length || models.some(model => !isRecordObject(model))) {
       throw new Error('Schema should define one or more model objects')
@@ -1303,26 +1350,15 @@ async function invokeSchema (schema, data, { schemaPath, cwd=process.cwd(), log=
     if (schema.inputs !== undefined && !Array.isArray(schema.inputs)) throw new Error('inputs should be an array')
     code = 'JSEE_INPUT_INVALID'
     // Validate before imports/initializers can have effects. Models own a copy of JSON input containers.
-    const inputs = require('./transport').resolveArtifactInputs(schema.inputs, prepareInputs(schema.inputs, cloneSchema(data)), artifactStore)
+    if (!identified(schema)) prepareInputs(schema.inputs, cloneSchema(data))
     code = 'JSEE_CAPABILITY_UNSUPPORTED'
     const unsupported = invocationUnsupportedReason(schema)
     if (unsupported) throw new Error(unsupported)
     code = 'JSEE_EXECUTION_FAILED'
-    // Both entry points use the same loader and transitions; terminal calls cannot leave a stream open.
-    const stages = models.map(model => async values => {
-      const func = _modelFunctions ? _modelFunctions[model.name] : await loadCliModelFunction(model, schemaPath, cwd, log, schema.inputs)
-      const result = await func(values)
-      if (isStreamResult(result)) {
-        if (typeof result.return === 'function') await result.return()
-        code = 'JSEE_CAPABILITY_UNSUPPORTED'
-        throw new Error('Streaming results require a streaming invocation interface')
-      }
-      return result
-    })
-    const result = await runPipeline(stages, inputs)
-    return { runId, status: 'succeeded', result }
+    const result = await executePipeline(schema, cloneSchema(data), { schemaPath, cwd, log, _modelFunctions, artifactStore })
+    return { runId, status: 'succeeded', result: await require('./transport').materializeOutputs(schema, result) }
   } catch (error) {
-    return { runId, status: 'failed', error: { code, message: error instanceof Error ? error.message : String(error) } }
+    return { runId, status: 'failed', error: { code: ['JSEE_INPUT_INVALID', 'JSEE_CAPABILITY_UNSUPPORTED'].includes(error.code) ? error.code : code, message: error instanceof Error ? error.message : String(error) } }
   }
 }
 
@@ -2746,11 +2782,13 @@ Documentation: https://jsee.org
 
   // Store original models before execute/CDN mutations (for client-side toggle)
   let computationSchema
+  const namedPipeline = identified(schema)
+  if (namedPipeline && !canonical && shouldExecute) throw new Error('Use canonical serve for a composed schema')
   if (canonical) {
     const { inspectSchema } = require('./transport')
     const description = inspectSchema(schema)
     if (!description.capabilities.invoke) throw new Error(description.capabilities.reason)
-    schema.model.forEach(model => { if (!model.name) model.name = getModelExportName(model) })
+    if (!namedPipeline) schema.model.forEach(model => { if (!model.name) model.name = getModelExportName(model) })
     inspectSchema(schema) // Inferred endpoint names must also be unique before any model loads.
     if (schema.model.some(model => model.name === 'run')) throw new Error('Model endpoint /run conflicts with canonical /run; rename the model or use legacy --serve')
     computationSchema = cloneSchema(schema)
@@ -2761,7 +2799,7 @@ Documentation: https://jsee.org
   // Server-side execution
   // Prepare the model functions to run on the server side
   // Schema model will be updated with the server url and POST method
-  if (shouldExecute) {
+  if (shouldExecute && !namedPipeline) {
     await Promise.all(schema.model.map(async m => {
       log('Preparing a model to run on the server side:', m.name, m.url)
       modelFuncs[m.name] = await loadCliModelFunction(m, schemaPath, cwd, log, schema.inputs)
@@ -2771,7 +2809,7 @@ Documentation: https://jsee.org
     }))
   }
   
-  const serverModels = schema.model
+  const serverModels = namedPipeline ? [] : schema.model
   if (canonical) schema.model = [{ name: 'computation', type: 'post', url: '/run', worker: false, autorun: false, _jseeCanonical: true }]
 
   // Switch to CDN for model files

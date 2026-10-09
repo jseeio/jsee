@@ -2353,9 +2353,10 @@ function invocationUnsupportedReason (schema) {
   const hasImports = value => Array.isArray(value) ? value.length > 0 : Boolean(value)
   if (!models.length) return 'Invocation requires a model'
   for (const model of models) {
+    if (model?.render || model?.enabled === false) continue
     if (!model || !['function', 'async-function', 'class', 'async-init', undefined].includes(model.type) ||
-        model.stream || hasImports(model.imports) || hasImports(schema.imports) ||
-        (typeof model.code !== 'function' && typeof model.code !== 'string' && (!model.url || isNetworkUrl(model.url)))) {
+        model.stream || hasImports((model.imports || []).filter ? (model.imports || []).filter(imp => typeof imp !== 'object' || (!imp.code && !imp.sha256)) : model.imports) || hasImports(schema.imports) ||
+        (typeof model.code !== 'function' && typeof model.code !== 'string' && (!model.url || isNetworkUrl(model.url) && !model.sha256))) {
       return 'invokeSchema supports local JavaScript models without schema imports or streaming'
     }
   }
