@@ -1691,3 +1691,230 @@ test('host progress listener can destroy the instance without recreating present
   })
   expect(result).toEqual({ bar: false, overlay: false })
 })
+
+for (const worker of [false, true]) {
+  test(`cooperative Stop waits for cleanup and retains model state (worker=${worker})`, async ({ page }) => {
+    await page.goto('http://localhost:8484/load/')
+    const result = await page.evaluate(async worker => {
+      document.body.innerHTML = '<div id="cooperative"></div>'
+      const app = new JSEE({ container: '#cooperative', verbose: false, toasts: false, schema: {
+        persist: false, autorun: false,
+        model: { type: 'async-init', worker, code: `async function model() {
+          const identity = Math.random(); let cleanups = 0
+          return async (data, ctx) => {
+            if (data.wait) {
+              ctx.progress(1)
+              await new Promise(resolve => ctx.signal.addEventListener('abort', resolve, { once: true }))
+              await new Promise(resolve => setTimeout(resolve, 40))
+              cleanups++; ctx.progress(99)
+            }
+            return { identity, cleanups }
+          }
+        }` }, inputs: [{ name: 'wait', type: 'checkbox', default: false }], outputs: []
+      } })
+      await app.ready
+      const before = await app.invoke(), progress = []
+      let started
+      const active = new Promise(resolve => { started = resolve })
+      app.on('progress', event => { progress.push(event.value); if (event.value === 1) started() })
+      const pending = app.invoke({ wait: true }).then(() => 'unexpected success', error => error.name)
+      await active
+      const stopping = app.stop({ mode: 'cooperative', graceMs: 1000 })
+      const overlap = await app.invoke({ wait: false }).then(() => 'unexpected success', error => error.message)
+      const stopped = await stopping, outcome = await pending
+      const after = await app.invoke({ wait: false })
+      app.destroy()
+      return { before, after, stopped, outcome, overlap, progress }
+    }, worker)
+    expect(result.stopped).toEqual({ retained: true })
+    expect(result.outcome).toBe('AbortError')
+    expect(result.overlap).toContain('already in progress')
+    expect(result.after).toEqual({ identity: result.before.identity, cleanups: 1, wait: false, caller: 'invoke' })
+    expect(result.progress).not.toContain(99)
+  })
+}
+
+test('cooperative Stop escalates for a blocking worker and recovers', async ({ page }) => {
+  await page.goto('http://localhost:8484/load/')
+  const result = await page.evaluate(async () => {
+    document.body.innerHTML = '<div id="blocking"></div>'
+    const app = new JSEE({ container: '#blocking', verbose: false, toasts: false, schema: {
+      persist: false, autorun: false,
+      model: { worker: true, code: 'function model(data, ctx) { if (data.block) { ctx.progress(1); while (true) {} } return { ok: true } }' },
+      inputs: [{ name: 'block', type: 'checkbox', default: false }], outputs: []
+    } })
+    await app.ready
+    let started
+    const active = new Promise(resolve => { started = resolve })
+    app.on('progress', event => { if (event.value === 1) started() })
+    const pending = app.invoke({ block: true }).catch(error => error.name)
+    await active
+    const stopped = await app.stop({ mode: 'cooperative', graceMs: 40 })
+    const outcome = await pending, after = await app.invoke({ block: false })
+    app.destroy()
+    return { stopped, outcome, after }
+  })
+  expect(result.stopped).toEqual({ retained: false })
+  expect(result.outcome).toBe('AbortError')
+  expect(result.after.ok).toBe(true)
+})
+
+test('cooperative Stop retains batched training state and prevents downstream execution', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const root = document.createElement('div');document.body.append(root)
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false,
+      inputs: [{ name: 'source', type: 'group', elements: [] }, { name: 'training', type: 'group', elements: [{ name: 'steps', type: 'int', default: 0 }] }],
+      model: [
+        { id: 'source', scope: 'source', worker: true, code: 'function model() { return { target: 2 } }' },
+        { id: 'training', scope: 'training', type: 'async-init', worker: true,
+          bindings: { target: { stage: 'source', path: ['target'] } },
+          code: `async function model() {
+            let weight = 0, batches = 0; const identity = Math.random()
+            return async (data, ctx) => {
+              for (let i = 0; i < data.steps && !ctx.isCancelled(); i++) {
+                weight -= .1 * (weight - data.target); batches++
+                ctx.progress(10)
+                await new Promise(resolve => setTimeout(resolve, 5))
+              }
+              return { weight, batches, identity }
+            }
+          }` },
+        { id: 'report', type: 'async-init', worker: true, bindings: { weight: { stage: 'training', path: ['weight'] } },
+          code: 'async function model() { let calls = 0; return () => ({ calls: ++calls }) }' }
+      ], outputs: ['training.weight', 'training.batches', 'training.identity', 'report.calls'].map(name => ({ name, type: 'number' }))
+    } })
+    await app.ready
+    const before = await app.invoke()
+    let started
+    const active = new Promise(resolve => { started = resolve })
+    app.on('progress', event => { if (event.stageId === 'training' && event.value === 10) started() })
+    const pending = app.invoke({ training: { steps: 200 } }).catch(error => error.name)
+    await active
+    const stopped = await app.stop({ mode: 'cooperative', graceMs: 1000 })
+    const outcome = await pending, state = app.getPipelineState()
+    const after = await app.invoke({ training: { steps: 1 } })
+    app.destroy()
+    return { before, stopped, outcome, state, after }
+  })
+  expect(result.stopped).toEqual({ retained: true })
+  expect(result.outcome).toBe('AbortError')
+  expect(result.state.stages.source.revision).toBe(1)
+  expect(result.state.stages.training.status).toBe('cancelled')
+  expect(result.state.stages.report.revision).toBe(1)
+  expect(result.after['training.identity']).toBe(result.before['training.identity'])
+  expect(result.after['training.batches']).toBeGreaterThan(1)
+  expect(result.after['training.batches']).toBeLessThan(201)
+  expect(result.after['report.calls']).toBe(2)
+})
+
+test('cooperative main-thread cleanup cannot be preempted by the worker grace timeout', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const root = document.createElement('div');document.body.append(root)
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false, inputs: [], outputs: [],
+      model: { worker: false, type: 'async-function', code: 'async function model(data, ctx) { ctx.progress(1); await new Promise(resolve => setTimeout(resolve, 80)); self.cleaned = true; return {} }' }
+    } })
+    await app.ready
+    let started
+    const active = new Promise(resolve => { started = resolve })
+    app.on('progress', event => { if (event.value === 1) started() })
+    const pending = app.invoke().catch(error => error.name)
+    await active
+    const stopped = await app.stop({ mode: 'cooperative', graceMs: 5 }), cleaned = self.cleaned
+    const outcome = await pending
+    app.destroy()
+    return { stopped, cleaned, outcome }
+  })
+  expect(result).toEqual({ stopped: { retained: true }, cleaned: true, outcome: 'AbortError' })
+})
+
+test('cooperative Stop also stops an interval between invocations', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const root = document.createElement('div');document.body.append(root)
+    self.intervalCalls = 0
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false, interval: 100, inputs: [], outputs: [],
+      model: { worker: false, code: 'function model() { return { calls: ++self.intervalCalls } }' }
+    } })
+    await app.ready
+    const loop = app.run()
+    while (app.running || self.intervalCalls === 0) await new Promise(resolve => setTimeout(resolve, 1))
+    const stopped = await app.stop({ mode: 'cooperative' })
+    await loop
+    await new Promise(resolve => setTimeout(resolve, 130))
+    const calls = self.intervalCalls
+    app.destroy()
+    return { stopped, calls }
+  })
+  expect(result).toEqual({ stopped: { retained: true }, calls: 1 })
+})
+
+for (const action of ['force', 'destroy']) {
+  test(`pending cooperative Stop can be escalated by ${action}`, async ({ page }) => {
+    await page.goto('/load/')
+    const result = await page.evaluate(async action => {
+      const root = document.createElement('div');document.body.append(root)
+      const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+        persist: false, autorun: false, inputs: [], outputs: [], model: { worker: true, type: 'async-function',
+          code: 'async function model(data, ctx) { ctx.progress(1); await new Promise(resolve => setTimeout(resolve, 10000)); return {} }' }
+      } })
+      await app.ready
+      let started
+      const active = new Promise(resolve => { started = resolve })
+      app.on('progress', event => { if (event.value === 1) started() })
+      const pending = app.invoke().catch(error => error.name)
+      await active
+      const stopping = app.stop({ mode: 'cooperative', graceMs: 5000 })
+      if (action === 'destroy') app.destroy()
+      else await app.stop()
+      const stopped = await stopping, outcome = await pending
+      app.destroy()
+      return { stopped, outcome }
+    }, action)
+    expect(result).toEqual({ stopped: { retained: false }, outcome: 'AbortError' })
+  })
+}
+
+test('cooperative Stop requires readiness before claiming retention', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const root = document.createElement('div');document.body.append(root)
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false, inputs: [], outputs: [],
+      model: { worker: false, type: 'async-init', code: 'async function model() { await new Promise(resolve => setTimeout(resolve, 40)); return () => ({ ok: true }) }' }
+    } })
+    const early = await app.stop({ mode: 'cooperative' }).then(() => 'accepted', error => error.message)
+    await app.ready
+    const ready = await app.stop({ mode: 'cooperative' })
+    app.destroy()
+    return { early, ready }
+  })
+  expect(result.early).toContain('Await instance.ready')
+  expect(result.ready).toEqual({ retained: true })
+})
+
+test('cooperative Stop suppresses a terminal worker progress reset already in transit', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const root = document.createElement('div');document.body.append(root)
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false, inputs: [], outputs: [],
+      model: { worker: true, code: 'function model(data, ctx) { ctx.progress(10); return { ok: true } }' }
+    } })
+    await app.ready
+    const progress = [];let stopping
+    app.on('progress', event => {
+      progress.push(event.value)
+      if (event.value === 10) stopping = app.stop({ mode: 'cooperative' })
+    })
+    const outcome = await app.invoke().catch(error => error.name)
+    await stopping
+    app.destroy()
+    return { progress, outcome }
+  })
+  expect(result).toEqual({ progress: [10], outcome: 'AbortError' })
+})

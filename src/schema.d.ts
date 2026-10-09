@@ -95,6 +95,8 @@ export type Output = OutputProperties & (
 )
 
 export interface ModelContext {
+  /** Browser invocation cancellation; native runtimes may omit it. */
+  signal?: AbortSignal
   log(...values: unknown[]): void
   progress(value: number | null, details?: { loaded?: number; total?: number; phase?: string }): void
   isCancelled(): boolean

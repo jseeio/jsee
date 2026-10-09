@@ -598,7 +598,7 @@ Multiple JSEE instances can run on the same page; progress and overlay DOM nodes
 | `await jsee.setInputState(path, patch)` | Update `disabled`, `readonly`, boolean `display` or choice `options` without changing values or triggering a run |
 | `await jsee.invoke(values?)` | Run once and return declared output values (or the pipeline result when no outputs are declared). Rejects on validation, execution failure, overlap, or cancellation (`AbortError`) |
 | `jsee.on(event, listener)` | Subscribe to `inputs`, `start`, `result`, `error`, `cancel`, `destroy`, `stage`, or `progress`; returns an unsubscribe function. Listener exceptions do not affect execution |
-| `jsee.stop()` | Cancel the active computation; same behavior as `cancelCurrentRun()` |
+| `await jsee.stop(options?)` | Stop and wait for invocation settlement; forced by default. Opt into cooperative cancellation with `{ mode: 'cooperative', graceMs: 1000 }`; returns `{ retained }` |
 | `jsee.run(caller)` | Execute the model pipeline. `caller` can be `'run'`, `'autorun'`, `'reactive'`, `'interval'`, or a custom button name |
 | `jsee.output(result)` | Process and render results to output cards |
 | `jsee.cancelCurrentRun()` | Stop the active run. Rejects the current run promise, sets cancellation state, and signals/terminates workers |
@@ -608,6 +608,45 @@ Multiple JSEE instances can run on the same page; progress and overlay DOM nodes
 | `jsee.destroy()` | Cancel runs and initialization fetches, terminate workers, unmount Vue, and release UI resources. Repeated calls are safe; later runs return `false` and late progress/output calls are ignored |
 | `jsee.notify(text)` | Show a success toast notification |
 | `jsee.log(...args)` | Log to browser console and optional `#log` DOM element as plain text |
+
+### Cooperative cancellation
+
+`stop()` still terminates workers by default. To retain a loaded model when its
+operation can finish cleanup, use:
+
+```js
+const { retained } = await tool.stop({ mode: 'cooperative', graceMs: 1000 })
+// The cancelled invoke() rejects with AbortError. After stop() resolves,
+// another invocation can reuse the model when retained is true.
+```
+
+Browser JavaScript model contexts expose `ctx.signal`, an AbortSignal for the
+current invocation, alongside `ctx.isCancelled()`. Pass it to abortable work:
+
+```js
+async function model(data, ctx) {
+  const response = await fetch(data.url, { signal: ctx.signal })
+  return { text: await response.text() }
+}
+```
+
+For batched computation, yield to the event loop and check cancellation between
+batches. A worker cannot receive cancellation while synchronous code blocks its
+message loop. Cooperative Stop suppresses subsequent outputs/progress, prevents
+downstream stages from running, and keeps the run slot occupied until the model
+settles. Cleanup belongs in the model's `finally`; completed mutations are not
+rolled back automatically. `retained` reports runtime retention; the adapter
+owns recovery and whether its model state remains usable.
+
+The grace period defaults to 1000 ms. If an active worker has not settled, JSEE
+falls back to forced Stop, discards its workers and returns `retained: false`.
+Main-thread JavaScript cannot be preempted: cooperative Stop waits for it to
+settle even beyond the grace period. Run potentially blocking models in workers.
+Call cooperative Stop after `ready`; before readiness it rejects without claiming
+retention. Use `destroy()` to dispose initial setup. Reinitialization has no
+cancellable invocation context and uses forced teardown. Explicit `stop()` or `destroy()` can escalate a pending
+cooperative stop; destroy always releases the instance's resources. Native
+runtimes need not supply `ctx.signal`.
 
 ### Host control state and progress
 

@@ -334,7 +334,13 @@ export default class JSEE {
     }
   }
 
-  stop () { this.cancelCurrentRun() }
+  async stop (options) {
+    const settled = this._runToken?.done
+    const result = await this.cancelCurrentRun(options)
+    if (settled) await settled
+    await Promise.resolve()
+    return result
+  }
 
   log (...args) {
     if (!this.verbose) return
@@ -369,7 +375,11 @@ export default class JSEE {
     }
   }
 
-  cancelCurrentRun () {
+  cancelCurrentRun (options={}) {
+    if (options.mode !== undefined && !['force', 'cooperative'].includes(options.mode)) throw new TypeError('Unknown cancellation mode')
+    if (options.mode === 'cooperative') return this._stopCooperatively(options.graceMs ?? 1000)
+    if (this._runToken) this._runToken.cancelled = this._runToken.forced = true
+    this._runToken?.controller?.abort()
     this._cancelEpoch++
     this.executor?.cancel()
     this.log('Stopping current run')
@@ -395,6 +405,51 @@ export default class JSEE {
     }
     // Terminate all workers to force-stop blocking WASM computations
     this._terminateWorkers()
+    return { retained: false }
+  }
+
+  async _stopCooperatively (graceMs) {
+    if (!this._initialized && !this._destroyed) throw new Error('Await instance.ready before cooperative Stop')
+    if (!Number.isFinite(graceMs) || graceMs < 0) throw new TypeError('graceMs must be a finite nonnegative number')
+    if (this._stopping) return this._stopping
+    const token = this._runToken
+    if (!this.running || !token?.active || this._needsModelReinit) {
+      this._cancelEpoch++
+      this.stopInterval()
+      this._pendingRun = null
+      // Initialization has no invocation context/settlement acknowledgement.
+      if (this.running || this._invoking) this.cancelCurrentRun()
+      return { retained: !this._destroyed && !this._needsModelReinit }
+    }
+    this._cancelEpoch++
+    this.stopInterval()
+    this._pendingRun = null
+    this.cancelled = token.cancelled = true
+    this.executor?.cancel()
+    token.controller.abort()
+    this._apiRequests.forEach(controller => controller.abort())
+    this._cancelWorkerRun?.()
+    // Keep the run slot until model cleanup settles. A cancel message alone is
+    // not permission to reuse a worker or its model-owned mutable state.
+    let timer
+    const stopping = (async () => {
+      try {
+        timer = setTimeout(() => {
+          // Only a worker can be preempted. Main-thread cleanup must settle before
+          // cooperative reuse even if it takes longer than the grace period.
+          if (this._cancelWorkerRun) this.cancelCurrentRun()
+        }, graceMs)
+        await token.done
+        // Let invoke's finally release its own slot before the host resumes.
+        await Promise.resolve()
+        return { retained: !token.forced && !this._destroyed && !this._needsModelReinit }
+      } finally {
+        clearTimeout(timer)
+        if (this._stopping === stopping) this._stopping = null
+      }
+    })()
+    this._stopping = stopping
+    return stopping
   }
 
   _terminateWorkers () {
@@ -410,8 +465,8 @@ export default class JSEE {
 
   _createRunContext (scope) {
     const token = this._runToken
-    const active = () => !this._destroyed && token && token.active && this._runToken === token
-    const callbacks = { isCancelled: () => !active() }
+    const active = () => !this._destroyed && token && token.active && !token.cancelled && this._runToken === token
+    const callbacks = { isCancelled: () => !active(), signal: token?.controller?.signal }
     callbacks.progress = (value, details) => active() ? this.progress(value, details, { runId: token.id, stageId: scope || null }) : undefined
     for (const name of ['log', 'output', 'outputAsync']) {
       callbacks[name] = (...args) => active() ? scope && ['output', 'outputAsync'].includes(name) ? this._scopeOutput(scope, ...args) : this[name](...args) : undefined
@@ -470,7 +525,7 @@ export default class JSEE {
   }
 
   progress (i, details, identity) {
-    if (this._destroyed) return
+    if (this._destroyed || this._runToken?.cancelled && identity?.runId === this._runToken.id) return
     const progressState = utils.getProgressState(i)
     if (!progressState) {
       return
@@ -996,7 +1051,6 @@ export default class JSEE {
 
     // Timeout prevents permanently frozen UI if worker hangs (default 30s, configurable via model.timeout)
     const timeoutMs = model.timeout || DEFAULT_WORKER_TIMEOUT
-    this._cancelWorkerRun = () => worker.postMessage({ _jsee: 'cancel' })
     let workerInitialized = false
 
     const modelFunc = (inputs) => {
@@ -1008,6 +1062,8 @@ export default class JSEE {
         ? { ...inputs, _requestId: requestId }
         : { _jsee: 'run', requestId, value: utils.toWorkerSerializable(inputs) }
 
+      const cancelWorker = () => worker.postMessage({ _jsee: 'cancel', requestId })
+      this._cancelWorkerRun = cancelWorker
       let rejectWorkerRun = null
       let acceptingMessages = true
       const workerPromise = new Promise((resolve, reject) => {
@@ -1017,9 +1073,13 @@ export default class JSEE {
           if (!acceptingMessages) return
           const res = e.data
           if (res && (res._jsee || ['progress', 'log'].includes(res._status)) && res.requestId !== undefined && res.requestId !== requestId) return
+          if (token?.cancelled && (res?._partial || ['partial', 'progress', 'log'].includes(res?._jsee || res?._status))) return
           if (res && (res._jsee || res._status)) {
             // Raw _status/_partial messages remain the legacy model-posted callback API.
             switch (res._jsee || res._status) {
+              case 'cancelled':
+                reject(new DOMException('Run cancelled', 'AbortError'))
+                break
               case 'result':
                 this.progress(0, undefined, identity)
                 resolve(res.value)
@@ -1113,6 +1173,7 @@ export default class JSEE {
           settled = true
           acceptingMessages = false
           if (timeoutId !== null) clearTimeout(timeoutId)
+          if (this._cancelWorkerRun === cancelWorker) this._cancelWorkerRun = null
           if (this._rejectWorkerRun === rejectWorkerRun) {
             this._rejectWorkerRun = null
           }
@@ -1380,10 +1441,11 @@ export default class JSEE {
     let runError
     let rejectCurrentRun = null
     // Run token to detect stale results when worker.onmessage gets rebound
-    const runToken = this._runToken = { active: true, id: `${this.uid}:${++this._runSequence}` }
+    const runToken = this._runToken = { active: true, controller: new AbortController(), id: `${this.uid}:${++this._runSequence}` }
+    runToken.done = new Promise(resolve => { runToken.settled = resolve })
     this._emit('start', this.getInputs())
     const checkCancelled = () => {
-      if (this._destroyed || this._runToken !== runToken) throw new Error('Cancelled')
+      if (this._destroyed || runToken.cancelled || this._runToken !== runToken) throw new Error('Cancelled')
     }
 
     try {
@@ -1479,7 +1541,7 @@ export default class JSEE {
       runSucceeded = true
     } catch (err) {
       // Silently ignore cancellation errors from cancelCurrentRun()
-      if (this._runToken !== runToken) {
+      if (runToken.cancelled || this._runToken !== runToken) {
         runError = new DOMException('Run cancelled', 'AbortError')
         this._emit('cancel', runError)
         this.log('Run cancelled by user')
@@ -1492,6 +1554,7 @@ export default class JSEE {
       }
     } finally {
       runToken.active = false
+      runToken.settled()
       if (this._rejectRun === rejectCurrentRun) {
         this._rejectRun = null
       }

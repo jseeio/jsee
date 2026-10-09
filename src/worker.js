@@ -33,6 +33,7 @@ function createRunContext () {
   return {
     log: (...args) => { if (active()) log(...args) },
     progress: (value, details) => { if (active()) progress(value, details, token.requestId) },
+    signal: token?.controller.signal,
     isCancelled: () => !active()
   }
 }
@@ -152,15 +153,25 @@ async function initJS (model) {
 
 function initAPI (model) {
   log('Init API')
-  const onChunk = model.stream ? value => postMessage({ _jsee: 'partial', value }) : undefined
-  return utils.getModelFuncAPI(model, log, onChunk, model._security)
+  const request = utils.getModelFuncAPI(model, log, undefined, model._security)
+  return data => {
+    const token = runToken
+    return request(data, {
+      signal: token.controller.signal,
+      onChunk: model.stream ? value => {
+        if (!token.controller.signal.aborted) postMessage({ _jsee: 'partial', requestId: token.requestId, value })
+      } : undefined
+    })
+  }
 }
 
 self.onmessage = async function (e) {
   const message = e.data
   // Inspect the runtime envelope before unwrapping model data, which may use any keys.
   if (message && message._jsee === 'cancel') {
+    if (!runToken?.active || message.requestId !== runToken.requestId) return
     cancelled = true
+    runToken.controller.abort()
     log('Cancel command received')
     return
   }
@@ -203,7 +214,7 @@ self.onmessage = async function (e) {
       })
     }
   } else {
-    const token = runToken = { active: true, requestId: message.requestId }
+    const token = runToken = { active: true, controller: new AbortController(), requestId: message.requestId }
     try {
       cancelled = false
       const runData = utils.wrapStreamInputs(data, streamInputConfig, getStreamOptions())
@@ -211,9 +222,13 @@ self.onmessage = async function (e) {
       const results = await self.modelFunc(runData)
       log('Results:', results)
       // Returned values never share the control namespace used by model-posted messages.
-      postMessage({ _jsee: 'result', requestId: token.requestId, value: results })
+      postMessage(token.controller.signal.aborted
+        ? { _jsee: 'cancelled', requestId: token.requestId }
+        : { _jsee: 'result', requestId: token.requestId, value: results })
     } catch (error) {
-      postMessage({ _jsee: 'error', requestId: token.requestId, _error: error })
+      postMessage(token.controller.signal.aborted
+        ? { _jsee: 'cancelled', requestId: token.requestId }
+        : { _jsee: 'error', requestId: token.requestId, _error: error })
     } finally {
       token.active = false
     }
