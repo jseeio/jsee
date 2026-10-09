@@ -1,3 +1,5 @@
+const { isImageBitmap } = require('./image-frame')
+
 function assertSchemaVersion (schema) {
   if (schema && typeof schema.schemaVersion !== 'undefined' && schema.schemaVersion !== 1) {
     throw new Error('Unsupported schemaVersion: expected 1 or an absent version')
@@ -390,6 +392,11 @@ function prepareInputs (inputs, data) {
         if (!Object.prototype.hasOwnProperty.call(target, name)) continue
       }
       const value = target[name]
+      if (isImageBitmap(value)) {
+        if (input.type !== 'image') errors.push(path + ': ImageBitmap requires type image')
+        else if (!value.width || !value.height) errors.push(path + ': ImageBitmap is closed')
+        continue
+      }
       if (input.valueSchema === undefined && value === null && (input.nullable === true || input.default === null)) continue
       if (input.type === 'group') {
         if (!isRecord(value)) errors.push(`${path}: expected object`)

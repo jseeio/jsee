@@ -1,3 +1,4 @@
+const { isImageBitmap } = require('./image-frame')
 const { getValueSchema, matchesFileAccept, tableOutputJsonSchema, assertSchemaVersion, jseeInputsToJsonSchema, collectInputValues, prepareInputs } = require('./schema')
 const { DEFAULT_CHUNK_SIZE, STREAM_HIGH_WATER } = require('./constants')
 
@@ -88,6 +89,7 @@ function binaryDataUrl (value) {
 }
 
 function shouldPreserveWorkerValue (value) {
+  if (isImageBitmap(value)) return true
   if (!value || typeof value !== 'object') {
     return true
   }
@@ -125,6 +127,7 @@ function shouldPreserveWorkerValue (value) {
 }
 
 function containsBinaryPayload (value, seen=new WeakSet()) {
+  if (isImageBitmap(value)) return true
   if (!value || (typeof value !== 'object')) {
     return false
   }
@@ -1540,6 +1543,7 @@ async function prepareBrowserFiles (fields, values, remote=false) {
       if (!field.name) Object.assign(result, await prepareBrowserFiles(field.elements, result, remote))
       else if (value) Object.defineProperty(result, field.name, { value: await prepareBrowserFiles(field.elements, value, remote), enumerable: true, writable: true, configurable: true })
     } else if (['file', 'image', 'audio', 'video'].includes(field.type)) {
+      if (isImageBitmap(value) && remote) throw new Error(field.name + ': ImageBitmap requires local browser JavaScript; use an image file for remote calls')
       if (value && value.artifact && !remote) throw new Error(field.name + ': artifact references require their canonical host')
       if (field.type !== 'file' && typeof Blob !== 'undefined' && value instanceof Blob) {
         if (!matchesFileAccept(field.type + '/*', value.name, value.type) || !matchesFileAccept(field.accept, value.name, value.type)) throw new Error(field.name + ': media does not match accept')

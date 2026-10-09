@@ -1921,3 +1921,294 @@ test('nested image acquisition targets do not consume the same paste or drop twi
   })
   expect(result).toEqual([[], ['paste.png', 'drop.png']])
 })
+
+for (const worker of [false, true]) test(`transient bitmap inputs are borrowed and remain usable across stages (worker=${worker})`, async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async worker => {
+    const canvas = document.createElement('canvas');canvas.width = 24;canvas.height = 16
+    canvas.getContext('2d').fillStyle = '#204060';canvas.getContext('2d').fillRect(0, 0, 24, 16)
+    const image = await createImageBitmap(canvas)
+    const root = document.createElement('div');document.body.append(root)
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false, inputs: [{ name: 'image', type: 'image', nullable: true, default: null }],
+      model: [
+        { worker, code: ({ image }) => { const width = image.width;image.close();return { first: width } } },
+        { worker, code: ({ image, first }) => ({ total: first + image.width }) }
+      ], outputs: [{ name: 'total', type: 'number' }]
+    } })
+    await app.ready
+    const first = await app.invoke({ image }, { transient: true })
+    const second = await app.invoke({ image }, { transient: true })
+    const saved = app.getInputs().image
+    let persistentError
+    try { await app.setInputs({ image }) } catch (error) { persistentError = error.message }
+    app.destroy()
+    const width = image.width;image.close()
+    return { first, second, saved, width, persistentError }
+  }, worker)
+  expect(result.first).toEqual({ total: 48 })
+  expect(result.second).toEqual({ total: 48 })
+  expect(result.saved).toBe(null)
+  expect(result.width).toBe(24)
+  expect(result.persistentError).toMatch(/transient/)
+})
+
+for (const worker of [false, true]) test(`bitmap model copies close on success, error and invalid output (worker=${worker})`, async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async worker => {
+    const root = document.createElement('div');document.body.append(root)
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false,
+      inputs: [{ name: 'image', type: 'image', nullable: true, default: null }, { name: 'mode', type: 'string', default: 'ok' }, { name: 'bytes', type: 'file', arrayBuffer: true, dtype: 'uint8', nullable: true, default: null }],
+      model: { worker, type: 'async-init', code: async () => {
+        let last
+        return ({ image, mode, bytes }) => {
+          const previousWidth = last?.width
+          if (image) last = image
+          if (mode === 'error') throw new Error('intentional failure')
+          if (mode === 'return') return { image }
+          if (mode === 'map') return { image: new Map([['frame', new Set([image])]]) }
+          return { previousWidth: previousWidth ?? -1, width: image?.width || 0, bytes: bytes?.byteLength || 0 }
+        }
+      } }, outputs: [{ name: 'previousWidth', type: 'number' }, { name: 'width', type: 'number' }, { name: 'bytes', type: 'number' }]
+    } })
+    await app.ready
+    const image = await createImageBitmap(new ImageData(12, 8)), bytes = new ArrayBuffer(7)
+    const errors = [], checks = []
+    for (const mode of ['ok', 'error', 'return', 'map']) {
+      try { await app.invoke({ image, mode, bytes }, { transient: true }) } catch (error) { errors.push(error.message) }
+      checks.push(await app.invoke({ image: null, mode: 'ok' }, { transient: true }))
+    }
+    const caller = { width: image.width, bytes: bytes.byteLength }
+    app.destroy();image.close()
+    return { errors, checks, caller }
+  }, worker)
+  expect(result.errors).toHaveLength(3)
+  expect(result.errors[0]).toContain('intentional failure')
+  expect(result.errors[1]).toMatch(/borrowed input/)
+  expect(result.errors[2]).toMatch(/borrowed input/)
+  expect(result.checks.map(row => row.previousWidth)).toEqual([0, 0, 0, 0])
+  expect(result.caller).toEqual({ width: 12, bytes: 7 })
+})
+
+test('bitmap camera frames close after slow consumers and late capture; snapshots remain files', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const root = document.createElement('div');document.body.append(root)
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false,
+      inputs: [{ name: 'image', type: 'image', nullable: true, default: null, capture: { camera: true, live: true, transport: 'bitmap', maxFps: 60 } }], outputs: []
+    } })
+    await app.ready
+    const canvas = document.createElement('canvas');canvas.width = 20;canvas.height = 12
+    const paint = setInterval(() => canvas.getContext('2d').fillRect(0, 0, 20, 12), 10)
+    navigator.mediaDevices.getUserMedia = async () => canvas.captureStream()
+    const frames = [];let finish
+    const capture = app.createImageInput('image', { target: root, video: document.createElement('video'), onFrame: image => { frames.push(image);return new Promise(resolve => { finish = resolve }) } })
+    await capture.start({ live: true })
+    while (!finish) await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setTimeout(resolve, 60))
+    const during = { count: frames.length, width: frames[0].width }
+    const stopped = capture.stop({ snapshot: true })
+    finish();await stopped
+    const selected = app.getInputs().image
+    // Finish capture after disposal, before it can reach a consumer.
+    const late = await createImageBitmap(canvas)
+    let release
+    capture.capture = () => new Promise(resolve => { release = resolve })
+    await capture.start({ live: true })
+    capture.dispose();release(late)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    clearInterval(paint);app.destroy()
+    return { during, after: frames[0].width, snapshot: { name: selected.name, mime: selected.type, file: selected instanceof File }, late: late.width, delivered: frames.length }
+  })
+  expect(result).toEqual({ during: { count: 1, width: 20 }, after: 0, snapshot: { name: 'Camera snapshot.png', mime: 'image/png', file: true }, late: 0, delivered: 1 })
+})
+
+test('bitmap copy completion after Stop cannot post into a retired worker', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const root = document.createElement('div');document.body.append(root)
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false, inputs: [{ name: 'image', type: 'image', nullable: true, default: null }],
+      model: { code: ({ image }) => ({ width: image.width }) }, outputs: [{ name: 'width', type: 'number' }]
+    } })
+    await app.ready
+    const native = window.createImageBitmap, image = await native(new ImageData(11, 9))
+    let release, copy
+    window.createImageBitmap = async value => {
+      copy = await native(value)
+      await new Promise(resolve => { release = resolve })
+      return copy
+    }
+    const pending = app.invoke({ image }, { transient: true }).catch(error => error.name)
+    while (!release) await new Promise(resolve => setTimeout(resolve, 0))
+    await app.stop()
+    const error = await pending
+    release();await new Promise(resolve => setTimeout(resolve, 20))
+    window.createImageBitmap = native
+    const closed = copy.width === 0, retained = image.width
+    const recovery = await app.invoke({ image }, { transient: true })
+    image.close();app.destroy()
+    return { error, closed, retained, recovery }
+  })
+  expect(result).toEqual({ error: 'AbortError', closed: true, retained: 11, recovery: { width: 11 } })
+})
+
+for (const worker of [false, true]) test(`cooperative Stop closes bitmap model copies after execution settles (worker=${worker})`, async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async worker => {
+    const root = document.createElement('div');document.body.append(root)
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false, inputs: [{ name: 'image', type: 'image', nullable: true, default: null }],
+      model: { worker, type: 'async-init', code: async () => {
+        let last
+        return async ({ image }, ctx) => {
+          if (!image) return { width: last?.width ?? -1 }
+          last = image;ctx.progress(10)
+          if (!ctx.signal.aborted) await new Promise(resolve => ctx.signal.addEventListener('abort', resolve, { once: true }))
+          return { width: image.width }
+        }
+      } }, outputs: [{ name: 'width', type: 'number' }]
+    } })
+    await app.ready
+    const image = await createImageBitmap(new ImageData(10, 8))
+    let started
+    const startedPromise = new Promise(resolve => { started = resolve })
+    app.on('progress', event => { if (event.value === 10) started() })
+    const pending = app.invoke({ image }, { transient: true }).catch(error => error.name)
+    await startedPromise
+    const stop = await app.stop({ mode: 'cooperative', graceMs: 1000 })
+    const error = await pending
+    const result = await app.invoke({ image: null }, { transient: true })
+    const width = image.width;image.close();app.destroy()
+    return { stop, error, result, width }
+  }, worker)
+  expect(result).toEqual({ stop: { retained: true }, error: 'AbortError', result: { width: 0 }, width: 10 })
+})
+
+test('bitmap inputs reject remote execution before sending requests', async ({ page }) => {
+  await page.goto('/load/')
+  let requests = 0
+  await page.route('**/frame-endpoint', route => { requests++;return route.fulfill({ json: {} }) })
+  const error = await page.evaluate(async () => {
+    const root = document.createElement('div');document.body.append(root)
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false, inputs: [{ name: 'image', type: 'image', nullable: true, default: null }],
+      model: { type: 'post', url: '/frame-endpoint', worker: false }, outputs: []
+    } })
+    await app.ready
+    const image = await createImageBitmap(new ImageData(10, 8))
+    try { await app.invoke({ image }, { transient: true }) } catch (error) { return error.message }
+    finally { image.close();app.destroy() }
+  })
+  expect(error).toMatch(/local browser JavaScript/)
+  expect(requests).toBe(0)
+})
+
+test('named transient bitmap overrides do not enter stage caches or saved inputs', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const root = document.createElement('div');document.body.append(root)
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false,
+      inputs: [{ name: 'scan', type: 'group', elements: [{ name: 'image', type: 'image', nullable: true, default: null }] }],
+      model: { id: 'scan', scope: 'scan', worker: true, code: ({ image }) => ({ width: image?.width || 0 }) },
+      outputs: [{ name: 'scan.width', type: 'number' }]
+    } })
+    await app.ready
+    await app.invoke()
+    const before = JSON.stringify(app.getPipelineState())
+    const image = await createImageBitmap(new ImageData(15, 9))
+    await app.invoke(undefined, { target: 'scan', transient: true, overrides: { image } })
+    const unchanged = JSON.stringify(app.getPipelineState()) === before
+    const value = app.getInputs().scan.image, width = image.width
+    image.close();app.destroy()
+    return { unchanged, value, width }
+  })
+  expect(result).toEqual({ unchanged: true, value: null, width: 15 })
+})
+
+test('partial bitmap copy failure closes earlier copies and preserves both sources', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const root = document.createElement('div');document.body.append(root)
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false, inputs: ['a', 'b'].map(name => ({ name, type: 'image', nullable: true, default: null })),
+      model: { code: ({ a, b }) => ({ width: a.width + b.width }) }, outputs: [{ name: 'width', type: 'number' }]
+    } })
+    await app.ready
+    const native = window.createImageBitmap
+    const a = await native(new ImageData(5, 4)), b = await native(new ImageData(6, 4))
+    let count = 0, copy, error
+    window.createImageBitmap = async value => {
+      if (++count === 2) throw new Error('copy failed')
+      return copy = await native(value)
+    }
+    try { await app.invoke({ a, b }, { transient: true }) } catch (e) { error = e.message }
+    finally { window.createImageBitmap = native }
+    const result = { error, copy: copy.width, a: a.width, b: b.width }
+    a.close();b.close();app.destroy()
+    return result
+  })
+  expect(result).toEqual({ error: 'copy failed', copy: 0, a: 5, b: 6 })
+})
+
+test('default live bitmap consumer transfers frames to module workers without PNG encoding', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const NativeWorker = window.Worker, transfers = []
+    window.Worker = class extends NativeWorker {
+      postMessage (message, list) {
+        const frames = (list || []).filter(item => item instanceof ImageBitmap)
+        super.postMessage(message, list)
+        if (frames.length) transfers.push(frames.map(frame => frame.width))
+      }
+    }
+    const root = document.createElement('div');document.body.append(root)
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false,
+      inputs: [{ name: 'image', type: 'image', nullable: true, default: null, capture: { camera: true, live: true, transport: 'bitmap', maxFps: 60 } }],
+      model: { type: 'module', url: '/test/fixtures/image-frame-model.mjs', name: 'predict', worker: true },
+      outputs: [{ name: 'width', type: 'number' }, { name: 'previousClosed', type: 'bool' }]
+    } })
+    await app.ready
+    const canvas = document.createElement('canvas');canvas.width = 18;canvas.height = 10
+    const paint = setInterval(() => canvas.getContext('2d').fillRect(0, 0, 18, 10), 10)
+    const stream = canvas.captureStream()
+    navigator.mediaDevices.getUserMedia = async () => stream
+    const nativeBlob = HTMLCanvasElement.prototype.toBlob
+    let encodes = 0, done
+    HTMLCanvasElement.prototype.toBlob = function (...args) { encodes++;return nativeBlob.apply(this, args) }
+    const completed = new Promise(resolve => { done = resolve }), results = []
+    app.on('result', value => { results.push(value);if (results.length === 3) done() })
+    const source = app.createImageInput('image', { target: root, video: document.createElement('video') })
+    await source.start({ live: true });await completed;await source.stop()
+    const saved = app.getInputs().image
+    app.destroy();clearInterval(paint);HTMLCanvasElement.prototype.toBlob = nativeBlob;window.Worker = NativeWorker
+    return { encodes, results, transfers, saved, tracks: stream.getTracks().map(track => track.readyState) }
+  })
+  expect(result.encodes).toBe(0)
+  expect(result.results).toEqual(Array(3).fill({ width: 18, previousClosed: true }))
+  expect(result.transfers).toEqual([[0], [0], [0]])
+  expect(result.saved).toBe(null)
+  expect(result.tracks).toEqual(['ended'])
+})
+
+test('bitmap inputs require a computation instead of becoming identity-mode output', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const root = document.createElement('div');document.body.append(root)
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false, inputs: [{ name: 'image', type: 'image', nullable: true, default: null }]
+    } })
+    await app.ready
+    const image = await createImageBitmap(new ImageData(4, 4))
+    let error
+    try { await app.invoke({ image }, { transient: true }) } catch (e) { error = e.message }
+    const width = image.width;image.close();app.destroy()
+    return { error, width }
+  })
+  expect(result.error).toMatch(/local browser JavaScript model/)
+  expect(result.width).toBe(4)
+})

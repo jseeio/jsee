@@ -1,4 +1,5 @@
 const { matchesFileAccept } = require('./schema')
+const { isImageBitmap } = require('./image-frame')
 
 // Acquisition owns DOM listeners and camera tracks, not model execution. Awaiting
 // onFrame is the backpressure boundary: capture nothing while a consumer is busy.
@@ -60,6 +61,8 @@ class ImageInput {
     if (!config.camera || live && !config.live) throw new Error('Camera mode is not enabled by this image input')
     if (!this.video) throw new Error('Camera capture requires a video element')
     if (live && !this.onFrame) throw new Error('Live capture requires a frame consumer')
+    if (config.transport !== undefined && !['file', 'bitmap'].includes(config.transport)) throw new Error('capture.transport must be file or bitmap')
+    if (live && config.transport === 'bitmap' && typeof createImageBitmap !== 'function') throw new Error('Bitmap capture requires createImageBitmap')
     const fps = config.maxFps ?? 5
     if (!Number.isFinite(fps) || fps <= 0 || fps > 60) throw new Error('capture.maxFps must be between 0 and 60')
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera capture requires mediaDevices.getUserMedia on a secure origin')
@@ -91,8 +94,9 @@ class ImageInput {
     }
   }
 
-  async capture () {
+  async capture (live=false) {
     if (!this.video?.videoWidth || !this.video.videoHeight) return null
+    if (live && this.input.capture?.transport === 'bitmap') return createImageBitmap(this.video)
     const format = [['image/png', 'png'], ['image/jpeg', 'jpg'], ['image/webp', 'webp']]
       .find(([mime, ext]) => matchesFileAccept(this.input.accept, 'camera.' + ext, mime))
     if (!format) throw new Error('Camera snapshots require PNG, JPEG or WebP in accept')
@@ -107,9 +111,11 @@ class ImageInput {
   async pump (epoch, interval) {
     while (!this.locked && this.epoch === epoch) {
       const started = performance.now()
-      const file = await this.capture()
-      if (this.locked || this.epoch !== epoch) break
-      if (file) await this.onFrame(file)
+      const frame = await this.capture(true)
+      try {
+        if (this.locked || this.epoch !== epoch) break
+        if (frame) await this.onFrame(frame)
+      } finally { if (isImageBitmap(frame)) frame.close() }
       if (this.locked || this.epoch !== epoch) break
       await new Promise(resolve => { this.wake = resolve; this.timer = setTimeout(resolve, Math.max(0, interval - (performance.now() - started))) })
       this.wake = null

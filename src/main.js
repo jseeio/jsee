@@ -29,6 +29,7 @@ const notyf = new Notyf({
 
 const Overlay = require('./overlay')
 const ImageInput = require('./image-input')
+const { imageFrames, withImageFrames, assertFrameResult } = require('./image-frame')
 
 require('notyf/notyf.min.css')
 
@@ -264,6 +265,7 @@ export default class JSEE {
 
   async setInputs (values) {
     await this.ready
+    if (imageFrames(values).length) throw new Error('ImageBitmap inputs require a transient invocation and cannot be stored in the form')
     if (!values || typeof values !== 'object' || Array.isArray(values)) throw new TypeError('Inputs must be an object')
     const updates = []
     const visit = (inputs, supplied) => {
@@ -363,11 +365,14 @@ export default class JSEE {
     if (this.running || this._invoking) throw new Error('A run is already in progress')
     this._invoking = true
     try {
+      const frames = imageFrames([values, options?.overrides])
+      if (frames.length && !options?.transient) throw new Error('ImageBitmap inputs require a transient invocation')
+      if (frames.length && !this.model.length) throw new Error('ImageBitmap requires a local browser JavaScript model; identity mode cannot retain frames')
       const transient = options?.transient && !this._namedPipeline
       if (values !== undefined && !transient) await this.setInputs(values)
       checkStopped()
       // Invocation owns exactly one run; never resolve with a queued run's result.
-      this._pipelineOptions = transient ? { ...options, overrides: values } : options
+      this._pipelineOptions = { ...(transient ? { ...options, overrides: values } : options), _imageFrames: frames.length > 0 }
       return await this.runOnce('invoke', true)
     } finally {
       this._invoking = false
@@ -1040,7 +1045,16 @@ export default class JSEE {
       const id = this.model[index].id
       this._stagePartials = this._stagePartials || {}
       this._stagePartials[id] = {}
-      const result = await run(values)
+      const model = this.model[index]
+      const frames = this._pipelineOptions?._imageFrames ? imageFrames(values) : []
+      if (frames.length && (model._jseeCanonical || !['function', 'class', 'module', 'async-init', 'async-function'].includes(model.type))) throw new Error('ImageBitmap requires a local browser JavaScript model; use an image file for Python or remote calls')
+      const token = this._runToken
+      const result = model.worker || !frames.length ? await run(values) : await withImageFrames(values, async borrowed => {
+        if (token !== this._runToken || token?.cancelled || this._destroyed) throw new DOMException('Run cancelled', 'AbortError')
+        const result = await run(borrowed)
+        assertFrameResult(result)
+        return result
+      })
       return id && utils.isRecordObject(result) ? { ...this._stagePartials[id], ...result } : result
     }), { prepare: async (schema, values, id) => {
       const model = this.model.find(model => model.id === id)
@@ -1103,6 +1117,7 @@ export default class JSEE {
 
     const modelFunc = (inputs) => {
       const isInitCall = utils.isWorkerInitMessage(inputs, workerInitialized)
+      const usesFrames = !isInitCall && this._pipelineOptions?._imageFrames
       const requestId = `${this.uid}:worker:${++this._workerSequence}`
       const token = this._runToken
       const identity = { runId: token?.active ? token.id : null, stageId: model.id || null }
@@ -1118,9 +1133,12 @@ export default class JSEE {
         rejectWorkerRun = reject
         this._rejectWorkerRun = reject
         worker.onmessage = (e) => {
-          if (!acceptingMessages) return
           const res = e.data
+          const frames = usesFrames ? imageFrames(res) : []
+          frames.forEach(frame => frame.close())
+          if (!acceptingMessages) return
           if (res && (res._jsee || ['progress', 'log'].includes(res._status)) && res.requestId !== undefined && res.requestId !== requestId) return
+          if (frames.length) { reject(new Error('ImageBitmap outputs are unsupported; return image files or pixel data')); return }
           if (token?.cancelled && (res?._partial || ['partial', 'progress', 'log'].includes(res?._jsee || res?._status))) return
           if (res && (res._jsee || res._status)) {
             // Raw _status/_partial messages remain the legacy model-posted callback API.
@@ -1177,25 +1195,31 @@ export default class JSEE {
           this.progress(0, undefined, identity)
           reject(e)
         }
-        try {
-          // Structured cloning preserves caller-owned buffers for later runs and pipeline stages.
-          worker.postMessage(payload)
-        } catch (error) {
-          const hasBinaryPayload = utils.containsBinaryPayload(payload)
-          if (hasBinaryPayload) {
-            const message = 'Worker postMessage failed for payload with File/Blob/binary data. JSON fallback would drop that data.'
-            this.log(message, error)
-            reject(new Error(message))
-            return
-          }
-          this.log('Worker postMessage failed, retrying with JSON fallback. Complex objects may lose metadata.', error)
+        const send = (message, transfer=[]) => {
+          if (!acceptingMessages || token?.cancelled || this._destroyed) throw new DOMException('Run cancelled', 'AbortError')
           try {
-            const fallbackPayload = JSON.parse(JSON.stringify(payload))
-            worker.postMessage(fallbackPayload)
-          } catch (fallbackError) {
-            reject(fallbackError)
+            // Structured cloning preserves caller-owned buffers for later runs and pipeline stages.
+            if (transfer.length) message._imageFrames = true
+            worker.postMessage(message, transfer)
+          } catch (error) {
+            const hasBinaryPayload = utils.containsBinaryPayload(message)
+            if (hasBinaryPayload) {
+              const message = 'Worker postMessage failed for payload with File/Blob/binary data. JSON fallback would drop that data.'
+              this.log(message, error)
+              reject(new Error(message))
+              return
+            }
+            this.log('Worker postMessage failed, retrying with JSON fallback. Complex objects may lose metadata.', error)
+            try {
+              const fallbackPayload = JSON.parse(JSON.stringify(message))
+              worker.postMessage(fallbackPayload)
+            } catch (fallbackError) {
+              reject(fallbackError)
+            }
           }
         }
+        if (usesFrames) withImageFrames(payload, send).catch(reject)
+        else send(payload)
       }).finally(() => {
         // A settled stage must not keep accepting presentation callbacks while idle.
         acceptingMessages = false

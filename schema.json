@@ -135,7 +135,8 @@
             "camera": { "type": "boolean" },
             "live": { "type": "boolean" },
             "maxFps": { "type": "number", "exclusiveMinimum": 0, "maximum": 60 },
-            "facingMode": { "enum": ["user", "environment"] }
+            "facingMode": { "enum": ["user", "environment"] },
+            "transport": { "enum": ["file", "bitmap"] }
           },
           "additionalProperties": false
         },

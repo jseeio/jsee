@@ -741,9 +741,26 @@ supports snapshots only.
 Disable/readonly changes, runtime Stop, page hiding and disposal stop capture.
 Destroying the app disposes its acquisition instances. Stopping capture alone
 does not cancel model execution; `app.stop()` controls execution separately.
-Frames currently use encoded files and the existing image-byte transport, not
-zero-copy video transfer. Capture UI and permission are browser-only; HTTP, CLI
-and MCP continue to accept ordinary image files or artifact references. JSEE
+Frames use encoded files by default. Opt into decoded live frames with
+`capture: {camera:true, live:true, transport:"bitmap"}`. The callback then receives
+an `ImageBitmap`; snapshots and uploads still supply files. Local browser JS
+models must handle that distinction. Python and remote models require files.
+
+A bitmap passed to `app.invoke({photo: bitmap}, {transient:true})` remains owned
+by the caller. Each model call borrows a separate copy; worker delivery transfers
+only that copy. JSEE closes model copies after settlement, including failures;
+forced worker termination disposes the worker. A model may close its borrowed
+copy early, but must copy it itself if it needs to retain it. Return files or
+pixel data, not borrowed bitmaps. Ordinary buffers keep their existing cloning
+behavior. Named stages use `invoke(undefined, {target, transient:true,
+overrides:{photo:bitmap}})`; frames do not enter retained stage results.
+
+The capture callback borrows its frame only until its returned promise settles;
+JSEE also closes late frames after Stop/disposal. Bitmaps cannot be stored with
+`setInputs` or sent through JSON, Python or HTTP/MCP. There is no automatic
+fallback that changes a bitmap model's input type. This avoids PNG encode/decode
+on the live path, but does not promise zero-copy execution or a particular speed.
+Capture UI and permission are browser-only; HTTP, CLI and MCP continue to accept ordinary image files or artifact references. JSEE
 owns acquisition and execution; models retain preprocessing and inference.
 
 ### Named stages in the existing pipeline

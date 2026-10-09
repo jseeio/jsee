@@ -1,4 +1,5 @@
 const utils = require('./utils')
+const { imageFrames, assertFrameResult } = require('./image-frame')
 
 function log () {
   const args = Array.prototype.slice.call(arguments)
@@ -214,12 +215,14 @@ self.onmessage = async function (e) {
       })
     }
   } else {
+    const frames = message?._imageFrames ? imageFrames(data) : []
     const token = runToken = { active: true, controller: new AbortController(), requestId: message.requestId }
     try {
       cancelled = false
       const runData = utils.wrapStreamInputs(data, streamInputConfig, getStreamOptions())
       log('Run model')
       const results = await self.modelFunc(runData)
+      if (frames.length) assertFrameResult(results)
       log('Results:', results)
       // Returned values never share the control namespace used by model-posted messages.
       postMessage(token.controller.signal.aborted
@@ -230,6 +233,7 @@ self.onmessage = async function (e) {
         ? { _jsee: 'cancelled', requestId: token.requestId }
         : { _jsee: 'error', requestId: token.requestId, _error: error })
     } finally {
+      frames.forEach(frame => frame.close())
       token.active = false
     }
   }
