@@ -164,6 +164,7 @@
         "valueSchema": { "$ref": "#/definitions/valueSchema" },
         "name": { "type": "string" },
         "type": { "$ref": "#/definitions/outputType" },
+        "renderer": { "type": "string", "minLength": 1 },
         "label": { "type": "string" },
         "description": { "type": "string" },
         "alias": { "$ref": "#/definitions/alias" },

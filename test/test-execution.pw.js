@@ -1918,3 +1918,232 @@ test('cooperative Stop suppresses a terminal worker progress reset already in tr
   })
   expect(result).toEqual({ progress: [10], outcome: 'AbortError' })
 })
+
+test('persistent renderers update worker data without replacing interaction state', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const container = document.createElement('div'); document.body.append(container)
+    let mounts = 0, updates = 0, disposals = 0, clicks = 0
+    const render = (element, data) => {
+      mounts++
+      const button = document.createElement('button'), value = document.createElement('span')
+      button.textContent = 'Select'; button.onclick = () => { clicks++; button.dataset.selected = 'yes' }
+      value.textContent = data.total; element.append(button, value)
+      return { update(next) { updates++; value.textContent = next.total }, dispose() { disposals++; button.onclick = null } }
+    }
+    const app = new JSEE({ container, renderers: { view: render }, toasts: false, schema: {
+      persist: false, autorun: false, inputs: [{ name: 'n', type: 'int', default: 1 }],
+      model: { worker: true, code: ({ n }) => ({ view: { total: n * 2 } }) },
+      outputs: [{ name: 'view', type: 'object', renderer: 'view' }]
+    } })
+    await app.ready; await app.invoke(); await new Promise(requestAnimationFrame)
+    const button = container.querySelector('.custom-container button')
+    button?.click()
+    await app.invoke({ n: 3 }); await new Promise(requestAnimationFrame)
+    const before = { mounts, updates, disposals, clicks, sameNode: button === container.querySelector('.custom-container button'), selected: button?.dataset.selected, text: container.querySelector('.custom-container span')?.textContent }
+    app.destroy(); app.destroy()
+    button?.click()
+    return { before, disposals, clicks }
+  })
+  expect(result).toEqual({ before: { mounts: 1, updates: 1, disposals: 0, clicks: 1, sameNode: true, selected: 'yes', text: '6' }, disposals: 1, clicks: 1 })
+})
+
+test('persistent renderers dispose on factory replacement, clearing, type change and removal', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const container = document.createElement('div'); document.body.append(container)
+    const events = [], tick = () => new Promise(requestAnimationFrame)
+    const factory = name => (element, data) => {
+      events.push('mount ' + name); element.textContent = data
+      return { update(next) { events.push('update ' + name); element.textContent = next }, dispose() { events.push('dispose ' + name) } }
+    }
+    const a = factory('a'), b = factory('b')
+    const app = new JSEE({ container, renderers: { a, b }, toasts: false, schema: { persist: false, autorun: false, inputs: [], model: { worker: false, code: () => ({}) }, outputs: [{ name: 'view', type: 'object', renderer: 'a' }] } })
+    await app.ready
+    app.output({ view: 'first' }); await tick()
+    app.data.outputs[0].renderer = 'b'; app.output({ view: 'second' }); await tick()
+    app.data.outputs[0].value = undefined; await tick()
+    const cleared = container.querySelector('.custom-container').textContent
+    app.data.outputs[0].renderer = 'a'; app.output({ view: 'third' }); await tick()
+    delete app.data.outputs[0].renderer; await tick()
+    app.data.outputs[0].renderer = 'a'; await tick()
+    app.data.outputs.splice(0, 1); await tick()
+    app.destroy()
+    return { events, cleared }
+  })
+  expect(result).toEqual({ events: ['mount a', 'dispose a', 'mount b', 'dispose b', 'mount a', 'dispose a', 'mount a', 'dispose a'], cleared: '' })
+})
+
+test('persistent renderers are independent across instances and survive hidden host regions', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const events = [], tick = () => new Promise(requestAnimationFrame)
+    const render = (element, data) => {
+      const input = document.createElement('input'); input.value = 'selection'; element.append(input)
+      events.push('mount ' + data)
+      return { update(next) { input.dataset.value = next }, dispose() { events.push('dispose ' + data) } }
+    }
+    const roots = [document.createElement('div'), document.createElement('div')], host = document.createElement('div')
+    document.body.append(...roots, host)
+    const apps = roots.map((container, i) => new JSEE({ container, renderers: { view: (element, data) => render(element, i + ':' + data) }, regions: i === 0 ? { outputs: host } : {}, toasts: false, schema: {
+      persist: false, autorun: false, inputs: [], model: { worker: false, code: () => ({}) }, outputs: [{ name: 'view', type: 'object', renderer: 'view' }]
+    } }))
+    await Promise.all(apps.map(app => app.ready))
+    apps.forEach((app, i) => app.output({ view: i })); await tick()
+    const input = host.querySelector('input'); if (input) input.value = 'kept'
+    host.hidden = true
+    apps[0].output({ view: 9 }); await tick()
+    host.hidden = false
+    const same = input === host.querySelector('input'), first = input?.value, second = roots[1].querySelector('.custom-container input')?.value
+    apps[0].destroy(); await tick()
+    const surviving = roots[1].querySelector('.custom-container input')?.value
+    apps[1].destroy()
+    return { events, same, first, second, surviving }
+  })
+  expect(result).toEqual({ events: ['mount 0:0', 'mount 1:1', 'dispose 0:0', 'dispose 1:1'], same: true, first: 'kept', second: 'selection', surviving: 'selection' })
+})
+
+test('persistent renderer failures dispose once and allow recovery', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const container = document.createElement('div'); document.body.append(container)
+    let mounts = 0, disposed = 0
+    const render = (element, data) => {
+      mounts++; element.textContent = data
+      return { update() { throw new Error('bad update') }, dispose() { disposed++; throw new Error('bad cleanup') } }
+    }
+    const app = new JSEE({ container, renderers: { view: render }, toasts: false, schema: { persist: false, autorun: false, inputs: [], model: { worker: false, code: () => ({}) }, outputs: [{ name: 'view', type: 'object', renderer: 'view' }] } })
+    const tick = () => new Promise(requestAnimationFrame)
+    await app.ready
+    app.output({ view: 'first' }); await tick()
+    app.output({ view: 'second' }); await tick()
+    const error = container.querySelector('[role="alert"]')?.textContent, empty = container.querySelector('.custom-container').textContent
+    app.output({ view: 'recovered' }); await tick()
+    const recovered = container.querySelector('.custom-container').textContent
+    app.destroy(); app.destroy()
+    return { mounts, disposed, error, empty, recovered }
+  })
+  expect(result.mounts).toBe(2)
+  expect(result.disposed).toBe(2)
+  expect(result.error).toContain('bad update')
+  expect(result.empty).toBe('')
+  expect(result.recovered).toBe('recovered')
+})
+
+test('renderer registry errors are visible, scoped and never fall through to object prototypes', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const tick = () => new Promise(requestAnimationFrame), container = document.createElement('div'); document.body.append(container)
+    let invalidDisposed = 0
+    const registry = { valid: (element, value) => { element.textContent = value; return { update(next) { element.textContent = next } } },
+      invalid: element => { element.textContent = 'partial mount'; return { dispose() { invalidDisposed++ } } } }
+    const app = new JSEE({ container, renderers: registry, toasts: false, schema: { persist: false, autorun: false,
+      inputs: [], model: { worker: false, code: () => ({}) }, outputs: [{ type: 'group', elements: [{ name: 'view', type: 'text', renderer: 'toString' }] }] } })
+    await app.ready; app.output({ view: 'first' }); await tick()
+    const missing = container.querySelector('[role="alert"]')?.textContent
+    const output = app.data.outputs[0].elements[0]
+    output.renderer = 'invalid'; await tick()
+    const invalid = container.querySelector('[role="alert"]')?.textContent, cleared = container.querySelector('.custom-container').textContent
+    registry.valid = () => { throw new Error('external mutation') }
+    output.renderer = 'valid'; await tick()
+    app.output({ view: 'partial' }, true); await tick()
+    app.output({ view: 'final' }); await tick()
+    const text = container.querySelector('.custom-container').textContent
+    app.destroy()
+    let badRegistration
+    try { new JSEE({ container, renderers: { bad: 1 }, schema: { inputs: [] } }) } catch (error) { badRegistration = error.message }
+    return { missing, invalid, cleared, text, invalidDisposed, badRegistration }
+  })
+  expect(result.missing).toContain('Unknown output renderer: toString')
+  expect(result.invalid).toContain('must return an object with update(data)')
+  expect(result).toMatchObject({ cleared: '', text: 'final', invalidDisposed: 1, badRegistration: 'renderers.bad must be a function' })
+})
+
+test('registered media renderers respect operation gates and retire blocked views', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const container = document.createElement('div'); document.body.append(container)
+    let mounted = 0, disposed = 0
+    const render = element => { mounted++; element.textContent = 'image'; return { update() {}, dispose() { disposed++ } } }
+    const app = new JSEE({ container, renderers: { image: render }, toasts: false, schema: { persist: false, autorun: false,
+      security: { allowNetwork: false }, inputs: [], model: { worker: false, code: () => ({}) }, outputs: [{ name: 'image', type: 'image', renderer: 'image' }] } })
+    const tick = () => new Promise(requestAnimationFrame)
+    await app.ready
+    app.output({ image: 'data:image/png;base64,ignored-by-renderer' }); await tick()
+    app.output({ image: 'https://example.invalid/image.png' }); await tick()
+    const blocked = container.textContent.includes('security.allowNetwork'), afterBlocked = disposed
+    app.output({ image: 'data:image/png;base64,ignored-by-renderer' }); await tick()
+    app.destroy()
+    return { mounted, disposed, afterBlocked, blocked }
+  })
+  expect(result).toEqual({ mounted: 2, disposed: 2, afterBlocked: 1, blocked: true })
+})
+
+test('host renderer names survive schema export while standalone export rejects missing host code', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const container = document.createElement('div'); document.body.append(container)
+    const app = new JSEE({ container, renderers: { value: () => ({ update() {} }) }, toasts: false, schema: { persist: false, autorun: false,
+      inputs: [], model: { worker: false, code: () => ({ value: 1 }) }, outputs: [{ name: 'value', type: 'number', renderer: 'value' }] } })
+    await app.ready
+    const schema = await app.exportSchema(), errors = []
+    for (const action of [() => app.exportHTML({ runtime: '/dist/jsee.core.js' }), () => app.download()]) {
+      try { await action() } catch (error) { errors.push(error.message) }
+    }
+    app.destroy()
+    return { output: schema.outputs[0], errors }
+  })
+  expect(result.output).toMatchObject({ name: 'value', type: 'number', renderer: 'value' })
+  expect(result.errors).toHaveLength(2)
+  for (const error of result.errors) expect(error).toContain('cannot bundle host renderer registrations')
+})
+
+test('persistent renderer example retains table selection and chart scale on worker updates', async ({ page }) => {
+  const errors = []
+  page.on('pageerror', error => errors.push(error.message))
+  await page.goto('/examples/persistent-renderers/')
+  await expect(page.locator('#measurements select')).toHaveCount(1)
+  await page.locator('#measurements select').selectOption('Sensor 3')
+  await page.locator('#trend input').fill('3')
+  const result = await page.evaluate(async () => {
+    const select = document.querySelector('#measurements select'), scale = document.querySelector('#trend input'), svg = document.querySelector('#trend svg')
+    const before = svg.querySelector('polyline').getAttribute('points')
+    await window.demo.invoke({ phase: 1 }); await new Promise(requestAnimationFrame)
+    const result = {
+      sameSelect: select === document.querySelector('#measurements select'), sameSvg: svg === document.querySelector('#trend svg'),
+      selected: select.value, scale: scale.value, changed: before !== svg.querySelector('polyline').getAttribute('points'),
+      selectedRow: document.querySelector('#measurements [aria-selected=true]').textContent,
+      data: window.demo.getSchema().outputs.map(output => ({ type: output.type, renderer: output.renderer }))
+    }
+    window.demo.destroy()
+    return result
+  })
+  expect(result).toMatchObject({ sameSelect: true, sameSvg: true, selected: 'Sensor 3', scale: '3', changed: true })
+  expect(result.selectedRow).toContain('Sensor 3')
+  expect(result.data).toEqual([{ type: 'table', renderer: 'readingTable' }, { type: 'table', renderer: 'trend' }])
+  expect(errors).toEqual([])
+})
+
+for (const registered of [false, true]) for (const initial of [false, true]) test(`renderer cleanup survives destruction during mount (registered=${registered}, initial=${initial})`, async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async ({ registered, initial }) => {
+    const container = document.createElement('div'); document.body.append(container)
+    const listeners = new Set(), add = document.addEventListener.bind(document), remove = document.removeEventListener.bind(document)
+    document.addEventListener = (type, listener, options) => { if (type === 'fullscreenchange') listeners.add(listener); add(type, listener, options) }
+    document.removeEventListener = (type, listener, options) => { if (type === 'fullscreenchange') listeners.delete(listener); remove(type, listener, options) }
+    let disposed = 0, app
+    const render = element => {
+      element.textContent = 'mounting'
+      app.destroy()
+      const dispose = () => { disposed++ }
+      return registered ? { update() {}, dispose } : dispose
+    }
+    app = new JSEE({ container, renderers: { view: render }, toasts: false, schema: { persist: false, autorun: false,
+      inputs: [], model: { worker: false, code: () => ({}) }, outputs: [{ name: 'view', type: registered ? 'text' : 'function', ...(registered ? { renderer: 'view' } : {}), ...(initial ? { value: registered ? 'data' : render } : {}) }] } })
+    await app.ready.catch(error => { if (!initial || error.message !== 'JSEE instance has been destroyed') throw error })
+    if (!initial) app.output({ view: registered ? 'data' : render }); await new Promise(requestAnimationFrame)
+    app.destroy()
+    return { disposed, empty: container.textContent === '', listeners: listeners.size }
+  }, { registered, initial })
+  expect(result).toEqual({ disposed: 1, empty: true, listeners: 0 })
+})

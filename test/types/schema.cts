@@ -45,3 +45,11 @@ const oldModel: Model = { type: 'tf' }
 // @ts-expect-error Grid is a pair of numeric weights.
 const badGrid: Schema = { inputs: [], design: { grid: ['4', 8] } }
 void [badVersion, emptySchema, unnamed, emptyGroup, badRequired, typo, badOutput, oldModel, badGrid]
+
+const renderer: import('@jseeio/jsee/schema').OutputRenderer<{ count: number }> = (container, data) => {
+  container.textContent = String(data.count)
+  return { update(next) { container.textContent = String(next.count) }, dispose() { container.replaceChildren() } }
+}
+const renderers: import('@jseeio/jsee/schema').RendererRegistry = { count: renderer }
+const renderedOutput: Output = { name: 'count', type: 'object', renderer: 'count' }
+void renderers; void renderedOutput

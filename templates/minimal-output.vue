@@ -314,6 +314,10 @@
       <div :id="outputName" v-if="outputBlockedReason" class="jsee-output-missing">
         {{ outputBlockedReason }}
       </div>
+      <div :id="outputName" v-else-if="hasCustomRenderer || output.type === 'function'">
+        <div v-if="renderError" role="alert" class="jsee-output-missing">{{ renderError }}</div>
+        <div class="custom-container" ref="customContainer"></div>
+      </div>
       <div :id="outputName" v-else-if="(output.type == 'svg') || (output.type == 'html')">
         <div v-html="renderHtml(output.value)"></div>
       </div>
@@ -322,9 +326,6 @@
       </div>
       <div :id="outputName" v-else-if="output.type == 'code'">
         <pre>{{ output.value }}</pre>
-      </div>
-      <div :id="outputName" v-else-if="output.type == 'function'">
-        <div class="custom-container" ref="customContainer"></div>
       </div>
       <div :id="outputName" v-else-if="output.type === 'table'">
         <virtual-table :data="output.value" />

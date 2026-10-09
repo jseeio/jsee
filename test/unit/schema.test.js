@@ -78,3 +78,12 @@ test.each(require('../fixtures/value-schema.json'))('authoring accepts valueSche
 test.each([{ $ref: 'remote' }, { type: 'invalid' }, { properties: { x: { pattern: 'x' } } }, { items: [] }])('authoring rejects unsupported valueSchema %j', valueSchema => {
   expect(validate({ inputs: [{ name: 'info', type: 'object', valueSchema }] })).toBe(false)
 })
+
+test('renderer selection preserves the declared computation output schema', () => {
+  const { jseeOutputsToJsonSchema } = require('../../src/utils')
+  const fields = [{ name: 'scores', type: 'table', renderer: 'ranked' }]
+  expect(validate({ inputs: [], outputs: fields })).toBe(true)
+  expect(jseeOutputsToJsonSchema(fields)).toEqual(jseeOutputsToJsonSchema([{ name: 'scores', type: 'table' }]))
+  expect(validate({ inputs: [], outputs: [{ name: 'scores', type: 'table', renderer: 1 }] })).toBe(false)
+  expect(validate({ inputs: [], outputs: [{ name: 'scores', type: 'table', renderer: '' }] })).toBe(false)
+})

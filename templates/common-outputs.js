@@ -48,6 +48,7 @@ function getFileDescriptor (output) {
 
 const component = {
   props: ['output', 'security'],
+  inject: ['jsee'],
   emits: ['notification'],
   data () {
     return {
@@ -55,6 +56,7 @@ const component = {
       isFullScreen: false,
       activeOutputTab: 0,
       lightboxSrc: null,
+      renderError: '',
       _threeScene: null,
       _threeRenderer: null,
       _threeAnimId: null,
@@ -68,26 +70,26 @@ const component = {
       : this.output.name
         ? sanitizeName(this.output.name)
         : 'output_' + Math.floor(Math.random() * 1000000)
-    this.executeRenderFunction()
     document.addEventListener('fullscreenchange', this.onFullScreenChange)
+    this.executeRenderFunction()
   },
   beforeUnmount() {
-    this._renderDispose?.()
-    this._renderDispose = null
+    this._renderUnmounted = true
+    this.disposeRender()
     document.removeEventListener('fullscreenchange', this.onFullScreenChange)
     if (this._threeAnimId) cancelAnimationFrame(this._threeAnimId)
     if (this._threeRenderer) this._threeRenderer.dispose()
     if (this._leafletMap) this._leafletMap.remove()
     this.revokePdfObjectUrl()
   },
-  // updated() {
-  //   this.executeRenderFunction()
-  // },
   watch: {
+    renderRequest: {
+      flush: 'post',
+      handler () { this.executeRenderFunction() }
+    },
     'output.value': function (newValue, oldValue) {
       if (newValue !== oldValue) {
         this.$nextTick(() => {
-          this.executeRenderFunction()
           if (this.output.type === 'chart') this.renderChart()
           if (this.output.type === '3d') this.render3D()
           if (this.output.type === 'map') this.renderMap()
@@ -107,8 +109,12 @@ const component = {
     }
   },
   computed: {
-    isRenderFunction() {
-      return typeof this.output.value === 'function'
+    renderRequest () {
+      // Shallow identity updates only; renderers own their interaction state.
+      return [this.output, this.output.type, this.output.renderer, this.output.value, this.outputBlockedReason]
+    },
+    hasCustomRenderer () {
+      return this.output.type !== 'group' && this.output.renderer !== undefined
     },
     hasPlot() {
       return typeof window !== 'undefined' && !!window.Plot
@@ -575,15 +581,45 @@ const component = {
       if (!data) return
       this.renderNativePDF(container, data)
     },
-    executeRenderFunction() {
-      this._renderDispose?.()
-      this._renderDispose = null
-      if (this.isRenderFunction && this.$refs.customContainer) {
-        // Clear previous content
-        this.$refs.customContainer.innerHTML = ''
-        // Execute the render function with the container
-        const dispose = this.output.value(this.$refs.customContainer)
-        if (typeof dispose === 'function') this._renderDispose = dispose
+    disposeRender () {
+      const state = this._renderState
+      this._renderState = null
+      // Retire ownership before user cleanup, even when cleanup throws.
+      try { state?.dispose?.() }
+      catch (error) { this.renderError = 'Renderer cleanup error: ' + (error.message || String(error)) }
+      finally { state?.container.replaceChildren() }
+    },
+    executeRenderFunction () {
+      if (this._renderUnmounted) return
+      const container = this.$refs.customContainer, value = this.output.value
+      const registered = this.hasCustomRenderer
+      const render = registered ? this.jsee.renderers[this.output.renderer]
+        : this.output.type === 'function' && typeof value === 'function' ? value : null
+      const previous = this._renderState
+      this.renderError = ''
+      if (!container || value === undefined || this.outputBlockedReason) { this.disposeRender(); return }
+      try {
+        if (registered && typeof render !== 'function') throw new Error('Unknown output renderer: ' + this.output.renderer)
+        if (previous && previous.render === render && previous.container === container && previous.output === this.output) {
+          if (registered) previous.update(value)
+          return
+        }
+        this.disposeRender()
+        if (!render || this._renderUnmounted) return
+        const state = this._renderState = { render, container, output: this.output }
+        const view = registered ? render(container, value) : render(container)
+        if (!registered) {
+          if (typeof view === 'function') state.dispose = view
+        } else {
+          if (typeof view?.dispose === 'function') state.dispose = () => view.dispose()
+          if (typeof view?.update === 'function') state.update = data => view.update(data)
+        }
+        // A factory can synchronously destroy its host before returning cleanup.
+        if (this._renderState !== state) { state.dispose?.(); return }
+        if (registered && !state.update) throw new Error('Output renderer must return an object with update(data) and optional dispose()')
+      } catch (error) {
+        this.disposeRender()
+        this.renderError = 'Renderer error: ' + (error.message || String(error))
       }
     }
   },

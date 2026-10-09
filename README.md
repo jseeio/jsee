@@ -763,6 +763,71 @@ on the live path, but does not promise zero-copy execution or a particular speed
 Capture UI and permission are browser-only; HTTP, CLI and MCP continue to accept ordinary image files or artifact references. JSEE
 owns acquisition and execution; models retain preprocessing and inference.
 
+### Persistent output renderers
+
+Pass a `renderers` map when constructing an embedded app, and select a name with
+`output.renderer`. The output keeps its computation data type: workers return
+ordinary data, and CLI/HTTP/MCP keep the same declared output schema.
+
+```js
+function countView(container, initial) {
+  const label = document.createElement('span')
+  container.append(label)
+  const update = data => { label.textContent = String(data.count) }
+  update(initial)
+  return {
+    update,
+    dispose() { /* release listeners, observers or graphics resources here */ }
+  }
+}
+
+const app = new JSEE({
+  container: '#app',
+  renderers: { count: countView },
+  schema: {
+    inputs: [{ name: 'n', type: 'int', default: 1 }],
+    model: { worker: true, code: ({ n }) => ({ result: { count: n * 2 } }) },
+    outputs: [{ name: 'result', type: 'object', renderer: 'count' }]
+  }
+})
+```
+
+The factory runs once as `renderer(container, initialData)` and returns
+`{ update(data), dispose?() }`. Later output values call `update` on that same
+view. JSEE does not clear its DOM on updates, so the view can retain selection,
+scroll or zoom. Submit a new output value to trigger an update; nested in-place
+mutations are not watched. Synchronous updates in one UI tick may be coalesced
+into the latest value; this is a view lifecycle, not an event log.
+
+Hooks run synchronously on the UI thread. If a renderer starts asynchronous
+work, it owns cancellation and checks that late results still belong to the
+current source. `dispose` releases its listeners, observers, timers and graphics
+resources; JSEE clears the container. Replacing the renderer or output descriptor,
+removing the output, clearing its value to `undefined`, blocking its media output,
+or destroying the app disposes it once. `null` is a data value passed to the view.
+CSS hiding, output tabs and hidden host regions preserve mounted views; setting
+`output.display: false` removes the component and disposes it. Update errors
+retire the view and show an error in its card; a subsequent value can mount again.
+
+Registrations are copied at construction and scoped to the instance. Two apps
+may use the same name for different renderers. Unknown names and invalid
+controllers show explicit errors. The registry applies to leaf outputs; group
+containers retain their existing layout. Existing function outputs that return
+a cleanup function remain supported. Registered code is trusted host code;
+security options gate JSEE-managed operations, not arbitrary renderer code.
+Save/Copy still use the output's declared data type.
+
+Schema export retains renderer names. Standalone `exportHTML()` and `download()`
+reject outputs with host renderer registrations: they cannot serialize host
+closures and dependencies. Bundle the host application with its renderer imports,
+or remove `output.renderer` to use built-in presentation. The `minimal`/`bulma`
+theme selection is independent; the registry does not replace Vue themes.
+
+See [the persistent views example](examples/persistent-renderers/index.html): a
+selectable sensor table and a chart keep selection and scale across worker runs.
+TypeScript helpers `OutputRenderer<T>`, `RendererView<T>` and `RendererRegistry`
+are exported from `@jseeio/jsee/schema`.
+
 ### Named stages in the existing pipeline
 
 Composers flatten tool schemas into ordinary `model` entries, input groups and

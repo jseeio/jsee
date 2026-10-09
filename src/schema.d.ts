@@ -69,7 +69,18 @@ export type Input = InputProperties & (
   | { name: string; type?: Exclude<InputType, 'group' | 'button' | 'action'> }
 )
 
+/** Browser-only view hooks; lifecycle methods run synchronously on the UI thread. */
+export interface RendererView<T = unknown> {
+  update(data: T): void
+  dispose?(): void
+}
+export type OutputRenderer<T = any> = (container: HTMLElement, data: T) => RendererView<T>
+/** Pass as new JSEE({ renderers, schema, ... }). Registrations are instance-scoped. */
+export type RendererRegistry = Record<string, OutputRenderer>
+
 export interface OutputProperties {
+  /** Name in the host application's renderer registry; leaves the data type unchanged. */
+  renderer?: string
   required?: boolean
   valueSchema?: ValueSchema
   name?: string

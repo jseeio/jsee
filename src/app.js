@@ -368,6 +368,7 @@ function createVueApp (env, mountedCallback, logMain) {
         jsee: {
           state: this,
           regions: env.regions,
+          renderers: env.renderers,
           controls: env.controls,
           namedPipeline: env._namedPipeline,
           createImageInput: (input, options) => env._createImageInput(input, options),

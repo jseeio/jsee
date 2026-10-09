@@ -57,6 +57,10 @@ function makeInstanceUid (value) {
 
 const getName = utils.getName
 
+function hasOutputRenderer (outputs) {
+  return Array.isArray(outputs) && outputs.some(output => output && (output.renderer !== undefined || hasOutputRenderer(output.elements)))
+}
+
 function hasOwn (obj, key) {
   return Object.prototype.hasOwnProperty.call(obj, key)
 }
@@ -161,6 +165,14 @@ export default class JSEE {
     this.progressId = `${this.uid}-progress`
     this.overlayId = `${this.uid}-overlay`
     this._listeners = new Map()
+    // Snapshot per-instance registrations: other apps cannot replace a live view.
+    if (params.renderers !== undefined && (!params.renderers || typeof params.renderers !== 'object' || Array.isArray(params.renderers))) throw new TypeError('renderers must be a map of named functions')
+    this.renderers = Object.create(null)
+    for (const [name, render] of Object.entries(params.renderers || {})) {
+      if (!name || typeof render !== 'function') throw new TypeError('renderers.' + name + ' must be a function')
+      this.renderers[name] = render
+    }
+    Object.freeze(this.renderers)
     this.regions = {}
     for (const name of ['inputs', 'outputs', 'inputGroups']) {
       const target = params.regions && params.regions[name]
@@ -958,7 +970,8 @@ export default class JSEE {
     return new Promise((resolve, reject) => {
       try {
         this.log('Initializing VUE')
-        this.app = createVueApp(this, (container) => {
+        const app = createVueApp(this, (container) => {
+          if (this._destroyed) { resolve(); return }
           // Called when the app is mounted
           // FYI "this" here refers to port object
           this.outputsContainer = (this.regions.outputs || container).querySelector('#outputs')
@@ -968,7 +981,10 @@ export default class JSEE {
           this.overlay = new Overlay(this.inputsContainer ? this.inputsContainer : this.outputsContainer, this.overlayId)
           resolve()
         }, this.log)
-        this.data = this.app.$data
+        // A custom view can destroy the host during Vue's initial mount.
+        if (this._destroyed) { app.__vueApp.unmount(); resolve(); return }
+        this.app = app
+        this.data = app.$data
       } catch (err) {
         reject(err)
       }
@@ -1996,6 +2012,7 @@ export default class JSEE {
   async exportHTML ({ runtime, title='JSEE application' }={}) {
     if (!runtime) throw new Error('Provide the pinned JSEE runtime URL for export')
     const schema = await this.exportSchema()
+    if (hasOutputRenderer(schema.outputs)) throw new Error('HTML export cannot bundle host renderer registrations; bundle the host application or remove output.renderer')
     const assets = new Map()
     const store = (code, css=false) => {
       const sha256 = fingerprint(code), url = 'jsee-asset-' + sha256 + (css ? '.css' : '.js')
@@ -2035,6 +2052,8 @@ export default class JSEE {
   }
 
   async download (title='output') {
+    await this.ready
+    if (hasOutputRenderer(this.schema.outputs)) throw new Error('HTML download cannot bundle host renderer registrations; bundle the host application or remove output.renderer')
     if (this._namedPipeline) {
       const blob = await this.exportHTML({ runtime: this.runtimeURL, title })
       const url = URL.createObjectURL(blob), link = document.createElement('a')

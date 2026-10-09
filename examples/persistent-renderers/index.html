@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Persistent output views — JSEE</title>
+  <style>
+    body { max-width: 1000px; margin: 32px auto; padding: 0 16px; font: 16px system-ui; }
+    .reading-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    .reading-table td, .reading-table th { padding: 6px; text-align: left; border-bottom: 1px solid var(--jsee-border, #ddd); }
+    .reading-table tr[aria-selected=true] { background: var(--jsee-bg-secondary, #eaf4ff); }
+    svg { width: 100%; display: block; }
+    .view-controls { display: flex; align-items: center; gap: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Persistent output views</h1>
+  <p>Select a sensor and adjust the chart scale, then change Phase and run again.
+    Both views keep their controls while new measurements arrive from a worker.</p>
+  <div id="app"></div>
+  <script src="../../dist/jsee.core.js"></script>
+  <script>
+    function readingTable(container, initial) {
+      const label = document.createElement('label'), select = document.createElement('select')
+      label.textContent = 'Selected sensor '; label.append(select)
+      const table = document.createElement('table'), body = document.createElement('tbody')
+      table.className = 'reading-table'
+      table.innerHTML = '<thead><tr><th>Sensor</th><th>Measurement</th></tr></thead>'
+      table.append(body); container.append(label, table)
+      const update = data => {
+        const selected = select.value
+        select.replaceChildren(...data.rows.map(([name]) => new Option(name, name)))
+        if (data.rows.some(([name]) => name === selected)) select.value = selected
+        body.replaceChildren(...data.rows.map(([name, value]) => {
+          const row = document.createElement('tr')
+          for (const text of [name, value.toFixed(2)]) { const cell = document.createElement('td'); cell.textContent = text; row.append(cell) }
+          row.setAttribute('aria-selected', String(name === select.value))
+          return row
+        }))
+      }
+      const selectRow = () => {
+        for (const row of body.rows) row.setAttribute('aria-selected', String(row.cells[0].textContent === select.value))
+      }
+      select.addEventListener('change', selectRow)
+      update(initial)
+      return { update, dispose() { select.removeEventListener('change', selectRow) } }
+    }
+    function trend(container, initial) {
+      const label = document.createElement('label'), scale = document.createElement('input')
+      label.className = 'view-controls'; label.textContent = 'Vertical scale '
+      scale.type = 'range'; scale.min = '1'; scale.max = '4'; scale.step = '.1'; scale.value = '1'; label.append(scale)
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+      svg.setAttribute('viewBox', '0 0 500 180'); svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', 'Sensor measurement trend')
+      const line = document.createElementNS(svg.namespaceURI, 'polyline')
+      line.setAttribute('fill', 'none'); line.setAttribute('stroke', 'currentColor'); line.setAttribute('stroke-width', '2'); svg.append(line)
+      container.append(label, svg)
+      let data = initial
+      const draw = () => line.setAttribute('points', data.rows.map((row, i) => `${20 + i * 460 / Math.max(1, data.rows.length - 1)},${90 - row[1] * 18 * scale.value}`).join(' '))
+      scale.addEventListener('input', draw); draw()
+      return { update(next) { data = next; draw() }, dispose() { scale.removeEventListener('input', draw) } }
+    }
+    window.demo = new JSEE({
+      container: '#app', renderers: { readingTable, trend }, toasts: false,
+      schema: {
+        schemaVersion: 1, persist: false, autorun: false,
+        inputs: [{ name: 'phase', type: 'float', default: 0, step: .25 }],
+        model: { worker: true, code: ({ phase }) => {
+          const data = { columns: ['sensor', 'measurement'], rows: Array.from({ length: 8 }, (_, i) => ['Sensor ' + (i + 1), Math.sin(i + phase)]) }
+          return { measurements: data, trend: data }
+        } },
+        outputs: [
+          { name: 'measurements', type: 'table', renderer: 'readingTable' },
+          { name: 'trend', type: 'table', renderer: 'trend' }
+        ]
+      }
+    })
+    demo.ready.then(() => demo.invoke())
+  </script>
+</body>
+</html>
