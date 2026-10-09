@@ -335,7 +335,7 @@
       v-bind:placeholder="input.placeholder ? input.placeholder : input.name"
       v-bind:min="input.min"
       v-bind:max="input.max"
-      v-bind:disabled="input.disabled"
+      v-bind:disabled="controlDisabled" :readonly="input.readonly"
       v-on:change="changeHandler"
       class="jsee-input"
       v-bind:class="{ 'jsee-input-invalid': input._error }"
@@ -351,7 +351,7 @@
       v-bind:id="input._id || input.name"
       v-bind:type="input.type == 'color' ? 'color' : 'text'"
       v-bind:placeholder="input.placeholder ? input.placeholder : input.name"
-      v-bind:disabled="input.disabled"
+      v-bind:disabled="controlDisabled" :readonly="input.readonly"
       v-on:change="changeHandler"
       v-on:keydown.enter="input.enter ? $emit('inchange') : null"
       class="jsee-input"
@@ -367,7 +367,7 @@
       v-model="input.value"
       v-bind:id="input._id || input.name"
       v-bind:placeholder="input.placeholder ? input.placeholder : input.name"
-      v-bind:disabled="input.disabled"
+      v-bind:disabled="controlDisabled" :readonly="input.readonly"
       v-on:change="changeHandler"
       v-on:input="autosize"
       class="jsee-textarea"
@@ -387,7 +387,7 @@
         v-bind:min="input.min || 0"
         v-bind:max="input.max || 100"
         v-bind:step="input.step || 1"
-        v-bind:disabled="input.disabled"
+        v-bind:disabled="controlDisabled" :readonly="input.readonly"
         v-on:input="changeHandler"
         type="range"
       >
@@ -411,7 +411,7 @@
           v-bind:min="input.min || 0"
           v-bind:max="input.max || 100"
           v-bind:step="input.step || 1"
-          v-bind:disabled="input.disabled"
+          v-bind:disabled="controlDisabled" :readonly="input.readonly"
           type="range"
           style="z-index: 2"
         >
@@ -421,7 +421,7 @@
           v-bind:min="input.min || 0"
           v-bind:max="input.max || 100"
           v-bind:step="input.step || 1"
-          v-bind:disabled="input.disabled"
+          v-bind:disabled="controlDisabled" :readonly="input.readonly"
           type="range"
         >
       </div>
@@ -434,7 +434,7 @@
     <input
       v-model="input.value"
       v-bind:id="input._id || input.name"
-      v-bind:disabled="input.disabled"
+      v-bind:disabled="controlDisabled" :readonly="input.readonly"
       v-on:change="changeHandler"
       class="jsee-input"
       v-bind:class="{ 'jsee-input-invalid': input._error }"
@@ -448,7 +448,7 @@
       <input
         v-model="input.value"
         v-bind:id="input._id || input.name"
-        v-bind:disabled="input.disabled"
+        v-bind:disabled="controlDisabled" :readonly="input.readonly"
         v-on:change="changeHandler"
         type="checkbox"
       >
@@ -459,7 +459,7 @@
   <div class="jsee-field" v-if="input.type == 'toggle'">
     <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px;">
       <span class="jsee-toggle">
-        <input type="checkbox" v-model="input.value" v-bind:id="input._id || input.name" v-bind:disabled="input.disabled" v-on:change="changeHandler">
+        <input type="checkbox" v-model="input.value" v-bind:id="input._id || input.name" v-bind:disabled="controlDisabled" :readonly="input.readonly" v-on:change="changeHandler">
         <span class="jsee-toggle-track" v-bind:class="{ active: input.value }"></span>
         <span class="jsee-toggle-thumb" v-bind:class="{ active: input.value }"></span>
       </span>
@@ -472,12 +472,12 @@
     <select
       v-model="input.value"
       v-bind:id="input._id || input.name"
-      v-bind:disabled="input.disabled"
+      v-bind:disabled="controlDisabled" :readonly="input.readonly"
       v-on:change="changeHandler"
       class="jsee-select"
       v-bind:class="{ 'jsee-input-invalid': input._error }"
     >
-      <option v-for="(option, oi) in input.options">{{ option }}</option>
+      <option v-for="(option, oi) in input.options" :value="optionValue(option)">{{ optionLabel(option) }}</option>
     </select>
     <span class="jsee-input-error" v-if="input._error">{{ input._error }}</span>
   </div>
@@ -485,22 +485,22 @@
   <div class="jsee-field" v-if="input.type == 'radio'">
     <label class="jsee-label">{{ input.label || input.name }}</label>
     <label v-for="option in input.options" :key="option" class="jsee-radio-label">
-      <input type="radio" v-model="input.value" :value="option" :name="input.name" v-bind:disabled="input.disabled" v-on:change="changeHandler">
-      {{ option }}
+      <input type="radio" v-model="input.value" :value="optionValue(option)" :name="input.name" v-bind:disabled="controlDisabled" :readonly="input.readonly" v-on:change="changeHandler">
+      {{ optionLabel(option) }}
     </label>
   </div>
 
   <div class="jsee-field" v-if="input.type == 'multi-select'">
     <label class="jsee-label">{{ input.label || input.name }}</label>
     <label v-for="option in input.options" :key="option" class="jsee-checkbox-label">
-      <input type="checkbox" :value="option" v-model="input.value" v-bind:disabled="input.disabled" v-on:change="changeHandler">
-      {{ option }}
+      <input type="checkbox" :value="optionValue(option)" v-model="input.value" v-bind:disabled="controlDisabled" :readonly="input.readonly" v-on:change="changeHandler">
+      {{ optionLabel(option) }}
     </label>
   </div>
 
   <div class="jsee-field" v-if="input.type == 'file'">
     <label v-bind:for="input._id || input.name" class="jsee-label">{{ input.label || input.name }}</label>
-    <div v-if="!input.disabled">
+    <div v-if="!controlDisabled">
       <file-picker
         v-model="input.value"
         v-model:url="input.url"
@@ -524,7 +524,7 @@
 
   <div class="jsee-field" v-if="input.type == 'folder'">
     <label v-bind:for="input._id || input.name" class="jsee-label">{{ input.label || input.name }}</label>
-    <div v-if="!input.disabled && (!input.value || input.value.length === 0)">
+    <div v-if="!controlDisabled && (!input.value || input.value.length === 0)">
       <div class="vfp-bgArea" style="min-height: 80px; padding: 15px 10px;"
         @dragover.prevent @dragleave.prevent @drop.prevent="folderDropped">
         <input type="file" webkitdirectory style="display:none" ref="folderPicker"
@@ -545,12 +545,12 @@
           :style="{
             padding: '3px 8px', fontSize: '12px', borderBottom: '1px solid var(--jsee-border, #f0f0f0)',
             display: 'flex', alignItems: 'center', gap: '6px',
-            cursor: !input.disabled && input.select === 'one' ? 'pointer' : undefined,
+            cursor: !controlDisabled && input.select === 'one' ? 'pointer' : undefined,
             background: input.select === 'one' && file.selected ? 'var(--jsee-focus-ring, rgba(72,139,199,0.2))' : undefined
           }"
-          @click="!input.disabled && input.select === 'one' && folderSelectOne(file)">
+          @click="!controlDisabled && input.select === 'one' && folderSelectOne(file)">
           <input v-if="input.select === true || input.select === 'many'" type="checkbox"
-            v-model="file.selected" v-bind:disabled="input.disabled" @change="folderSelectionChanged">
+            v-model="file.selected" v-bind:disabled="controlDisabled" :readonly="input.readonly" @change="folderSelectionChanged">
           <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ file.name }}</span>
           <span style="color:var(--jsee-text-secondary, #aaa); font-size:10px">{{ formatSize(file.size) }}</span>
         </div>
@@ -561,7 +561,7 @@
   <div class="jsee-field" v-if="input.type == 'action' || input.type == 'button'">
     <button
       v-on:click="runAction"
-      v-bind:disabled="input.disabled"
+      v-bind:disabled="controlDisabled" :readonly="input.readonly"
       class="jsee-btn"
     >
       {{ input.title ? input.title : input.name }}

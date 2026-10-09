@@ -4,7 +4,7 @@ import classicWorkerSource from '../dist/jsee.worker.js?worker-source'
 
 const utils = require('./utils')
 const { outputLookupNames, collectOutputNames, cleanOutputMetadata } = utils
-const { assertShapedValue, cloneSchema, collectInputValues, prepareInputs } = require('./schema')
+const { findInput, assertShapedValue, cloneSchema, collectInputValues, prepareInputs } = require('./schema')
 const { Pipeline, validatePipeline, stageSchema, projectResults, identified } = require('./pipeline')
 const { fingerprint } = require('./fingerprint')
 const { prepareStageInputs, portableValue, decodeFileDefaults } = require('./pipeline-data')
@@ -184,6 +184,9 @@ export default class JSEE {
     this._apiRequests = new Set()
     this._pendingRun = null
     this._runToken = null
+    this._runSequence = 0
+    this._workerSequence = 0
+    this.showProgress = params.progress !== false
     this._intervalLoop = false
     this._intervalToken = null
     this._intervalPromise = null
@@ -235,7 +238,7 @@ export default class JSEE {
 
   on (event, listener) {
     if (this._destroyed) throw new Error('JSEE instance has been destroyed')
-    if (!['inputs', 'start', 'result', 'error', 'cancel', 'destroy', 'stage'].includes(event)) {
+    if (!['inputs', 'start', 'result', 'error', 'cancel', 'destroy', 'stage', 'progress'].includes(event)) {
       throw new Error(`Unknown JSEE event: ${event}`)
     }
     if (typeof listener !== 'function') throw new TypeError('Listener must be a function')
@@ -262,14 +265,8 @@ export default class JSEE {
     if (!values || typeof values !== 'object' || Array.isArray(values)) throw new TypeError('Inputs must be an object')
     const updates = []
     const visit = (inputs, supplied) => {
-      const fields = new Map()
-      const flatten = list => list.forEach(input => {
-        if (input.type === 'group' && !input.name) flatten(input.elements || [])
-        else if (input.name) fields.set(input.name, input)
-      })
-      flatten(inputs)
       for (const [name, value] of Object.entries(supplied)) {
-        const field = fields.get(name)
+        const field = findInput(inputs, name)
         if (!field || ['button', 'action'].includes(field.type)) throw new Error(`Unknown input: ${name}`)
         if (field.type === 'group') {
           if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`Input group ${name} must be an object`)
@@ -281,6 +278,35 @@ export default class JSEE {
     // Resolve all paths first so an invalid patch cannot partially update state.
     for (const [field, value] of updates) field.value = value
     await this.app.$nextTick()
+  }
+
+  async setInputState (path, patch) {
+    await this.ready
+    const names = typeof path === 'string' ? [path] : path
+    if (!Array.isArray(names) || !names.length || names.some(name => typeof name !== 'string' || !name.length)) {
+      throw new TypeError('Input path must be a name or a nonempty array of names')
+    }
+    let fields = this.data.inputs, field
+    for (const name of names) {
+      field = findInput(fields, name)
+      if (!field) throw new Error('Unknown input: ' + names.join(' / '))
+      fields = field.type === 'group' ? field.elements : []
+    }
+    if (!utils.isRecordObject(patch)) throw new TypeError('Input state must be an object')
+    for (const [key, value] of Object.entries(patch)) {
+      if (field.type === 'group' && key !== 'display') throw new TypeError('Groups support display state only')
+      if (key === 'options') {
+        if (!['select', 'categorical', 'radio', 'multi-select'].includes(field.type)) throw new TypeError('options requires a choice input')
+        assertShapedValue({ name: 'options', type: 'object', valueSchema: { type: 'array' } }, value)
+      } else if (!['disabled', 'readonly', 'display'].includes(key)) {
+        throw new TypeError('Unsupported input state property: ' + key)
+      } else if (typeof value !== 'boolean') throw new TypeError(key + ' must be a boolean')
+    }
+    // Validate and copy before applying anything; never silently replace the selected value.
+    const update = cloneSchema(patch)
+    Object.assign(field, update)
+    await this.app.$nextTick()
+    this.app.validateInputs()
   }
 
   async invoke (values, options) {
@@ -386,7 +412,8 @@ export default class JSEE {
     const token = this._runToken
     const active = () => !this._destroyed && token && token.active && this._runToken === token
     const callbacks = { isCancelled: () => !active() }
-    for (const name of ['log', 'progress', 'output', 'outputAsync']) {
+    callbacks.progress = (value, details) => active() ? this.progress(value, details, { runId: token.id, stageId: scope || null }) : undefined
+    for (const name of ['log', 'output', 'outputAsync']) {
       callbacks[name] = (...args) => active() ? scope && ['output', 'outputAsync'].includes(name) ? this._scopeOutput(scope, ...args) : this[name](...args) : undefined
     }
     // Retain browser context fields/methods while binding callbacks to this invocation.
@@ -442,12 +469,23 @@ export default class JSEE {
     this._intervalPromise = null
   }
 
-  progress (i) {
+  progress (i, details, identity) {
     if (this._destroyed) return
     const progressState = utils.getProgressState(i)
     if (!progressState) {
       return
     }
+
+    const event = { ...progressState, runId: this._runToken?.active ? this._runToken.id : null, stageId: null, ...identity }
+    if (details && typeof details === 'object') {
+      for (const key of ['loaded', 'total']) {
+        if (typeof details[key] === 'number' && Number.isFinite(details[key]) && details[key] >= 0) event[key] = details[key]
+      }
+      if (typeof details.phase === 'string') event.phase = details.phase
+    }
+    this._emit('progress', event)
+    // A host listener may synchronously stop or destroy this instance.
+    if (this._destroyed || !this.showProgress || event.runId !== null && event.runId !== this._runToken?.id) return
 
     // Check if progress div is defined
     let progress = document.getElementById(this.progressId)
@@ -963,9 +1001,12 @@ export default class JSEE {
 
     const modelFunc = (inputs) => {
       const isInitCall = utils.isWorkerInitMessage(inputs, workerInitialized)
+      const requestId = `${this.uid}:worker:${++this._workerSequence}`
+      const token = this._runToken
+      const identity = { runId: token?.active ? token.id : null, stageId: model.id || null }
       const payload = isInitCall
-        ? inputs
-        : { _jsee: 'run', value: utils.toWorkerSerializable(inputs) }
+        ? { ...inputs, _requestId: requestId }
+        : { _jsee: 'run', requestId, value: utils.toWorkerSerializable(inputs) }
 
       let rejectWorkerRun = null
       let acceptingMessages = true
@@ -975,11 +1016,12 @@ export default class JSEE {
         worker.onmessage = (e) => {
           if (!acceptingMessages) return
           const res = e.data
+          if (res && (res._jsee || ['progress', 'log'].includes(res._status)) && res.requestId !== undefined && res.requestId !== requestId) return
           if (res && (res._jsee || res._status)) {
             // Raw _status/_partial messages remain the legacy model-posted callback API.
             switch (res._jsee || res._status) {
               case 'result':
-                this.progress(0)
+                this.progress(0, undefined, identity)
                 resolve(res.value)
                 break
               case 'partial':
@@ -988,7 +1030,7 @@ export default class JSEE {
               case 'loaded':
                 this.toast('success', 'Loaded model (in worker)')
                 this.log('Loaded model (in worker):', res)
-                this.progress(0)
+                this.progress(0, undefined, identity)
                 workerInitialized = true
                 resolve(res)
                 break
@@ -996,12 +1038,12 @@ export default class JSEE {
                 this.log(...res._log)
                 break
               case 'progress':
-                this.progress(res._progress)
+                this.progress(res._progress, res._progressDetails, identity)
                 break
               case 'error':
                 this.toast('error', res._error)
                 this.log('Error from worker:', res._error)
-                this.progress(0)
+                this.progress(0, undefined, identity)
                 reject(res._error)
                 break
               default:
@@ -1016,7 +1058,7 @@ export default class JSEE {
             this._modelOutput(model, partial, true)
           } else {
             this.log('Response from worker:', res)
-            this.progress(0)
+            this.progress(0, undefined, identity)
             resolve(res)
           }
         }
@@ -1024,7 +1066,7 @@ export default class JSEE {
           if (!acceptingMessages) return
           this.toast('error', e.message)
           this.log('Error from worker:', e)
-          this.progress(0)
+          this.progress(0, undefined, identity)
           reject(e)
         }
         try {
@@ -1338,7 +1380,7 @@ export default class JSEE {
     let runError
     let rejectCurrentRun = null
     // Run token to detect stale results when worker.onmessage gets rebound
-    const runToken = this._runToken = { active: true }
+    const runToken = this._runToken = { active: true, id: `${this.uid}:${++this._runSequence}` }
     this._emit('start', this.getInputs())
     const checkCancelled = () => {
       if (this._destroyed || this._runToken !== runToken) throw new Error('Cancelled')

@@ -1,4 +1,4 @@
-const { getValueSchema, matchesFileAccept, tableOutputJsonSchema, assertSchemaVersion, jseeInputsToJsonSchema, collectInputValues } = require('./schema')
+const { getValueSchema, matchesFileAccept, tableOutputJsonSchema, assertSchemaVersion, jseeInputsToJsonSchema, collectInputValues, prepareInputs } = require('./schema')
 const { DEFAULT_CHUNK_SIZE, STREAM_HIGH_WATER } = require('./constants')
 
 // https://stackoverflow.com/questions/8511281/check-if-a-value-is-an-object-in-javascript
@@ -2993,14 +2993,23 @@ function createValidateFn (input, filtrexCompile, filtrexOptions) {
   }
   if (input.required) {
     const msg = input.error || 'Required'
-    return function (value) {
+    const custom = validate
+    validate = function (value) {
       // Structured inputs use JSON Schema presence semantics; empty collections are values.
       if (value === undefined) return msg
       if (!['object', 'table'].includes(input.type)) {
         if (value === null || value === '') return msg
         if (Array.isArray(value) && value.length === 0) return msg
       }
-      return validate ? validate(value) : null
+      return custom ? custom(value) : null
+    }
+  }
+  if (['select', 'categorical', 'radio', 'multi-select'].includes(input.type)) {
+    const custom = validate
+    return value => {
+      const error = custom && custom(value)
+      if (error) return error
+      try { prepareInputs([input], { [input.name]: value }); return null } catch (error) { return error.message }
     }
   }
   return validate

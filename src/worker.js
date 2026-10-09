@@ -6,8 +6,8 @@ function log () {
   postMessage({ _status: 'log', _log: args })
 }
 
-function progress (value) {
-  postMessage({ _status: 'progress', _progress: value })
+function progress (value, details, requestId) {
+  postMessage({ _status: 'progress', _progress: value, _progressDetails: details, requestId })
 }
 
 let initialized = false
@@ -32,7 +32,7 @@ function createRunContext () {
   const active = () => token && token.active && runToken === token && !isCancelled()
   return {
     log: (...args) => { if (active()) log(...args) },
-    progress: value => { if (active()) progress(value) },
+    progress: (value, details) => { if (active()) progress(value, details, token.requestId) },
     isCancelled: () => !active()
   }
 }
@@ -194,15 +194,16 @@ self.onmessage = async function (e) {
           throw new Error(`No type information: ${m.type}`)
       }
       initialized = true
-      postMessage({ _jsee: 'loaded' })
+      postMessage({ _jsee: 'loaded', requestId: data._requestId })
     } catch (error) {
       postMessage({
         _jsee: 'error',
+        requestId: data._requestId,
         _error: error && error.message ? error.message : String(error)
       })
     }
   } else {
-    const token = runToken = { active: true }
+    const token = runToken = { active: true, requestId: message.requestId }
     try {
       cancelled = false
       const runData = utils.wrapStreamInputs(data, streamInputConfig, getStreamOptions())
@@ -210,9 +211,9 @@ self.onmessage = async function (e) {
       const results = await self.modelFunc(runData)
       log('Results:', results)
       // Returned values never share the control namespace used by model-posted messages.
-      postMessage({ _jsee: 'result', value: results })
+      postMessage({ _jsee: 'result', requestId: token.requestId, value: results })
     } catch (error) {
-      postMessage({ _jsee: 'error', _error: error })
+      postMessage({ _jsee: 'error', requestId: token.requestId, _error: error })
     } finally {
       token.active = false
     }

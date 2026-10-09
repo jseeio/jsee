@@ -96,7 +96,7 @@ export type Output = OutputProperties & (
 
 export interface ModelContext {
   log(...values: unknown[]): void
-  progress(value: number | null): void
+  progress(value: number | null, details?: { loaded?: number; total?: number; phase?: string }): void
   isCancelled(): boolean
 }
 
@@ -229,3 +229,6 @@ export function prepareInputs(inputs: Input[] | undefined, data: unknown): Recor
 
 export function matchesFileAccept(accept?: string, name?: string, mime?: string): boolean
 export function tableOutputJsonSchema(allowMatrix?: boolean): Record<string, unknown>
+
+/** Resolve one field name through unnamed groups. */
+export function findInput(inputs: Input[] | undefined, name: string): Input | undefined

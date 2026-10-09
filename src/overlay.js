@@ -2,7 +2,13 @@ class Overlay {
   constructor (parent, id='overlay') {
     this.element = document.createElement('div')
     this.element.id = id
-    this.element.innerHTML = ''
+    this.element.className = 'jsee-overlay'
+    // This DOM is created outside Vue, so scoped component selectors cannot own its geometry.
+    this.element.style.cssText = 'display:none; position:absolute; inset:0; pointer-events:none; background:var(--jsee-bg-secondary, #f5f5f5); opacity:.6; z-index:1; align-items:center; justify-content:center;'
+    this.parent = parent
+    this.previousPosition = parent.style.position
+    this.ownsPosition = getComputedStyle(parent).position === 'static'
+    if (this.ownsPosition) parent.style.position = 'relative'
     parent.appendChild(this.element)
 
     this.progressBar = document.createElement('div')
@@ -24,6 +30,7 @@ class Overlay {
 
   destroy () {
     this.hide()
+    if (this.ownsPosition && this.parent.style.position === 'relative') this.parent.style.position = this.previousPosition
     if (this.element.parentNode) {
       this.element.parentNode.removeChild(this.element)
     }

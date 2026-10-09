@@ -379,14 +379,17 @@ function createVueApp (env, mountedCallback, logMain) {
         }
       }
     },
+    computed: {
+      inputValues () { return collectValues(this.inputs) }
+    },
     watch: {
-      inputs: {
+      inputValues: {
         deep: true,
         immediate: false,
         // schema.reactive enables global re-run on any input change (debounced).
         // Per-input reactivity uses the 'inchange' event from inputs with reactive: true.
         handler (v) {
-          env._emit('inputs', collectValues(v))
+          env._emit('inputs', v)
           this.inputsChanged()
         }
       }
@@ -410,6 +413,7 @@ function createVueApp (env, mountedCallback, logMain) {
         return runValidation(getValidationInputs(this.inputs), validateFunctions)
       },
       display (index) {
+        if (typeof this.inputs[index]?.display === 'boolean') return this.inputs[index].display
         const res = index < displayFunctions.length
           ? displayFunctions[index](this.$data)
           : true

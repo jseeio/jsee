@@ -1530,3 +1530,164 @@ test('nested parameter groups receive scoped inspection updates and selection ch
   await expect(page.locator('[data-jsee-input-group="rename"] select')).not.toBeVisible()
   expect(await page.evaluate(() => window.nestedApp.getStages().transform.revision)).toBe(0)
 })
+
+test('host control state is atomic, scoped and does not execute or change values', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    document.body.innerHTML = '<div id="host-state"></div>'
+    const app = new JSEE({ container: '#host-state', verbose: false, toasts: false, schema: {
+      persist: false, autorun: false, reactive: true,
+      model: { worker: false, code: data => data },
+      inputs: [{ name: 'settings', type: 'group', elements: [
+        { name: 'choice.with.dot', type: 'select', options: ['a', 'b'], default: 'a' },
+        { name: 'text', type: 'string', default: 'kept' }
+      ] }], outputs: []
+    } })
+    await app.ready
+    let runs = 0, changes = 0
+    app.on('start', () => runs++)
+    app.on('inputs', () => changes++)
+    const path = ['settings', 'choice.with.dot']
+    await app.setInputState(path, { disabled: true, options: ['b'] })
+    let invalid, unknown
+    try { await app.setInputState(path, { disabled: false, value: 'b' }) } catch (error) { invalid = error.message }
+    try { await app.setInputState(['missing'], { disabled: true }) } catch (error) { unknown = error.message }
+    await app.setInputState(['settings', 'text'], { readonly: true })
+    await new Promise(resolve => setTimeout(resolve, 400))
+    const root = document.querySelector('#host-state')
+    const snapshot = { runs, changes, values: app.getInputs(), disabled: root.querySelector('select').disabled,
+      readonly: root.querySelector('input').readOnly, hasErrors: app.app.validateInputs(), invalid, unknown }
+    await app.setInputState(path, { options: ['a', 'b'], disabled: false, display: false })
+    snapshot.hidden = root.querySelector('select') === null
+    await app.setInputState(path, { display: true })
+    snapshot.visible = !!root.querySelector('select')
+    await app.setInputs({ settings: { text: 'changed' } })
+    await new Promise(resolve => setTimeout(resolve, 400))
+    snapshot.valueRuns = runs
+    app.destroy()
+    return snapshot
+  })
+  expect(result).toMatchObject({ runs: 0, changes: 0, disabled: true, readonly: true, hasErrors: true,
+    values: { settings: { 'choice.with.dot': 'a', text: 'kept' } }, hidden: true, visible: true, valueRuns: 1 })
+  expect(result.invalid).toContain('value')
+  expect(result.unknown).toContain('missing')
+})
+
+for (const worker of [false, true]) {
+  test(`host progress identifies runs and ignores retired contexts (worker=${worker})`, async ({ page }) => {
+    await page.goto('/load/')
+    const result = await page.evaluate(async worker => {
+      document.body.innerHTML = '<div id="host-progress"></div>'
+      const app = new JSEE({ container: '#host-progress', verbose: false, toasts: false, progress: false, schema: {
+        persist: false, model: { worker, code: `async function model (data, ctx) {
+          if (self.oldProgressContext) self.oldProgressContext.progress(99)
+          self.oldProgressContext = ctx
+          if (typeof document === 'undefined') postMessage({ _status: 'progress', requestId: 'retired', _progress: 91 })
+          ctx.progress(null)
+          ctx.progress(25, { loaded: 1, total: 4, phase: 'load' })
+          setTimeout(() => ctx.progress(88), 25)
+          return { n: data.n }
+        }` }, inputs: [{ name: 'n', type: 'int', default: 1 }], outputs: [{ name: 'n', type: 'number' }]
+      } })
+      await app.ready
+      const events = [], off = app.on('progress', event => events.push(event))
+      await app.invoke()
+      await app.invoke({ n: 2 })
+      await new Promise(resolve => setTimeout(resolve, 60))
+      off()
+      const count = events.length
+      await app.invoke({ n: 3 })
+      const result = { events, unsubscribed: count === events.length, bar: !!document.getElementById(app.progressId) }
+      app.destroy()
+      return result
+    }, worker)
+    expect(result.bar).toBe(false)
+    expect(result.unsubscribed).toBe(true)
+    expect(result.events.map(event => event.value)).not.toContain(99)
+    expect(result.events.map(event => event.value)).not.toContain(88)
+    expect(result.events.map(event => event.value)).not.toContain(91)
+    const reported = result.events.filter(event => event.value === 25)
+    expect(reported).toHaveLength(2)
+    expect(reported[0]).toMatchObject({ mode: 'determinate', value: 25, loaded: 1, total: 4, phase: 'load', stageId: null })
+    expect(typeof reported[0].runId).toBe('string')
+    expect(reported[1].runId).not.toBe(reported[0].runId)
+  })
+}
+
+test('host overlay is positioned without moving controls or blocking Stop', async ({ page }) => {
+  await page.goto('/load/')
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 })
+    const result = await page.evaluate(async () => {
+      document.body.innerHTML = '<div id="a"></div><div id="b"></div><div id="region-a"></div><div id="region-b"></div>'
+      const apps = []
+      for (const id of ['a', 'b']) {
+        const app = new JSEE({ container: '#' + id, regions: { inputs: '#region-' + id }, verbose: false, schema: {
+          persist: false, model: { worker: false, code: data => data }, inputs: [{ name: 'x', type: 'int', default: 1 }], outputs: []
+        } })
+        await app.ready
+        apps.push(app)
+      }
+      const values = apps.map(app => {
+        const overlay = app.overlay.element, parent = overlay.parentNode
+        parent.style.display = 'grid'; parent.style.gap = '18px'
+        const button = document.createElement('button');button.textContent = 'Host stop'; parent.appendChild(button)
+        app.overlay.hide(); const before = button.getBoundingClientRect().top
+        app.overlay.show()
+        const style = getComputedStyle(overlay)
+        return { id: overlay.id, movement: button.getBoundingClientRect().top - before, position: style.position, pointerEvents: style.pointerEvents }
+      })
+      apps.forEach(app => app.destroy())
+      return values
+    })
+    expect(result[0].id).not.toBe(result[1].id)
+    for (const value of result) {
+      expect(Math.abs(value.movement)).toBeLessThanOrEqual(0.5)
+      expect(value.position).toBe('absolute')
+      expect(value.pointerEvents).toBe('none')
+    }
+  }
+})
+
+test('host control updates preserve named-stage caches and progress scope', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const root = document.createElement('div');document.body.append(root)
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, inputs: [{ name: 'one', type: 'group', elements: [{ name: 'choice', type: 'select', options: ['a'], default: 'a' }] }],
+      model: [{ id: 'one', scope: 'one', worker: true, code: 'function model (data, ctx) { ctx.progress(50); return { answer: data.choice } }' }],
+      outputs: [{ name: 'one.answer', type: 'string' }]
+    } })
+    await app.ready
+    const events = [];app.on('progress', event => events.push(event))
+    await app.invoke()
+    const before = app.getPipelineState().stages.one
+    await app.setInputState(['one', 'choice'], { readonly: true, options: [{ value: 'a', label: 'Alpha' }, { value: 'b', label: 'Beta' }] })
+    const after = app.getPipelineState().stages.one
+    const values = { before: { status: before.status, revision: before.revision }, after: { status: after.status, revision: after.revision },
+      selected: app.getInputs(), labels: [...root.querySelectorAll('option')].map(el => el.textContent), disabled: root.querySelector('select').disabled,
+      stage: events.find(event => event.value === 50).stageId }
+    let invalid
+    try { await app.setInputState(['one', 'choice'], { readonly: false, options: [undefined] }) } catch (error) { invalid = error.message }
+    values.atomic = root.querySelector('select').disabled
+    values.invalid = !!invalid
+    app.destroy()
+    return values
+  })
+  expect(result.after).toEqual(result.before)
+  expect(result).toMatchObject({ selected: { one: { choice: 'a' } }, labels: ['Alpha', 'Beta'], disabled: true, stage: 'one', atomic: true, invalid: true })
+})
+
+test('host progress listener can destroy the instance without recreating presentation', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const root = document.createElement('div');document.body.append(root)
+    const app = new JSEE({ container: root, verbose: false, toasts: false,
+      schema: { inputs: [{ name: 'x', type: 'int', default: 1 }], outputs: [] } })
+    await app.ready
+    app.on('progress', () => app.destroy())
+    app.progress(50)
+    return { bar: !!document.getElementById(app.progressId), overlay: !!document.getElementById(app.overlayId) }
+  })
+  expect(result).toEqual({ bar: false, overlay: false })
+})

@@ -30,6 +30,17 @@ function cloneSchema (value, seen=new WeakMap()) {
   return copy
 }
 
+// Unnamed groups share their parent's namespace; named groups form a path segment.
+function findInput (inputs, name) {
+  for (const input of inputs || []) {
+    if (input.name === name) return input
+    if (input.type === 'group' && !input.name) {
+      const found = findInput(input.elements, name)
+      if (found) return found
+    }
+  }
+}
+
 function collectInputValues (inputs, read=input => input.value) {
   const values = {}
   for (const input of inputs || []) {
@@ -409,4 +420,4 @@ function prepareInputs (inputs, data) {
   return result
 }
 
-module.exports = { getValueSchema, assertValueSchema, assertShapedValue, jsonShapeErrors, tableOutputJsonSchema, matchesFileAccept, assertSchemaVersion, cloneSchema, getOptionValue, collectInputValues, getInputDefaultValue, jseeInputsToJsonSchema, prepareInputs }
+module.exports = { findInput, getValueSchema, assertValueSchema, assertShapedValue, jsonShapeErrors, tableOutputJsonSchema, matchesFileAccept, assertSchemaVersion, cloneSchema, getOptionValue, collectInputValues, getInputDefaultValue, jseeInputsToJsonSchema, prepareInputs }

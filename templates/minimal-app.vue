@@ -108,17 +108,6 @@
     margin-bottom: 2px;
   }
 
-  #overlay {
-    display: none;
-    position: absolute;
-    inset: -1px;
-    background: var(--jsee-bg-secondary);
-    opacity: .6;
-    z-index: 1000;
-    align-items: center;
-    justify-content: center;
-  }
-
   /* Long forms keep Run/Stop reachable: the footer sticks to the bottom of the
      nearest scroll container (page or sidebar panel) while the card is in view. */
   .jsee-card-footer {

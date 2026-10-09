@@ -1,3 +1,4 @@
+const { getOptionValue } = require('../src/schema')
 const FileReader = window['FileReader']
 import FilePicker from './file-picker.vue'
 import StructuredInput from './structured-input.vue'
@@ -20,6 +21,9 @@ const component = {
     'input.collapsed' (value) { this.collapsed = value === true }
   },
   computed: {
+    controlDisabled () {
+      return this.input.disabled || this.input.readonly && !['int', 'float', 'number', 'string', 'text', 'date'].includes(this.input.type)
+    },
     effectiveStyle () {
       if (this.input.style) return this.input.style
       if (this.input.collapsed !== undefined || this.input.label) return 'accordion'
@@ -27,6 +31,10 @@ const component = {
     }
   },
   methods: {
+    optionValue: getOptionValue,
+    optionLabel (option) {
+      return option && typeof option === 'object' ? option.label ?? getOptionValue(option) : option
+    },
     changeHandler () {
       if (this.input.reactive) {
         this.$emit('inchange')

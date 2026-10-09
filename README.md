@@ -595,18 +595,62 @@ Multiple JSEE instances can run on the same page; progress and overlay DOM nodes
 | `await jsee.ready` | Wait for schema, model, UI and pipeline initialization; rejects on failure or destruction |
 | `jsee.getInputs()` | Read a snapshot of input values after readiness; named groups remain nested |
 | `await jsee.setInputs(values)` | Patch input values by schema name, including nested groups; unknown names reject atomically. Does not run unless schema reactivity is enabled |
+| `await jsee.setInputState(path, patch)` | Update `disabled`, `readonly`, boolean `display` or choice `options` without changing values or triggering a run |
 | `await jsee.invoke(values?)` | Run once and return declared output values (or the pipeline result when no outputs are declared). Rejects on validation, execution failure, overlap, or cancellation (`AbortError`) |
-| `jsee.on(event, listener)` | Subscribe to `inputs`, `start`, `result`, `error`, `cancel`, or `destroy`; returns an unsubscribe function. Listener exceptions do not affect execution |
+| `jsee.on(event, listener)` | Subscribe to `inputs`, `start`, `result`, `error`, `cancel`, `destroy`, `stage`, or `progress`; returns an unsubscribe function. Listener exceptions do not affect execution |
 | `jsee.stop()` | Cancel the active computation; same behavior as `cancelCurrentRun()` |
 | `jsee.run(caller)` | Execute the model pipeline. `caller` can be `'run'`, `'autorun'`, `'reactive'`, `'interval'`, or a custom button name |
 | `jsee.output(result)` | Process and render results to output cards |
 | `jsee.cancelCurrentRun()` | Stop the active run. Rejects the current run promise, sets cancellation state, and signals/terminates workers |
 | `jsee.isCancelled()` | Returns `true` if cancellation was requested |
-| `jsee.progress(value)` | Set this instance's progress bar: `0`-`100` for determinate, `null` for indeterminate |
+| `jsee.progress(value, details?)` | Report progress: `0`–`100` for determinate, `null` for indeterminate; optional `loaded`, `total` and `phase` metadata |
 | `jsee.download(title)` | Export current app as a self-contained offline HTML file |
 | `jsee.destroy()` | Cancel runs and initialization fetches, terminate workers, unmount Vue, and release UI resources. Repeated calls are safe; later runs return `false` and late progress/output calls are ignored |
 | `jsee.notify(text)` | Show a success toast notification |
 | `jsee.log(...args)` | Log to browser console and optional `#log` DOM element as plain text |
+
+### Host control state and progress
+
+```js
+const tool = new JSEE({ schema, container: '#app', progress: false })
+await tool.ready
+await tool.setInputState('model', { disabled: true })
+await tool.setInputState(['settings', 'target'], {
+  options: [{ value: 'price', label: 'Price' }]
+})
+const unsubscribe = tool.on('progress', event => {
+  // { runId, stageId, mode, value, loaded?, total?, phase? }
+  showProgress(event)
+})
+// In a model: ctx.progress(50, { loaded: 1024, total: 2048, phase: 'load' })
+```
+
+A string path is one literal field name, including any dots. An array traverses
+named groups; unnamed groups share their parent's namespace. Named pipeline
+scopes are ordinary input groups. Groups support `display` updates only; set
+`disabled`/`readonly` on their fields. Unknown paths, unsupported properties and
+invalid patches reject before changing anything. State patches preserve values,
+do not emit `inputs`, and do not run reactive models or invalidate stage caches.
+Changing options retains the current selection; an unavailable selection fails
+normal validation until the caller or user explicitly changes the value.
+`readonly` uses native readonly controls where possible and disables selectors,
+sliders and other controls without a native readonly mode. Presentation state
+does not bypass validation or authorize execution.
+
+`progress: false` hides JSEE's progress bars while keeping `progress` events.
+It is a constructor option, independent of `controls` and `toasts`. Each event
+has a per-instance invocation `runId` and a named `stageId` (or `null` for unnamed
+stages); progress outside an invocation has `runId: null`. `mode` is
+`determinate` or `indeterminate`, and `value` is a clamped percentage or `null`.
+Byte counts and phase are included only when supplied. Progress 100 does not mean
+the model is ready; use the invocation's terminal result/error/cancel instead.
+The runtime may emit zero when resetting progress after a worker call.
+
+Use `ctx.progress` inside models so reports are bound to that invocation. Tagged
+worker messages and retired contexts cannot update a newer call. Legacy manually
+posted messages without request identity remain supported, but late messages from
+that legacy path cannot be reliably attributed. Stop still terminates workers;
+cooperative model retention is a separate feature.
 
 ### Named stages in the existing pipeline
 
