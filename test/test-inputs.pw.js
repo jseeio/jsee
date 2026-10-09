@@ -1712,3 +1712,212 @@ test('table paste can explicitly preserve the first row as data', async ({ page 
   await paste(page, 'Paste rows into grid', 'Alice\t3\nBob\t4')
   expect(await page.evaluate(() => window.app.data.inputs[0].value)).toEqual([{ column_1: 'Alice', column_2: 3 }, { column_1: 'Bob', column_2: 4 }])
 })
+
+test('image acquisition scopes paste to its target and respects field state', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const root = document.createElement('div');document.body.append(root)
+    const target = document.createElement('div');target.tabIndex = 0;document.body.append(target)
+    const text = document.createElement('textarea');target.append(text)
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false, model: { worker: false, code: 'function model(d) { return d }' },
+      inputs: [{ name: 'photo', type: 'image', nullable: true, default: null, display: false }], outputs: []
+    } })
+    await app.ready
+    const received = []
+    const source = app.createImageInput('photo', { target, onImage: file => received.push(file.name) })
+    const paste = element => { const data = new DataTransfer(); data.items.add(new File(['png'], 'photo.png', { type: 'image/png' })); element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true })) }
+    paste(document.body);paste(text)
+    paste(target)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    await app.setInputState('photo', { readonly: true });paste(target)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    source.dispose();await app.setInputState('photo', { readonly: false });paste(target)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    app.destroy()
+    return received
+  })
+  expect(result).toEqual(['photo.png'])
+})
+
+test('image acquisition releases a late camera grant after disposal', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const root = document.createElement('div');document.body.append(root)
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false, inputs: [{ name: 'photo', type: 'image', nullable: true, default: null, capture: { camera: true } }], outputs: []
+    } })
+    await app.ready
+    let grant, stopped = 0
+    navigator.mediaDevices.getUserMedia = () => new Promise(resolve => { grant = resolve })
+    const source = app.createImageInput('photo', { target: root, video: document.createElement('video') })
+    const pending = source.start()
+    while (!grant) await new Promise(resolve => setTimeout(resolve, 0))
+    app.destroy()
+    grant({ getTracks: () => [{ stop: () => stopped++ }] })
+    await pending
+    return { stopped, active: source.active }
+  })
+  expect(result).toEqual({ stopped: 1, active: false })
+})
+
+test('image acquisition bounds live work and stops tracks before a slow consumer settles', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const root = document.createElement('div');document.body.append(root)
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false, inputs: [{ name: 'photo', type: 'image', nullable: true, default: null, capture: { camera: true, live: true, maxFps: 60 } }], outputs: []
+    } })
+    await app.ready
+    const canvas = document.createElement('canvas');canvas.width = canvas.height = 16
+    const streams = []
+    navigator.mediaDevices.getUserMedia = async () => { const stream = canvas.captureStream();streams.push(stream);return stream }
+    let finish, frames = 0, captures = 0
+    const source = app.createImageInput('photo', { target: root, video: { play: async () => {} }, onFrame: () => {
+      frames++;return new Promise(resolve => { finish = resolve })
+    } })
+    source.capture = async () => { captures++;return new File(['frame'], 'frame.png', { type: 'image/png' }) }
+    await source.start({ live: true })
+    while (!finish) await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise(resolve => setTimeout(resolve, 70))
+    let settled = false
+    const stopped = source.stop().then(() => { settled = true })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const during = { frames, captures, settled, tracks: streams[0].getTracks().map(track => track.readyState) }
+    finish();await stopped
+    source.dispose()
+    const owners = app._imageInputs.has(source)
+    app.destroy()
+    return { during, frames, captures, owners }
+  })
+  expect(result).toEqual({ during: { frames: 1, captures: 1, settled: false, tracks: ['ended'] }, frames: 1, captures: 1, owners: false })
+})
+
+test('generated image control supports scoped paste and real canvas camera snapshots', async ({ page }) => {
+  await page.goto('/load/')
+  await page.evaluate(async () => {
+    const root = document.createElement('div');root.id = 'capture-test';document.body.append(root)
+    window.captureApp = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false, inputs: [{ name: 'photo', type: 'image', nullable: true, default: null, capture: { camera: true } }], outputs: []
+    } })
+    await window.captureApp.ready
+    const canvas = document.createElement('canvas');canvas.width = 24;canvas.height = 16
+    canvas.getContext('2d').fillRect(0, 0, 24, 16)
+    window.cameraStream = canvas.captureStream()
+    window.cameraPaint = setInterval(() => canvas.getContext('2d').fillRect(0, 0, 24, 16), 20)
+    navigator.mediaDevices.getUserMedia = async () => window.cameraStream
+    const data = new DataTransfer();data.items.add(new File(['image'], 'pasted.png', { type: 'image/png' }))
+    root.querySelector('.jsee-media-input').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true }))
+  })
+  await expect.poll(() => page.evaluate(() => window.captureApp.getInputs().photo?.name)).toBe('pasted.png')
+  await page.locator('#capture-test').getByRole('button', { name: 'Camera', exact: true }).click()
+  await expect(page.locator('#capture-test').getByRole('button', { name: 'Use snapshot' })).toBeVisible()
+  await page.locator('#capture-test').getByRole('button', { name: 'Use snapshot' }).click()
+  await expect.poll(() => page.evaluate(() => window.captureApp.getInputs().photo?.name)).toBe('Camera snapshot.png')
+  expect(await page.evaluate(async () => {
+    const file = window.captureApp.getInputs().photo
+    const bitmap = await createImageBitmap(file)
+    const result = { width: bitmap.width, height: bitmap.height, tracks: window.cameraStream.getTracks().map(track => track.readyState) }
+    bitmap.close();clearInterval(window.cameraPaint);window.captureApp.destroy();return result
+  })).toEqual({ width: 24, height: 16, tracks: ['ended'] })
+})
+
+test('transient plain invocation validates image bytes without storing frame inputs', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const root = document.createElement('div');document.body.append(root)
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false,
+      inputs: [{ name: 'photo', type: 'image', nullable: true, default: null }], outputs: [{ name: 'size', type: 'number' }],
+      model: { code: ({ photo }) => ({ size: photo.byteLength }) }
+    } })
+    await app.ready
+    const result = await app.invoke({ photo: new File(['hello'], 'frame.png', { type: 'image/png' }) }, { transient: true })
+    const saved = app.getInputs().photo
+    let error
+    try { await app.invoke({ photo: 123 }, { transient: true }) } catch (e) { error = e.message }
+    app.destroy()
+    return { size: result.size, saved, error }
+  })
+  expect(result.size).toBe(5)
+  expect(result.saved).toBe(null)
+  expect(result.error).toMatch(/photo/)
+})
+
+test('image acquisition keeps instances separate and surfaces denied permission', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const apps = [], targets = []
+    for (let i = 0; i < 2; i++) {
+      const root = document.createElement('div');document.body.append(root);targets.push(root)
+      const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+        persist: false, autorun: false, inputs: [{ name: 'photo', type: 'image', nullable: true, default: null, capture: { camera: true } }], outputs: []
+      } })
+      await app.ready;apps.push(app)
+    }
+    const data = new DataTransfer();data.items.add(new File(['image'], 'only-first.png', { type: 'image/png' }))
+    targets[0].querySelector('.jsee-media-input').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const values = apps.map(app => app.getInputs().photo?.name || null)
+    navigator.mediaDevices.getUserMedia = async () => { throw new DOMException('Camera permission denied', 'NotAllowedError') }
+    const source = apps[1].createImageInput('photo', { target: targets[1], video: document.createElement('video') })
+    let denied
+    try { await source.start() } catch (error) { denied = { name: error.name, message: error.message } }
+    const pending = source.pending
+    apps.forEach(app => app.destroy())
+    return { values, denied, pending }
+  })
+  expect(result).toEqual({ values: ['only-first.png', null], denied: { name: 'NotAllowedError', message: 'Camera permission denied' }, pending: false })
+})
+
+test('disabled controls and runtime Stop release live acquisition', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const root = document.createElement('div');document.body.append(root)
+    const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+      persist: false, autorun: false, inputs: [{ name: 'photo', type: 'image', nullable: true, default: null, capture: { camera: true, live: true } }], outputs: []
+    } })
+    await app.ready
+    const tracks = []
+    navigator.mediaDevices.getUserMedia = async () => {
+      const track = { stopped: false, stop () { this.stopped = true } };tracks.push(track)
+      return { getTracks: () => [track] }
+    }
+    const source = app.createImageInput('photo', { target: root, video: { play: async () => {} }, onFrame: async () => {} })
+    source.capture = async () => null
+    await source.start({ live: true })
+    await app.setInputState('photo', { readonly: true })
+    await app.setInputState('photo', { readonly: false })
+    await source.start({ live: true })
+    await app.stop()
+    const result = { active: source.active, tracks: tracks.map(track => track.stopped) }
+    app.destroy();return result
+  })
+  expect(result).toEqual({ active: false, tracks: [true, true] })
+})
+
+test('nested image acquisition targets do not consume the same paste or drop twice', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const parent = document.createElement('div'), child = document.createElement('div')
+    document.body.append(parent)
+    const apps = [], received = [[], []]
+    for (const [i, root] of [parent, child].entries()) {
+      const app = new JSEE({ container: root, verbose: false, toasts: false, schema: {
+        persist: false, autorun: false, inputs: [{ name: 'photo', type: 'image', nullable: true, default: null, display: false }], outputs: []
+      } })
+      await app.ready
+      app.createImageInput('photo', { target: root, onImage: file => received[i].push(file.name) })
+      apps.push(app)
+    }
+    parent.append(child)
+    for (const kind of ['paste', 'drop']) {
+      const data = new DataTransfer();data.items.add(new File(['image'], kind + '.png', { type: 'image/png' }))
+      child.dispatchEvent(kind === 'paste' ? new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }) : new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true }))
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    apps.reverse().forEach(app => app.destroy())
+    return received
+  })
+  expect(result).toEqual([[], ['paste.png', 'drop.png']])
+})

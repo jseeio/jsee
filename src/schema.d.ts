@@ -56,6 +56,8 @@ export interface InputProperties {
   url?: string
   urlAutoLoad?: boolean
   accept?: string
+  /** Browser image acquisition. Model inputs remain ordinary image files/bytes. */
+  capture?: { camera: boolean; live?: boolean; maxFps?: number; facingMode?: 'user' | 'environment' }
   placeholder?: string
   columns?: Columns
   [extension: string]: unknown

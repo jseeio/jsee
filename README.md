@@ -691,6 +691,61 @@ posted messages without request identity remain supported, but late messages fro
 that legacy path cannot be reliably attributed. Stop still terminates workers;
 cooperative model retention is a separate feature.
 
+### Image acquisition in browser apps
+
+An `image` input accepts upload, drop and paste into its focused control. Paste
+inside a text field stays text. Enable camera snapshots in the same descriptor:
+
+```json
+{"name":"photo","type":"image","accept":"image/*","capture":{"camera":true,"live":true,"maxFps":5}}
+```
+
+The generated control offers Camera, Use snapshot and, for ordinary pipelines,
+Live. Camera access requires browser permission on a secure origin. `facingMode`
+is optionally `"user"` or `"environment"` (default). `maxFps` defaults to 5 and
+must be greater than zero and at most 60. Actual throughput depends on capture
+and execution time. Snapshots use PNG, JPEG or WebP according to `accept`.
+
+Custom layouts use the same acquisition implementation:
+
+```js
+await app.ready
+const image = app.createImageInput('photo', {
+  target: document.querySelector('#image-stage'), // scoped paste/drop target
+  picker: document.querySelector('#image-file'), // optional native file input
+  video: document.querySelector('#camera'),     // required for camera capture
+  onImage: file => showPreview(file),           // selection is already stored
+  onState: ({ active, pending, live }) => updateCameraButton(active, pending, live),
+  onError: error => showError(error.message)
+})
+await image.start({ live: true })
+await image.stop({ snapshot: true }) // release camera; keep its last image
+image.dispose()                     // remove listeners and release tracks
+```
+
+Use an array path for named groups, such as `['settings', 'photo']`. `select(files)`
+uses the same validation and selection path as upload/paste. `start()` opens a
+snapshot preview; `start({live:true})` requires `capture.live`. `stop()` releases
+tracks immediately and waits for an in-flight frame consumer. Each live frame
+waits for the previous consumer; no capture queue accumulates. A host can supply
+`onFrame: async file => ...` to handle frames itself. Do not await `stop()` or
+`select()` from inside `onFrame`, since those wait for that callback to settle.
+
+The default live consumer invokes an ordinary pipeline without changing stored
+form inputs. Its general API is `app.invoke(values, {transient:true})`: supplied
+values are validated for this run but are not stored in the form. Named pipelines
+keep their existing explicit target/override semantics; a custom layout must
+provide `onFrame` to choose that target. The generated named-pipeline control
+supports snapshots only.
+
+Disable/readonly changes, runtime Stop, page hiding and disposal stop capture.
+Destroying the app disposes its acquisition instances. Stopping capture alone
+does not cancel model execution; `app.stop()` controls execution separately.
+Frames currently use encoded files and the existing image-byte transport, not
+zero-copy video transfer. Capture UI and permission are browser-only; HTTP, CLI
+and MCP continue to accept ordinary image files or artifact references. JSEE
+owns acquisition and execution; models retain preprocessing and inference.
+
 ### Named stages in the existing pipeline
 
 Composers flatten tool schemas into ordinary `model` entries, input groups and

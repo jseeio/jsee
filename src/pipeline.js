@@ -117,7 +117,7 @@ class Pipeline {
   }
   async run (inputs, { target, force=false, overrides, transient=false, renderOnly=false }={}, check=() => {}) {
     if (this.busy) throw new Error('Pipeline is already running')
-    if (transient && !target) throw new Error('Transient invocation requires a target stage')
+    if (this.named && transient && !target) throw new Error('Transient invocation requires a target stage')
     const order = this.plan(inputs, target), epoch = this.epoch
     const valid = () => { check(); if (this.epoch !== epoch) throw new Error('Pipeline cancelled') }
     this.busy = true

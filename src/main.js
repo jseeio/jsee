@@ -28,6 +28,7 @@ const notyf = new Notyf({
 })
 
 const Overlay = require('./overlay')
+const ImageInput = require('./image-input')
 
 require('notyf/notyf.min.css')
 
@@ -180,6 +181,7 @@ export default class JSEE {
     this._cancelWorkerRun = null
     this._rejectRun = null
     this._rejectWorkerRun = null
+    this._imageInputs = new Set()
     this._workers = []
     this._apiRequests = new Set()
     this._pendingRun = null
@@ -305,8 +307,50 @@ export default class JSEE {
     // Validate and copy before applying anything; never silently replace the selected value.
     const update = cloneSchema(patch)
     Object.assign(field, update)
+    for (const source of this._imageInputs) if (source.input === field && source.locked) source.stop().catch(error => source.fail(error))
     await this.app.$nextTick()
     this.app.validateInputs()
+  }
+
+  // The same acquisition owner backs the generated control and custom layouts.
+  createImageInput (path, options={}) {
+    this._assertReady()
+    const names = typeof path === 'string' ? [path] : path
+    if (!Array.isArray(names) || !names.length || names.some(name => typeof name !== 'string' || !name)) throw new TypeError('Image path must be a name or array of names')
+    let fields = this.data.inputs, input
+    for (const name of names) { input = findInput(fields, name); fields = input?.elements || [] }
+    return this._createImageInput(input, options)
+  }
+
+  _createImageInput (input, options={}) {
+    const source = new ImageInput({ ...options, input,
+      onImage: async file => {
+        const values = this._imageValues(input, file)
+        await this.setInputs(values)
+        if (!source.disposed) await options.onImage?.(file)
+      },
+      onDispose: () => this._imageInputs.delete(source),
+      onFrame: options.onFrame || (!this._namedPipeline ? file => this.invoke(this._imageValues(input, file), { transient: true }) : undefined)
+    })
+    this._imageInputs.add(source)
+    return source
+  }
+
+  _imageValues (field, file) {
+    const visit = (fields, path=[]) => {
+      for (const input of fields) {
+        const next = input.name ? [...path, input.name] : path
+        if (input === field) return next
+        if (input.elements) { const found = visit(input.elements, next); if (found) return found }
+      }
+    }
+    const path = visit(this.data.inputs)
+    if (!path) throw new Error('Image input is no longer attached')
+    const values = this.getInputs()
+    let target = values
+    for (const name of path.slice(0, -1)) target = target[name]
+    Object.defineProperty(target, path[path.length - 1], { value: file, enumerable: true, writable: true, configurable: true })
+    return values
   }
 
   async invoke (values, options) {
@@ -319,10 +363,11 @@ export default class JSEE {
     if (this.running || this._invoking) throw new Error('A run is already in progress')
     this._invoking = true
     try {
-      if (values !== undefined) await this.setInputs(values)
+      const transient = options?.transient && !this._namedPipeline
+      if (values !== undefined && !transient) await this.setInputs(values)
       checkStopped()
       // Invocation owns exactly one run; never resolve with a queued run's result.
-      this._pipelineOptions = options
+      this._pipelineOptions = transient ? { ...options, overrides: values } : options
       return await this.runOnce('invoke', true)
     } finally {
       this._invoking = false
@@ -376,6 +421,7 @@ export default class JSEE {
   }
 
   cancelCurrentRun (options={}) {
+    for (const source of this._imageInputs) source.stop().catch(error => source.fail(error))
     if (options.mode !== undefined && !['force', 'cooperative'].includes(options.mode)) throw new TypeError('Unknown cancellation mode')
     if (options.mode === 'cooperative') return this._stopCooperatively(options.graceMs ?? 1000)
     if (this._runToken) this._runToken.cancelled = this._runToken.forced = true
@@ -489,6 +535,8 @@ export default class JSEE {
   destroy () {
     if (this._destroyed) return
     this._destroyed = true
+    this._imageInputs.forEach(source => source.dispose())
+    this._imageInputs.clear()
     this._emit('destroy')
     this._listeners.clear()
     this._initController.abort()
@@ -1427,7 +1475,7 @@ export default class JSEE {
     }
 
     // Programmatic, queued, and UI calls share the browser's control validation.
-    if (!this._namedPipeline && this.app && this.app.validateInputs()) {
+    if (!this._namedPipeline && !this._pipelineOptions?.transient && this.app && this.app.validateInputs()) {
       if (returnResult) throw new Error('Invalid inputs')
       return false
     }
@@ -1466,6 +1514,7 @@ export default class JSEE {
       this.log('Running the pipeline...')
       // Collect input values
       let inputValues = collectInputValues(data.inputs)
+      if (!this._namedPipeline && this._pipelineOptions?.transient) inputValues = { ...inputValues, ...this._pipelineOptions.overrides }
       // Model-driven option updates are part of the live form contract.
       if (!this._namedPipeline) inputValues = prepareInputs(data.inputs, inputValues)
       inputValues = await utils.prepareBrowserFiles(schema.inputs, inputValues, this.model.some(model => model._jseeCanonical))
@@ -1723,7 +1772,7 @@ export default class JSEE {
         // Declared outputs win over input updates when names overlap.
         this.log('Updating outputs from matching result keys:', Object.keys(res))
         this._mapResultsToOutputs(this.data.outputs, res)
-      } else if (resultKeys.length > 0 && resultKeys.every(key => inputNames.includes(key))) {
+      } else if (!this._pipelineOptions?.transient && resultKeys.length > 0 && resultKeys.every(key => inputNames.includes(key))) {
         // Update input fields from results
         // e.g. loading a csv file and updating list of target variables
         // This will be dynamically updated in the UI

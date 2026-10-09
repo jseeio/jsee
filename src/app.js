@@ -370,6 +370,7 @@ function createVueApp (env, mountedCallback, logMain) {
           regions: env.regions,
           controls: env.controls,
           namedPipeline: env._namedPipeline,
+          createImageInput: (input, options) => env._createImageInput(input, options),
           rerun: () => env.invoke(undefined, { force: true }).catch(error => env.toast('error', error.message)),
           display: (index) => this.display(index),
           reset: (example) => this.reset(example),

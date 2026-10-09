@@ -128,6 +128,17 @@
         "url": { "type": "string" },
         "urlAutoLoad": { "type": "boolean" },
         "accept": { "type": "string" },
+        "capture": {
+          "type": "object",
+          "required": ["camera"],
+          "properties": {
+            "camera": { "type": "boolean" },
+            "live": { "type": "boolean" },
+            "maxFps": { "type": "number", "exclusiveMinimum": 0, "maximum": 60 },
+            "facingMode": { "enum": ["user", "environment"] }
+          },
+          "additionalProperties": false
+        },
         "placeholder": { "type": "string" },
         "columns": { "$ref": "#/definitions/columns" },
         "style": { "enum": ["blocks", "accordion", "section", "tabs"] },
