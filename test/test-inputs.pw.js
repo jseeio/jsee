@@ -1393,6 +1393,104 @@ test('structured editors preserve JSON values, editable rows and invalid drafts'
   await expect(page.getByRole('alert')).toContainText('JSON')
 })
 
+async function mountTable (page, value) {
+  await page.goto('http://localhost:8484/load/')
+  await page.evaluate(async (initial) => {
+    if (window.app) window.app.destroy()
+    document.body.innerHTML = '<div id="paste-test"></div>'
+    window.app = new JSEE({ container: '#paste-test', schema: {
+      persist: false, model: { worker: false, autorun: false, code: 'function model(data) { self.pasted = data; return data }' },
+      inputs: [{ name: 'grid', type: 'table', default: initial }], outputs: []
+    } })
+    await window.app._initPromise
+  }, value)
+}
+
+async function paste (page, label, text) {
+  await page.getByLabel(label, { exact: true }).evaluate((el, data) => {
+    const transfer = new DataTransfer()
+    transfer.setData('text/plain', data)
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }))
+  }, text)
+}
+
+test('pasting a spreadsheet block fills an empty grid and names columns from its header', async ({ page }) => {
+  await mountTable(page, [])
+  await paste(page, 'Paste rows into grid', 'item\tqty\tprice\nWidget\t3\t12.5\nGizmo\t1\t99')
+  expect(await page.evaluate(() => window.app.run())).toBe(true)
+  expect(await page.evaluate(() => self.pasted.grid)).toEqual([
+    { item: 'Widget', qty: 3, price: 12.5 },
+    { item: 'Gizmo', qty: 1, price: 99 }
+  ])
+})
+
+test('pasting into a populated grid expands from the target cell and grows rows', async ({ page }) => {
+  await mountTable(page, { columns: ['a', 'b'], rows: [['x', 1]] })
+  await paste(page, 'Row 1, b', '2\n3\n4')
+  expect(await page.evaluate(() => window.app.run())).toBe(true)
+  expect(await page.evaluate(() => self.pasted.grid.rows)).toEqual([['x', 2], ['', 3], ['', 4]])
+})
+
+test('quoted CSV survives paste: quoting escapes delimiters, it does not force a string', async ({ page }) => {
+  await mountTable(page, [])
+  await paste(page, 'Paste rows into grid', 'label,note\n"a,b",plain\n"42","two\nlines"')
+  await expect(page.getByLabel('Row 1, label', { exact: true })).toHaveValue('a,b')
+  await expect(page.getByLabel('Row 1, note', { exact: true })).toHaveValue('plain')
+  // CSV quotes only protect the delimiter, so a numeric cell still reads as a number.
+  await expect(page.getByLabel('Row 2, label', { exact: true })).toHaveValue('42')
+  expect(await page.evaluate(() => window.app.run())).toBe(true)
+  expect(await page.evaluate(() => self.pasted.grid)).toEqual([
+    { label: 'a,b', note: 'plain' },
+    { label: 42, note: 'two\nlines' }
+  ])
+})
+
+test('cells show plain strings bare and keep JSON syntax only where it disambiguates', async ({ page }) => {
+  await mountTable(page, { columns: ['text', 'number', 'stringy', 'flag', 'blank'], rows: [['Widget', 42, '42', false, '']] })
+  await expect(page.getByLabel('Row 1, text', { exact: true })).toHaveValue('Widget')
+  await expect(page.getByLabel('Row 1, number', { exact: true })).toHaveValue('42')
+  // The string "42" would read back as a number unquoted, so it keeps its quotes.
+  await expect(page.getByLabel('Row 1, stringy', { exact: true })).toHaveValue('"42"')
+  await expect(page.getByLabel('Row 1, flag', { exact: true })).toHaveValue('false')
+  await expect(page.getByLabel('Row 1, blank', { exact: true })).toHaveValue('')
+  // Round trip: nothing is coerced by being displayed.
+  expect(await page.evaluate(() => window.app.run())).toBe(true)
+  expect(await page.evaluate(() => self.pasted.grid.rows)).toEqual([['Widget', 42, '42', false, '']])
+})
+
+test('a single pasted value is left to the browser so ordinary editing still works', async ({ page }) => {
+  await mountTable(page, { columns: ['a'], rows: [['keep']] })
+  await paste(page, 'Row 1, a', 'solo')
+  expect(await page.evaluate(() => window.app.data.inputs[0].value.rows)).toEqual([['keep']])
+})
+
+test('removing a column drops it from every row', async ({ page }) => {
+  await mountTable(page, { columns: ['a', 'b'], rows: [[1, 2], [3, 4]] })
+  await page.getByRole('button', { name: 'Remove column a', exact: true }).click()
+  expect(await page.evaluate(() => window.app.run())).toBe(true)
+  expect(await page.evaluate(() => self.pasted.grid)).toEqual({ columns: ['b'], rows: [[2], [4]] })
+})
+
+test('a table input widens the form to even columns unless the schema says otherwise', async ({ page }) => {
+  await mountTable(page, [])
+  const even = await page.evaluate(() => getComputedStyle(document.querySelector('.jsee-grid')).gridTemplateColumns)
+  const [left, right] = even.split(' ').map(parseFloat)
+  expect(Math.abs(left - right)).toBeLessThan(2)
+
+  await page.evaluate(async () => {
+    window.app.destroy()
+    document.body.innerHTML = '<div id="explicit"></div>'
+    window.app = new JSEE({ container: '#explicit', schema: {
+      persist: false, design: { grid: [1, 3] }, model: { worker: false, autorun: false, code: 'function model(d) { return d }' },
+      inputs: [{ name: 'grid', type: 'table', default: [] }], outputs: []
+    } })
+    await window.app._initPromise
+  })
+  const explicit = await page.evaluate(() => getComputedStyle(document.querySelector('.jsee-grid')).gridTemplateColumns)
+  const [a, b] = explicit.split(' ').map(parseFloat)
+  expect(b).toBeGreaterThan(a * 2)
+})
+
 test('typed media selects declared MIME, preserves bytes and releases previews', async ({ page }) => {
   await page.goto('http://localhost:8484/load/')
   await page.evaluate(async () => {
@@ -1591,4 +1689,26 @@ test.describe('Pipeline presentation', () => {
     await expect(chip).toHaveAttribute('data-status', 'current')
     await expect(chip).toHaveText('current')
   })
+})
+
+test('table paste grows from its column offset without overwriting existing named columns', async ({ page }) => {
+  await mountTable(page, { columns: ['a', 'column_3'], rows: [['old', 'old']] })
+  await paste(page, 'Row 1, column_3', 'left\tright')
+  expect(await page.evaluate(() => window.app.data.inputs[0].value)).toEqual({ columns: ['a', 'column_3', 'column_3_2'], rows: [['old', 'left', 'right']] })
+})
+
+test('table paste rejects duplicate headers atomically and preserves unsafe numeric text', async ({ page }) => {
+  await mountTable(page, [])
+  await paste(page, 'Paste rows into grid', 'name\tname\nleft\tright')
+  await expect(page.getByRole('alert')).toContainText('Duplicate column')
+  expect(await page.evaluate(() => window.app.data.inputs[0].value)).toEqual([])
+  await paste(page, 'Paste rows into grid', 'id\tvalue\n9007199254740993\t1e400')
+  expect(await page.evaluate(() => window.app.data.inputs[0].value)).toEqual([{ id: '9007199254740993', value: '1e400' }])
+})
+
+test('table paste can explicitly preserve the first row as data', async ({ page }) => {
+  await mountTable(page, [])
+  await page.getByLabel('First pasted row contains column names').uncheck()
+  await paste(page, 'Paste rows into grid', 'Alice\t3\nBob\t4')
+  expect(await page.evaluate(() => window.app.data.inputs[0].value)).toEqual([{ column_1: 'Alice', column_2: 3 }, { column_1: 'Bob', column_2: 4 }])
 })

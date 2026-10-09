@@ -400,7 +400,7 @@ Use `columns` on inputs/outputs for dashboard-style layouts:
       - `section` — collapsible section with a prominent heading, for module-level groups in long forms
       - `tabs` — tabbed view where each child element becomes a tab (child groups use their `name`/`label` as tab label)
     - `object` — JSON editor for nested objects, lists or other JSON values
-    - `table` — Editable table using row objects or `{columns, rows}`
+    - `table` — Editable table using row objects or `{columns, rows}`. Clipboard CSV/TSV paste expands from the selected cell; choose whether an empty table takes its column names from the first pasted row. Duplicate headers reject without changing data. Unsafe integers and non-finite numeric text stay strings. This bounded editor does not ingest large CSV files or virtualize rows.
     - `image`, `audio`, `video` — Typed media selection and preview; models receive bytes
     - `file` — File Input
     - `folder` — Directory input. Shows a file listing with optional selection. In the browser, uses `<input webkitdirectory>` or drag-drop. On the server, reads from a directory path. Returns array of `{name, path, size, type, selected}` objects. Props:
