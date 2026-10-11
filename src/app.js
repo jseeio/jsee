@@ -361,7 +361,8 @@ function createVueApp (env, mountedCallback, logMain) {
   const app = createApp({
     render,
     data () {
-      return { ...dataInit, selectedInputGroup: null }
+      // Vue's instance proxy needs this optional key declared before setDesign.
+      return { design: undefined, ...dataInit, selectedInputGroup: null }
     },
     provide () {
       return {

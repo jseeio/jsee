@@ -1,5 +1,35 @@
 const { test, expect } = require('@playwright/test')
 
+for (const initial of ['omitted', 'null']) test(`setDesign is reactive when initial design is ${initial}`, async ({ page }) => {
+  await page.goto('/load/')
+  await page.evaluate(async initial => {
+    document.body.innerHTML = '<div id="app"></div>'
+    const schema = { persist: false, autorun: false,
+      model: { worker: true, code: 'function () { return { scores: [{ label: "score", score: 0.8 }] } }' },
+      inputs: [{ name: 'x', type: 'string', default: 'keep me' }],
+      outputs: [{ name: 'scores', type: 'scores' }]
+    }
+    if (initial === 'null') schema.design = null
+    window.app = new JSEE({ container: '#app', schema, verbose: false })
+    await window.app.ready
+    await window.app.invoke()
+    window.originalWorker = window.app._workers[0]
+    window.originalMeter = document.querySelector('[role="meter"]')
+    await window.app.setDesign({ theme: 'mono', colorScheme: 'dark' })
+  }, initial)
+  await expect(page.locator('#x')).toHaveCSS('color', 'rgb(236, 236, 236)')
+  await expect(page.locator('.jsee-scores')).toHaveCSS('color', 'rgb(236, 236, 236)')
+  await expect(page.locator('#x')).toHaveValue('keep me')
+  expect(await page.evaluate(() => ({
+    design: window.app.getSchema().design,
+    workerRetained: window.originalWorker === window.app._workers[0],
+    viewRetained: window.originalMeter === document.querySelector('[role="meter"]')
+  }))).toEqual({ design: { theme: 'mono', colorScheme: 'dark' }, workerRetained: true, viewRetained: true })
+  await page.evaluate(() => window.app.setDesign({ colorScheme: 'light' }))
+  await expect(page.locator('#x')).toHaveCSS('color', 'rgb(17, 17, 17)')
+  await page.evaluate(() => window.app.destroy())
+})
+
 async function mount(page, regions=false) {
   await page.goto('/load/')
   await page.evaluate(async regions => {
