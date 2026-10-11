@@ -14,7 +14,7 @@ import uuid
 import urllib.parse
 import weakref
 
-from .jsee import (_get_value_schema, _json_shape_errors, _validate_schema_version, _prepare_inputs, _flatten_outputs,
+from .jsee import (_scores_options, _get_value_schema, _json_shape_errors, _validate_schema_version, _prepare_inputs, _flatten_outputs,
                    _invocation_unsupported_reason, jsee_inputs_to_json_schema,
                    jsee_outputs_to_json_schema, DEFAULT_MAX_BODY_BYTES,
                    invoke_schema, _read_request_body, _read_request_inputs, _RequestError, _resolve_static_file)
@@ -80,6 +80,11 @@ def validate_descriptor(schema):
             alias = field.get('alias')
             if 'alias' in field and not (isinstance(alias, str) or isinstance(alias, list) and all(isinstance(v, str) for v in alias)):
                 errors.append(at + '.alias should contain strings')
+            if kind == 'output' and field.get('type') == 'scores':
+                try:
+                    _scores_options(field)
+                except (ValueError, TypeError, OverflowError) as error:
+                    errors.append(at + ': ' + str(error))
             if kind == 'input':
                 for key in ('required', 'nullable', 'raw', 'stream', 'arrayBuffer'):
                     if key in field and not isinstance(field[key], bool):

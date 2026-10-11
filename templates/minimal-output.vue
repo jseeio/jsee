@@ -270,6 +270,13 @@
   border: none;
   display: block;
 }
+.custom-container :deep(.jsee-scores) { color: var(--jsee-text, #333); }
+.custom-container :deep(.jsee-score-row) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) minmax(4ch, auto); gap: 12px; align-items: center; padding: 6px 0; }
+.custom-container :deep(.jsee-score-label) { overflow-wrap: anywhere; }
+.custom-container :deep(.jsee-score-track) { display: block; height: 4px; background: var(--jsee-border, #e0e0e0); }
+.custom-container :deep(.jsee-score-track > span) { display: block; height: 100%; background: var(--jsee-text-secondary, #666); }
+.custom-container :deep(.is-leading .jsee-score-track > span) { background: var(--jsee-primary, #00d1b2); }
+.custom-container :deep(.jsee-score-value) { font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; }
 </style>
 
 <template>
@@ -314,7 +321,7 @@
       <div :id="outputName" v-if="outputBlockedReason" class="jsee-output-missing">
         {{ outputBlockedReason }}
       </div>
-      <div :id="outputName" v-else-if="hasCustomRenderer || output.type === 'function'">
+      <div :id="outputName" v-else-if="hasCustomRenderer || output.type === 'function' || output.type === 'scores'">
         <div v-if="renderError" role="alert" class="jsee-output-missing">{{ renderError }}</div>
         <div class="custom-container" ref="customContainer"></div>
       </div>

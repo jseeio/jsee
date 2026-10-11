@@ -703,6 +703,19 @@ def _file_like_output_json_schema():
   }
 
 
+def _scores_options(output):
+  low, high = output.get('min', 0), output.get('max', 1)
+  if any(type(v) not in (int, float) or not math.isfinite(v) for v in (low, high)) or not high > low or not math.isfinite(high - low):
+    raise ValueError('scores min/max must define a finite increasing display range')
+  precision = output.get('precision', 3)
+  if type(precision) not in (int, float) or not 0 <= precision <= 20 or precision != int(precision):
+    raise ValueError('scores precision must be an integer from 0 to 20')
+  if output.get('format', 'number') not in ('number', 'percent'):
+    raise ValueError('scores format must be number or percent')
+  if any(not isinstance(output.get(k, ''), str) for k in ('prefix', 'suffix')):
+    raise ValueError('scores prefix/suffix must be strings')
+
+
 def jsee_output_to_json_schema(output):
   shape = _get_value_schema(output)
   if shape is not None:
@@ -714,6 +727,10 @@ def jsee_output_to_json_schema(output):
     return {'type': 'number'}
   if t == 'bool':
     return {'type': 'boolean'}
+  if t == 'scores':
+    return {'type': 'array', 'items': {'type': 'object', 'properties': {
+      'label': {'type': 'string'}, 'score': {'type': 'number'}},
+      'required': ['label', 'score'], 'additionalProperties': True}}
   if t == 'gauge':
     return {
       'oneOf': [

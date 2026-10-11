@@ -1,5 +1,5 @@
 const { isImageBitmap } = require('./image-frame')
-const { getValueSchema, matchesFileAccept, tableOutputJsonSchema, assertSchemaVersion, jseeInputsToJsonSchema, collectInputValues, prepareInputs } = require('./schema')
+const { scoresOutputJsonSchema, getScoresOptions, getValueSchema, matchesFileAccept, tableOutputJsonSchema, assertSchemaVersion, jseeInputsToJsonSchema, collectInputValues, prepareInputs } = require('./schema')
 const { DEFAULT_CHUNK_SIZE, STREAM_HIGH_WATER } = require('./constants')
 
 // https://stackoverflow.com/questions/8511281/check-if-a-value-is-an-object-in-javascript
@@ -2652,7 +2652,12 @@ function validateSchema (schema) {
     }
   }
   if (Array.isArray(schema.inputs)) checkShapes(schema.inputs)
-  if (Array.isArray(schema.outputs)) checkShapes(schema.outputs)
+  if (Array.isArray(schema.outputs)) {
+    checkShapes(schema.outputs)
+    for (const output of flattenJseeOutputs(schema.outputs)) if (output.type === 'scores') {
+      try { getScoresOptions(output) } catch (error) { report.errors.push(error.message) }
+    }
+  }
   validateSecuritySchema(schema, report)
 
   return report
@@ -2733,6 +2738,8 @@ function jseeOutputToJsonSchema (output) {
       return { type: 'number' }
     case 'bool':
       return { type: 'boolean' }
+    case 'scores':
+      return scoresOutputJsonSchema()
     case 'gauge':
       return {
         oneOf: [

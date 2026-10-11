@@ -2,7 +2,7 @@
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 export type InputType = 'int' | 'float' | 'number' | 'string' | 'color' | 'text' | 'categorical' | 'select' | 'bool' | 'checkbox' | 'file' | 'group' | 'action' | 'button' | 'slider' | 'radio' | 'toggle' | 'date' | 'multi-select' | 'range' | 'folder' | 'table' | 'object' | 'image' | 'audio' | 'video'
 export type ModelType = 'function' | 'class' | 'module' | 'async-init' | 'async-function' | 'get' | 'post' | 'py'
-export type OutputType = 'text' | 'string' | 'int' | 'float' | 'bool' | 'table' | 'chart' | '3d' | 'map' | 'pdf' | 'gallery' | 'gauge' | 'number' | 'alert' | 'highlight' | 'chat' | 'viewer' | 'markdown' | 'image' | 'audio' | 'video' | 'object' | 'html' | 'svg' | 'code' | 'file' | 'group' | 'function' | 'blank'
+export type OutputType = 'text' | 'string' | 'int' | 'float' | 'bool' | 'table' | 'chart' | '3d' | 'map' | 'pdf' | 'gallery' | 'scores' | 'gauge' | 'number' | 'alert' | 'highlight' | 'chat' | 'viewer' | 'markdown' | 'image' | 'audio' | 'video' | 'object' | 'html' | 'svg' | 'code' | 'file' | 'group' | 'function' | 'blank'
 export type DType = 'float32' | 'float64' | 'int8' | 'uint8' | 'int16' | 'uint16' | 'int32' | 'uint32'
 export type Alias = string | string[]
 export type GroupStyle = 'blocks' | 'accordion' | 'tabs'
@@ -78,6 +78,8 @@ export type OutputRenderer<T = any> = (container: HTMLElement, data: T) => Rende
 /** Pass as new JSEE({ renderers, schema, ... }). Registrations are instance-scoped. */
 export type RendererRegistry = Record<string, OutputRenderer>
 
+export interface Score { label: string; score: number; [metadata: string]: unknown }
+
 export interface OutputProperties {
   /** Name in the host application's renderer registry; leaves the data type unchanged. */
   renderer?: string
@@ -104,7 +106,8 @@ export interface OutputProperties {
 
 export type Output = OutputProperties & (
   | { type: 'group'; elements: Output[]; style?: GroupStyle }
-  | { type?: Exclude<OutputType, 'group'> }
+  | { type: 'scores'; format?: 'number' | 'percent'; value?: Score[] }
+  | { type?: Exclude<OutputType, 'group' | 'scores'> }
 )
 
 export interface ModelContext {
@@ -248,3 +251,6 @@ export function tableOutputJsonSchema(allowMatrix?: boolean): Record<string, unk
 
 /** Resolve one field name through unnamed groups. */
 export function findInput(inputs: Input[] | undefined, name: string): Input | undefined
+
+export function scoresOutputJsonSchema(): Record<string, unknown>
+export function getScoresOptions(output: OutputProperties): { min: number; max: number; precision: number; format: 'number' | 'percent'; prefix: string; suffix: string }

@@ -1,0 +1,16 @@
+[
+  {"options": {}, "valid": true},
+  {"options": {"precision": 1.0}, "valid": true},
+  {"options": {"min": -1, "max": 1, "format": "percent", "precision": 1}, "valid": true},
+  {"options": {"min": 2}, "valid": false},
+  {"options": {"max": 0}, "valid": false},
+  {"options": {"min": "0"}, "valid": false},
+  {"options": {"max": null}, "valid": false},
+  {"options": {"min": -1e308, "max": 1e308}, "valid": false},
+  {"options": {"precision": -1}, "valid": false},
+  {"options": {"precision": 21}, "valid": false},
+  {"options": {"precision": 1.5}, "valid": false},
+  {"options": {"precision": true}, "valid": false},
+  {"options": {"format": "probability"}, "valid": false},
+  {"options": {"prefix": false}, "valid": false}
+]

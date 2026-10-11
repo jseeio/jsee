@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "title": "Candidate scores",
+  "description": "Independent scores, shown on a shared scale. Values are not normalized.",
+  "persist": false,
+  "autorun": true,
+  "design": {"theme": "mono"},
+  "model": {"name": "compare", "url": "model.js", "worker": true},
+  "inputs": [
+    {"name": "alpha", "type": "slider", "min": 0, "max": 1, "step": 0.01, "default": 0.72},
+    {"name": "beta", "type": "slider", "min": 0, "max": 1, "step": 0.01, "default": 0.21}
+  ],
+  "outputs": [{"name": "scores", "type": "scores", "label": "Candidate scores", "format": "percent", "precision": 1}]
+}

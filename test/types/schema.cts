@@ -57,3 +57,9 @@ void renderers; void renderedOutput
 
 const imageRenderer: import('@jseeio/jsee/schema').OutputRenderer<import('@jseeio/jsee/image-view').ImageViewData> = imageView
 void imageRenderer
+
+const scores: Output = { name: 'ranked', type: 'scores', format: 'percent', value: [{ label: 'candidate', score: 0.7 }] }
+void scores
+// @ts-expect-error Scores have an explicit presentation format.
+const invalidScores: Output = { type: 'scores', format: 'probability' }
+void invalidScores

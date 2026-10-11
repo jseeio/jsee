@@ -427,3 +427,26 @@ test.each([{ $ref: 'https://example.com/schema' }, { type: 'wat' }, { items: [] 
   const field = { name: 'x', type: 'object', valueSchema }
   expect(validateDescriptor({ model: { code: 'function model() {}' }, inputs: [field], outputs: [field] }).valid).toBe(false)
 })
+
+test('scores discovery describes rows, independently of display range and format', () => {
+  const schema = { model: { code: 'function model() {}' }, outputs: [
+    { name: 'predictions', type: 'scores', min: -1, max: 1, format: 'percent', precision: 1 }
+  ] }
+  expect(inspectSchema(schema).outputSchema.properties.predictions).toEqual({
+    type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, score: { type: 'number' } }, required: ['label', 'score'], additionalProperties: true }
+  })
+})
+
+test.each(require('../fixtures/scores-options.json'))('scores display options %j', fixture => {
+  const schema = { model: { code: 'function model() {}' }, outputs: [{ name: 'scores', type: 'scores', ...fixture.options }] }
+  expect(validateDescriptor(schema).valid).toBe(fixture.valid)
+  expect(require('../../src/utils').validateSchema(schema).errors.length === 0).toBe(fixture.valid)
+})
+
+test('scores example runs through the JSON CLI without reordering or scaling', () => {
+  const child = spawnSync(process.execPath, [path.join(root, 'bin/jsee'), 'run', path.join(root, 'examples/scores/schema.json'), '--input', '-'], {
+    input: JSON.stringify({ alpha: 0.2, beta: 0.9 }), encoding: 'utf8'
+  })
+  expect(child.status).toBe(0)
+  expect(JSON.parse(child.stdout).outputs.scores).toEqual([{ label: 'Alpha', score: 0.2 }, { label: 'Beta', score: 0.9 }])
+})

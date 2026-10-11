@@ -443,3 +443,19 @@ def test_value_schema(fixture):
 def test_reject_unsupported_value_schema(shape):
     field = {'name': 'x', 'type': 'object', 'valueSchema': shape}
     assert not validate_descriptor({'model': {'code': 'def model(): pass', 'type': 'py'}, 'inputs': [field], 'outputs': [field]})['valid']
+
+
+def test_scores_discovery():
+    schema = {'model': {'type': 'py', 'code': 'def model(): pass'}, 'outputs': [
+        {'name': 'predictions', 'type': 'scores', 'min': -1, 'max': 1, 'format': 'percent', 'precision': 1}]}
+    assert inspect_schema(schema)['outputSchema']['properties']['predictions'] == {
+        'type': 'array', 'items': {'type': 'object', 'properties': {
+            'label': {'type': 'string'}, 'score': {'type': 'number'}},
+            'required': ['label', 'score'], 'additionalProperties': True}}
+
+
+@pytest.mark.parametrize('fixture', json.loads((ROOT / 'test/fixtures/scores-options.json').read_text()))
+def test_scores_display_options(fixture):
+    schema = {'model': {'type': 'py', 'code': 'def model(): pass'},
+              'outputs': [{'name': 'scores', 'type': 'scores', **fixture['options']}]}
+    assert validate_descriptor(schema)['valid'] == fixture['valid']

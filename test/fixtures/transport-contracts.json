@@ -24,5 +24,10 @@
   {"name":"typed failure commits no file","outputs":[{"name":"file","type":"file"},{"name":"answer","type":"number"}],"result":{"file":"data","answer":{}},"error":"JSEE_OUTPUT_INVALID"},
   {"name":"table accepts records","outputs":[{"name":"answer","type":"table"}],"result":{"answer":[{"x":1}]},"expected":{"answer":[{"x":1}]}},
   {"name":"table accepts columns and rows","outputs":[{"name":"answer","type":"table"}],"result":{"answer":{"columns":["x"],"rows":[[1],[null]]}},"expected":{"answer":{"columns":["x"],"rows":[[1],[null]]}}},
-  {"name":"gauge accepts a descriptor","outputs":[{"name":"answer","type":"gauge"}],"result":{"answer":{"value":3,"label":"items"}},"expected":{"answer":{"value":3,"label":"items"}}}
+  {"name":"gauge accepts a descriptor","outputs":[{"name":"answer","type":"gauge"}],"result":{"answer":{"value":3,"label":"items"}},"expected":{"answer":{"value":3,"label":"items"}}},
+  {"name": "scores preserve values and order", "outputs": [{"name": "predictions", "type": "scores"}], "result": {"predictions": [{"label": "low", "score": -2}, {"label": "high", "score": 3}]}, "expected": {"predictions": [{"label": "low", "score": -2}, {"label": "high", "score": 3}]}},
+  {"name": "scores empty", "outputs": [{"name": "predictions", "type": "scores"}], "result": {"predictions": []}, "expected": {"predictions": []}},
+  {"name": "scores needs array", "outputs": [{"name": "predictions", "type": "scores"}], "result": {"predictions": {"cat": 0.7}}, "error": "JSEE_OUTPUT_INVALID"},
+  {"name": "scores needs label", "outputs": [{"name": "predictions", "type": "scores"}], "result": {"predictions": [{"score": 0.7}]}, "error": "JSEE_OUTPUT_INVALID"},
+  {"name": "scores needs numeric score", "outputs": [{"name": "predictions", "type": "scores"}], "result": {"predictions": [{"label": "cat", "score": "0.7"}]}, "error": "JSEE_OUTPUT_INVALID"}
 ]

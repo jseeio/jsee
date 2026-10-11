@@ -5,7 +5,7 @@ const path = require('path')
 const crypto = require('crypto')
 const { pathToFileURL } = require('url')
 const { resolveInside, makeHttpError } = require('./files')
-const { getValueSchema, jsonShapeErrors, assertSchemaVersion, prepareInputs, cloneSchema, jseeInputsToJsonSchema } = require('./schema')
+const { getScoresOptions, getValueSchema, jsonShapeErrors, assertSchemaVersion, prepareInputs, cloneSchema, jseeInputsToJsonSchema } = require('./schema')
 const { isBinaryLike, isRecordObject, outputLookupNames, normalizeFileOutputValue, flattenJseeOutputs,
   jseeOutputsToJsonSchema, invocationUnsupportedReason } = require('./utils')
 const vocabulary = require('../schema.json').definitions
@@ -54,6 +54,9 @@ function validateDescriptor (schema) {
         names.add(field.name)
       }
       if (field.alias !== undefined && !(typeof field.alias === 'string' || Array.isArray(field.alias) && field.alias.every(v => typeof v === 'string'))) errors.push(at + '.alias should contain strings')
+      if (kind === 'output' && field.type === 'scores') {
+        try { getScoresOptions(field) } catch (error) { errors.push(at + ': ' + error.message) }
+      }
       if (kind === 'input') {
         for (const key of ['required', 'nullable', 'raw', 'stream', 'arrayBuffer']) {
           if (field[key] !== undefined && typeof field[key] !== 'boolean') errors.push(at + '.' + key + ' should be boolean')

@@ -1,6 +1,7 @@
 import { saveAs } from 'file-saver'
 import domtoimage from 'dom-to-image'
 import MarkdownIt from 'markdown-it'
+const { scoresView } = require('../src/scores-view')
 
 const { sanitizeName, columnsToRows, normalizeSecurityOptions, sanitizeHtml, isNetworkUrl } = require('../src/utils.js')
 
@@ -111,7 +112,7 @@ const component = {
   computed: {
     renderRequest () {
       // Shallow identity updates only; renderers own their interaction state.
-      return [this.output, this.output.type, this.output.renderer, this.output.value, this.outputBlockedReason]
+      return [this.output, this.output.type, this.output.renderer, this.output.value, this.outputBlockedReason, ...['min', 'max', 'precision', 'format', 'prefix', 'suffix'].map(key => this.output[key])]
     },
     hasCustomRenderer () {
       return this.output.type !== 'group' && this.output.renderer !== undefined
@@ -593,22 +594,24 @@ const component = {
       if (this._renderUnmounted) return
       const container = this.$refs.customContainer, value = this.output.value
       const registered = this.hasCustomRenderer
+      const builtin = !registered && this.output.type === 'scores'
+      const controlled = registered || builtin
       const render = registered ? this.jsee.renderers[this.output.renderer]
-        : this.output.type === 'function' && typeof value === 'function' ? value : null
+        : builtin ? scoresView : this.output.type === 'function' && typeof value === 'function' ? value : null
       const previous = this._renderState
       this.renderError = ''
       if (!container || value === undefined || this.outputBlockedReason) { this.disposeRender(); return }
       try {
         if (registered && typeof render !== 'function') throw new Error('Unknown output renderer: ' + this.output.renderer)
         if (previous && previous.render === render && previous.container === container && previous.output === this.output) {
-          if (registered) previous.update(value)
+          if (controlled) previous.update(value)
           return
         }
         this.disposeRender()
         if (!render || this._renderUnmounted) return
         const state = this._renderState = { render, container, output: this.output }
-        const view = registered ? render(container, value) : render(container)
-        if (!registered) {
+        const view = builtin ? render(container, value, this.output) : registered ? render(container, value) : render(container)
+        if (!controlled) {
           if (typeof view === 'function') state.dispose = view
         } else {
           if (typeof view?.dispose === 'function') state.dispose = () => view.dispose()
@@ -616,7 +619,7 @@ const component = {
         }
         // A factory can synchronously destroy its host before returning cleanup.
         if (this._renderState !== state) { state.dispose?.(); return }
-        if (registered && !state.update) throw new Error('Output renderer must return an object with update(data) and optional dispose()')
+        if (controlled && !state.update) throw new Error('Output renderer must return an object with update(data) and optional dispose()')
       } catch (error) {
         this.disposeRender()
         this.renderError = 'Renderer error: ' + (error.message || String(error))

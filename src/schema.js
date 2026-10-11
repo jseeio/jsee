@@ -1,5 +1,20 @@
 const { isImageBitmap } = require('./image-frame')
 
+function scoresOutputJsonSchema () {
+  return { type: 'array', items: { type: 'object', properties: {
+    label: { type: 'string' }, score: { type: 'number' }
+  }, required: ['label', 'score'], additionalProperties: true } }
+}
+
+function getScoresOptions (output) {
+  const { min=0, max=1, precision=3, format='number', prefix='', suffix='' } = output
+  if (![min, max].every(Number.isFinite) || !(max > min) || !Number.isFinite(max - min)) throw new Error('scores min/max must define a finite increasing display range')
+  if (!Number.isInteger(precision) || precision < 0 || precision > 20) throw new Error('scores precision must be an integer from 0 to 20')
+  if (!['number', 'percent'].includes(format)) throw new Error('scores format must be number or percent')
+  if (typeof prefix !== 'string' || typeof suffix !== 'string') throw new Error('scores prefix/suffix must be strings')
+  return { min, max, precision, format, prefix, suffix }
+}
+
 function assertSchemaVersion (schema) {
   if (schema && typeof schema.schemaVersion !== 'undefined' && schema.schemaVersion !== 1) {
     throw new Error('Unsupported schemaVersion: expected 1 or an absent version')
@@ -427,4 +442,4 @@ function prepareInputs (inputs, data) {
   return result
 }
 
-module.exports = { findInput, getValueSchema, assertValueSchema, assertShapedValue, jsonShapeErrors, tableOutputJsonSchema, matchesFileAccept, assertSchemaVersion, cloneSchema, getOptionValue, collectInputValues, getInputDefaultValue, jseeInputsToJsonSchema, prepareInputs }
+module.exports = { scoresOutputJsonSchema, getScoresOptions, findInput, getValueSchema, assertValueSchema, assertShapedValue, jsonShapeErrors, tableOutputJsonSchema, matchesFileAccept, assertSchemaVersion, cloneSchema, getOptionValue, collectInputValues, getInputDefaultValue, jseeInputsToJsonSchema, prepareInputs }
