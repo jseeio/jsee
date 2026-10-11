@@ -1,8 +1,83 @@
 # Changelog
 
-## Unreleased
+## 0.9.0
+
+### Added:
+- Add atomic setInputState with nested paths, existing presentation properties and choice options. Separate value reactivity from descriptor metadata; retain values and caches on state-only updates.
+- Expose invocation/stage progress events and optional byte/phase metadata, independent of progress-bar presentation. Correlate runtime worker replies/progress; preserve legacy callbacks and forced Stop.
+- Add opt-in cooperative Stop with invocation AbortSignal, settlement before reuse and worker grace-timeout fallback. Default Stop remains forced; expose whether workers were retained. Route cancellation to the active worker request and suppress cancelled callbacks/downstream execution.
+- Image inputs share scoped upload/drop/paste and optional camera snapshots/live capture with custom layouts via createImageInput. Live capture awaits consumers; Stop/disposal releases tracks. Ordinary browser invoke supports transient input values without storing them.
+- Optional capture.transport=bitmap uses transient ImageBitmap inputs for local browser JS. Models borrow independently owned copies, worker copies are transferred, and frames close after settlement/cancellation. Snapshots remain files; stored/remote/Python bitmap inputs fail explicitly.
+- Add mono visual theme, instance colorScheme auto/light/dark, and setDesign patches over existing reactive state; preserve views/workers and carry current design into exports.
+- Add built-in scores output: ranked label/score rows, explicit display range and number/percent formatting, persistent accessible meters and shared Node/Python output schemas. Offline-capable; no normalization or history.
+- Add per-instance `controls: false` and `toasts: false` for hosts that own execution buttons and messages; preserve invoke errors/events.
+- Add reusable image views with source/display transforms, boxes/points/RGBA masks, revision checks, asynchronous decode cleanup and borrowed-media overlays.
+- Add instance-scoped output renderer registrations with persistent mount/update/dispose, preserving worker data contracts and legacy function disposers. Include a sensor table/chart example; host registrations require host bundling for standalone HTML.
+- Support vertical input groups, nested scoped input updates and nested section selection without execution.
+- Add a `section` input-group style with a prominent collapsible heading, status chips on named-stage result titles, and a `--jsee-sidebar-max-height` CSS variable for hosts that place the sidebar layout below their own header.
+- Expose input-group editor containers for host-mounted editors while retaining the normal JSEE form, group visibility and Run/Stop.
+- Extend the existing model pipeline with stage IDs, scoped inputs, explicit bindings, internal chains, incremental execution, transient overrides and retained state. Composers flatten tool schemas before execution; browser, CLI, HTTP and MCP use the same loop. Export pinned code references or standalone HTML with deduplicated assets.
+- Place a selected input group beside a host editor through `regions.inputGroups`, without rerunning or remounting stages.
+- Add browser instance readiness, input snapshots/patches, result-returning invocation, lifecycle events and optional host-owned input/output regions using the existing Vue root.
+- Use dynamic module workers for modern Python, native ES modules and API models, with an external workerUrl option and bounded initialization. Preserve classic JavaScript semantics and old Python loaders through a classic build from the same worker source.
+- Upgrade default Pyodide to 314.0.7 with Python 3.14.2; verify NumPy/pandas and offline single-file behavior. Remove worker-loader from the build.
+- Add optional object input/output valueSchema with the same bounded JSON Schema validation in browser, Node and Python and matching discovery.
+- Accept artifact references at file/media inputs, with scoped lookup, integrity checks, declared MIME constraints and UTF-8/byte materialization in JS/Python. Persist CLI registrations and add raw HTTP, local CLI and chunked MCP ingestion.
+- Add table and JSON/object editors plus typed image/audio/video selection and previews. Canonical media bytes become reusable artifacts; canonical served forms use whole-pipeline invocation and artifact transfer.
+- Add whole-host Bearer/browser Basic authentication and configurable CORS in Node and Python HTTP/WSGI, including legacy routes, files, errors and streams. Support token environment variables without embedding credentials.
+- Expose one computation through official-SDK MCP stdio in Node and optional Python jsee[server], with structured runs, lazy file resources and cross-SDK protocol tests.
 
 ### Fixes:
+- Preserve declared scores rows in native Python JSON/SSE responses instead of auto-converting them into tables; keep legacy table conversion for other lists.
+- Keep live setDesign updates reactive when the original schema omits design.
+- Exclude tests from the Python source distribution while retaining bundled runtime assets.
+- Position instance overlays outside layout flow, without intercepting host controls.
+- Honor readonly in standard controls and use choice labels/values consistently.
+- Fix directory examples served at their own HTTP root: builds copy a local runtime and pages load it without reaching above the document root.
+- `design.grid` and the table-editor default split now collapse to one column on narrow screens; the split moved from an inline style to `--jsee-grid-columns`, and the sidebar layout honours it.
+- Keep Run/Stop visible on long forms with a sticky footer.
+- File pickers show the name of a file supplied by defaults, `setInputs`, reset or a restored state, and clear when the value is emptied.
+- Preserve portable file names on Node without global File. Store bounded SHA-256 fingerprints in retained state and reuse current stages on default Run; expose explicit Rerun all.
+- Dispose function renderers on replacement/unmount, scope repeated module input IDs, preserve inline multiline file defaults, and accept the browser’s header/row tables in Node canonical output validation.
+- Preserve nullable file defaults and model-driven input updates; validate updated choices against the live form. Wait for initial model readiness without changing immediate Stop or queued-run ordering.
+- Canonical JS/Python output errors identify the offending path and value kind; binary-file advice is reserved for bytes. Non-finite numbers and sparse JS arrays now fail instead of becoming null.
+- Forward file accept settings and apply the same MIME/extension matching to picker and drop selection.
+- Invoke TypeScript through lib/tsc.js in vocabulary tests and type checks, avoiding extensionless ESM launcher failures on older Node versions.
+- Apply canonical same-origin policy before every route/body parser; preserve authenticated streaming cache policy and use relative runtime URLs in served Node pages.
+- Validate canonical output values against generated built-in shapes before committing files; retain __proto__ fields in Ajv-based client validation.
+- Retain prototype-shaped output names in generated JSON Schema; describe object-viewer scalars/null correctly.
+- Reject malformed computation field collections/discovery metadata and conflicting or inferred duplicate canonical endpoints before model loading.
+- Import Python's importlib.util explicitly so model-file loading works in a fresh installed interpreter.
+- Preserve every requested model entry when multiple bundled stages share a source URL; anchor bundler resolution to the model directory.
+- Accept a single-model descriptor in the exported Node runSchemaOnce helper without caller normalization.
+- Encode non-finite native Python JSON/SSE result numbers as null at every nesting depth, preserving existing output shapes.
+- Repair the pinned detector's interval calls, category text rendering, and inference tensor cleanup; rebuild the GPT-2 reference using its published dependency API.
+- Preserve resolved Pyodide URLs when entering a worker; preserve ImageData and other atomic values through pipeline transitions and worker input preparation.
+- Select native Python model callables using entry independently of endpoint names, matching Pyodide selection.
+- Size prefilled multiline controls through an element ref instead of querying a Vue fragment anchor.
+- Preserve declared metadata-shaped outputs and string/array aliases in browser and CLI output routing; keep legacy automatic metadata hiding. Browser caller/chat-history injection respects declared inputs.
+- Stop accepting raw worker presentation callbacks after a stage settles; delayed raw callbacks during a later invocation remain unidentifiable.
+- Preserve explicitly named Python `_jsee` parameters and omit `**kwargs` from generated required inputs.
+- Reserve browser runs during worker rebuilding, abort rebuild fetches on Stop, preserve retry state, and release workers after partial setup failures. Check cancellation before the first pipeline stage.
+- Bind main-thread/worker model callbacks and streamed-input progress to their invocation; ignore callbacks after completion/cancellation and preserve browser context access to instance fields/methods.
+- Apply browser control validation to nested groups and programmatic runs; enforce required values alongside custom expressions and clear field errors after correction.
+- Prevent pending browser initialization from reviving a destroyed instance; abort initialization fetches, settle worker teardown, and ignore late progress/output calls.
+- Stream Python sync/async generators through WSGI with shared HTTP framing, lazy reads, and cleanup in the async generator's original task/context.
+- Load each Python model source once per application so stages share module state. Reject duplicate endpoint names and missing explicit callables; infer unnamed models without selecting imported helpers.
+- Share GET/POST SSE decoding across main-thread and worker API models; preserve falsey/multiline data, finish at `[DONE]`, release readers, and reject HTTP/SSE errors. Keep presentation callbacks optional.
+- Abort API requests on Stop and prevent cancelled pipelines from advancing after a later run starts. Keep result records intact during UI routing and avoid repeated user/final assistant messages in streamed chat.
+- Release Node response backpressure waits on disconnect; close suspended Python generators after write failures and keep generator errors inside the established SSE response.
+- Share Python HTTP/WSGI model setup and bounded request decoding; return JSON 400/413 errors for invalid lengths, input values, and oversized bodies. Preserve schema-relative model paths and the first positional input in Python CLI schema mode.
+- Preserve numeric typed-array values and subarray/DataView boundaries; deduplicate transferable backing buffers and exclude SharedArrayBuffer.
+- Keep caller-owned worker input buffers reusable, rebuild all worker stages after timeout, and wrap returned values separately from worker control messages.
+- Apply the same containment checks to file endpoints, app static files, runtime assets, and directory indexes.
+- Export named and unnamed input groups recursively in JS/Python JSON Schema, excluding action buttons.
+- Prepare Python runtime assets during production builds and reject wheel/source-distribution builds that omit them.
+- Preserve null, scalar, array, and binary values between pipeline stages; distinguish worker invocation data from cancellation commands in both directions.
+- Share browser/CLI pipeline transitions and group/default/option helpers; bind positional JS arguments by declared input order.
+- Validate declared input types, options, bounds, steps, and required presence before invocation; invalid Node/Python API inputs now return 400. Preserve nullable Python arguments and null defaults.
+- Keep caller descriptors separate from mutable instance values and scope verbosity/log sinks per instance.
+- Initialize/reset labeled options to their values and resolve bundled assets relative to the descriptor file when invoked from another directory.
 - Clear worker execution timeouts after successful runs and rebuild worker-backed pipelines after Stop so later runs use live workers.
 - Preserve declared falsy output values (`0`, `false`, `''`, `null`) and route declared outputs before input updates when names overlap.
 - Run `autorun + interval` schemas on a non-recursive interval loop, report scheduled repeats with `caller: 'interval'`, and stop the loop cleanly when Stop is clicked.
@@ -39,8 +114,21 @@
 - Harden the Node/fallback HTML sanitizer against entity- and whitespace-obfuscated unsafe URLs when no browser DOM parser is available.
 - Accept Node API JSON request bodies up to the same 50 MB limit as multipart requests and return JSON body-parser errors instead of Express HTML error pages.
 - Refresh README model/API docs so runtime-supported `get`/`post`, function-or-string `model.code`, and output alias arrays are documented.
-- Update optional `esbuild` to `^0.28.1` so production installs have zero `npm audit --omit=dev` advisories.
+- Update optional `esbuild` to `^0.28.1` for production bundling.
 - Update the development build/audit tree by moving `sass-loader` to v17, removing the `node-sass` chain, raising `@babel/core` to the patched Babel 7 line, and pinning audited transitive `minimatch`/`js-yaml` versions through npm overrides.
+
+### Updates:
+- Add inspect/validate/run/serve descriptor commands for Node and native Python, preserving legacy CLI forms.
+- Expose canonical whole-pipeline JSON HTTP/WSGI routes and OpenAPI with declared outputs and bounded, retrievable file artifacts.
+- Add Node invokeSchema and async native Python invoke_schema for validated whole-pipeline calls with separate run IDs, terminal results, and structured errors. Add a shared clean_sales example and offline form/download regression.
+- Align maintained Python metadata with JavaScript at 0.9.0; check shared major/minor compatibility in built wheel metadata.
+- Add pinned Python/ML app assets and shared native/Pyodide CSV summary fixtures; record reviewed repairs to historical examples. Retire obsolete Puppeteer tests after coverage mapping.
+- Add descriptor authoring JSON Schema and TypeScript definitions at `@jseeio/jsee/schema.json` and `@jseeio/jsee/schema`; bundle the same JSON Schema with Python. Validate the existing app corpus and type vocabulary during tests without loading models.
+- Add Python `max_body_bytes` / `--max-body-bytes` with a 50 MiB default request-body limit for both server entry points.
+- Recognize descriptor `schemaVersion: 1` and reject unsupported explicit versions before model loading.
+- Add repository CI for browser/native Python checks, package installation, and existing probes; publication remains manual.
+- Add shared JS/Python contract fixtures and provenance-pinned app regression fixtures, including an offline hash app generated with legacy CLI flags.
+- Remove unused vuex, @mdi/font, external vue-file-picker, and uglify-es dependency declarations; retain the local file-picker components.
 
 ### Changes:
 - Node and Python dev servers now bind to `127.0.0.1` by default. Use `--host 0.0.0.0` to expose a dev server on the local network.

@@ -28,7 +28,7 @@ Smallest browser example:
 
 ## Installation
 
-This checkout targets **0.9.0 for JavaScript and Python**. These repository changes are awaiting publication; registry installs may contain earlier behavior. The two packages share a major/minor compatibility line, with independent compatible patch releases. `schemaVersion` versions the descriptor format separately.
+JavaScript and Python are on **0.9.0**. The two packages share a major/minor compatibility line, with independent compatible patch releases. `schemaVersion` versions the descriptor format separately.
 
 To use the current checkout, run `npm install && npm run build`, then `node bin/jsee --help`. Install the maintained Python package with `python -m pip install ./py` after that build.
 
@@ -1463,7 +1463,7 @@ Serve credentials over HTTPS through a trusted TLS proxy, or use an SSH tunnel. 
 
 ### MCP over stdio
 
-Start one descriptor as an MCP tool with `jsee serve schema.json --mcp-only`. This mode uses stdin/stdout for MCP and stderr for model diagnostics; it opens no HTTP listener. Node requires Node.js 20+ and uses the official `@modelcontextprotocol/server` SDK (2.0.0). Native Python requires Python 3.10+ and the optional `server` extra (`mcp` 2.2.0); install the checkout with `python -m pip install './py[server]'` after the runtime build. Python's base installation remains stdlib-only.
+Start one descriptor as an MCP tool with `jsee serve schema.json --mcp-only`. This mode uses stdin/stdout for MCP and stderr for model diagnostics; it opens no HTTP listener. Node requires Node.js 20+ and uses the official `@modelcontextprotocol/server` SDK (2.0.0). Native Python requires Python 3.10+ and the optional `server` extra (`mcp` 2.2.0); install with `python -m pip install 'jsee[server]==0.9.0'`. For a source checkout, use `python -m pip install './py[server]'` after the runtime build. Python's base installation remains stdlib-only.
 
 Configure an MCP client to launch the installed `jsee` executable with arguments `['serve', '/absolute/path/schema.json', '--mcp-only']`. Use the executable belonging to the descriptor's language. For a Node checkout, use command `node` and prepend `/absolute/path/jsee/bin/jsee` to those arguments.
 

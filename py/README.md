@@ -4,7 +4,13 @@ Turn Python functions into web apps with auto-generated GUI and REST API. Zero d
 
 ## Install
 
-This checkout targets **0.9.0**, sharing the JavaScript package's major/minor line. Publication is pending. To use the current code, build and install from the main repository:
+JSEE **0.9.0** shares the JavaScript package's major/minor line.
+
+```bash
+python -m pip install jsee==0.9.0
+```
+
+To build and install from the main repository:
 
 ```bash
 npm install
@@ -89,7 +95,7 @@ Canonical serving defaults to same-origin requests. Legacy serving keeps public 
 
 ## MCP over stdio
 
-After building the checkout, install `python -m pip install './py[server]'` with Python 3.10+ (base Python support remains 3.9+). The extra pins the official `mcp` SDK to 2.2.0. Launch `jsee serve schema.json --mcp-only` from an MCP client to expose one Python descriptor as a tool without opening an HTTP listener.
+Install `python -m pip install 'jsee[server]==0.9.0'` with Python 3.10+ (base Python support remains 3.9+). For a source checkout, use `python -m pip install './py[server]'` after building the runtime. The extra pins the official `mcp` SDK to 2.2.0. Launch `jsee serve schema.json --mcp-only` from an MCP client to expose one Python descriptor as a tool without opening an HTTP listener.
 
 Discovery does not import model code. Calls return the same validated output/artifact envelope as JSON CLI/HTTP in `structuredContent` and JSON text. Failures set `isError` and return the failed envelope as text. File outputs include MCP resource links; read them through `resources/read` and verify the decoded blob against the envelope's size and SHA256. Artifact storage defaults to 64 MiB/1,024 files per session and cleans up on orderly close or SIGTERM; a crash can leave files. Reads return entire files, subject to the client's message limits.
 
