@@ -163,6 +163,7 @@ export interface Design {
   layout?: string
   framework?: string
   theme?: string
+  colorScheme?: 'auto' | 'light' | 'dark'
   primary?: string
   secondary?: string
   bg?: string

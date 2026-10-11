@@ -1,0 +1,62 @@
+/* Shared palette and form chrome; layout and domain renderers stay unchanged. */
+@mixin mono-dark {
+  --jsee-bg: #0c0c0c;
+  --jsee-bg-secondary: #161616;
+  --jsee-text: #ececec;
+  --jsee-text-secondary: #9a9a9a;
+  --jsee-border: #232323;
+  --jsee-card-bg: #0c0c0c;
+  --jsee-input-bg: #0c0c0c;
+  --jsee-input-border: #5f5f5f;
+  --jsee-primary: #ececec;
+  --jsee-primary-dark: #ececec;
+}
+@mixin theme {
+.jsee-app[data-theme="mono"] {
+  --jsee-bg: #fff;
+  --jsee-bg-secondary: #f6f6f5;
+  --jsee-text: #111111;
+  --jsee-text-secondary: #6e6e6e;
+  --jsee-border: #e8e8e6;
+  --jsee-card-bg: #fff;
+  --jsee-input-bg: #fff;
+  --jsee-input-border: #a6a6a6;
+  --jsee-primary: #111111;
+  --jsee-primary-dark: #111111;
+  --jsee-label-bg: transparent;
+  --jsee-disabled-bg: var(--jsee-bg-secondary);
+  --jsee-focus-border: var(--jsee-primary);
+  --jsee-focus-ring: transparent;
+  --jsee-toggle-active: var(--jsee-primary);
+  --jsee-radius: 4px;
+  line-height: 1.55;
+  font-variant-numeric: tabular-nums;
+  background: var(--jsee-bg);
+  .jsee-header { padding-bottom: 18px; border-bottom: 1px solid var(--jsee-border); margin-bottom: 28px; }
+  .jsee-title { font-size: 22px; font-weight: 500; letter-spacing: -.03em; }
+  .jsee-grid { gap: 32px; }
+  .jsee-card { border: 0; box-shadow: none; }
+  .jsee-card-body { padding: 0; }
+  #inputs .jsee-input-col { padding: 0; }
+  .jsee-card-footer, .jsee-card-footer.reset { background: var(--jsee-bg); border-radius: 0; gap: 8px; padding-top: 12px; }
+  .jsee-card-footer button { font: inherit; border: 1px solid var(--jsee-border); border-radius: var(--jsee-radius); color: var(--jsee-text); }
+  .jsee-card-footer .jsee-run-btn { background: var(--jsee-primary); color: var(--jsee-bg); }
+  .jsee-card-footer button:disabled { opacity: .5; cursor: not-allowed; }
+  .jsee-card-footer button:hover { opacity: .8; }
+  :deep(:focus-visible) { outline: 1px solid var(--jsee-focus-border); outline-offset: 3px; }
+  :deep(.jsee-field) { margin-bottom: 18px; }
+  :deep(.jsee-label) { display: block; padding: 0; margin: 0 0 7px; font-weight: 450; border-radius: 0; }
+  :deep(.jsee-input), :deep(.jsee-select), :deep(.jsee-textarea) { padding: 9px 11px; font-size: 14px; border-radius: var(--jsee-radius); }
+  :deep(.jsee-textarea) { line-height: 1.6; }
+  :deep(.jsee-checkbox-label), :deep(.jsee-radio-label) { font-size: 13px; color: var(--jsee-text-secondary); }
+  :deep(input[type="checkbox"]), :deep(input[type="radio"]) { accent-color: var(--jsee-primary); }
+  :deep(.jsee-output-card) { border: 0; border-radius: 0; }
+  :deep(.jsee-output-header) { padding: 8px 0; }
+  :deep(.jsee-output-body) { padding: 12px 0; }
+  :deep(.jsee-number-value) { font-weight: 450; letter-spacing: -.035em; }
+}
+.jsee-app[data-theme="mono"][data-color-scheme="dark"] { @include mono-dark; }
+@media (prefers-color-scheme: dark) {
+  .jsee-app[data-theme="mono"][data-color-scheme="auto"] { @include mono-dark; }
+}
+}

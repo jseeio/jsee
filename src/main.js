@@ -299,6 +299,33 @@ export default class JSEE {
     await this.app.$nextTick()
   }
 
+  async setDesign (patch) {
+    await this.ready
+    this._assertReady()
+    if (!utils.isRecordObject(patch)) throw new TypeError('Design patch must be an object')
+    for (const [key, value] of Object.entries(patch)) {
+      if (!['theme', 'colorScheme', 'primary', 'secondary', 'bg', 'fg', 'font', 'radius', 'grid', 'layout'].includes(key)) {
+        throw new TypeError('Unsupported design property: ' + key)
+      }
+      if (value === null) continue
+      if (key === 'colorScheme') {
+        if (!['auto', 'light', 'dark'].includes(value)) throw new TypeError('colorScheme must be auto, light or dark')
+      } else if (key === 'grid') {
+        if (!Array.isArray(value) || value.length !== 2 || value.some(n => !Number.isFinite(n) || n < 0) || !value.some(n => n > 0)) {
+          throw new TypeError('grid must contain two nonnegative numbers with a positive total')
+        }
+      } else if (key === 'radius' && typeof value === 'number') {
+        if (!Number.isFinite(value) || value < 0) throw new TypeError('radius must be nonnegative')
+      } else if (typeof value !== 'string') throw new TypeError(key + ' must be a string')
+    }
+    // Patch only presentation state: replacing a framework would remount controls.
+    // Copy before assignment so validation errors never partially apply a theme.
+    const design = { ...this.data.design, ...cloneSchema(patch) }
+    for (const [key, value] of Object.entries(design)) if (value === null) delete design[key]
+    this.data.design = design
+    await this.app.$nextTick()
+  }
+
   async setInputState (path, patch) {
     await this.ready
     const names = typeof path === 'string' ? [path] : path
@@ -1990,6 +2017,7 @@ export default class JSEE {
       else if (value !== undefined) field.default = value
       return field
     })
+    if (this.data.design) schema.design = cloneSchema(this.data.design)
     schema.inputs = capture(this.data.inputs)
     return schema
   }

@@ -84,7 +84,7 @@
     "prepublishOnly": "npm run build",
     "test": "npm run test:types && npm run test:unit && npm run test:e2e",
     "test:unit": "jest --config jest.unit.config.js",
-    "test:e2e": "npx playwright test test/test-basic.pw.js test/test-inputs.pw.js test/test-execution.pw.js",
+    "test:e2e": "npx playwright test test/test-basic.pw.js test/test-inputs.pw.js test/test-execution.pw.js test/test-theme.pw.js",
     "test:basic": "npx playwright test test/test-basic.pw.js",
     "test:inputs": "npx playwright test test/test-inputs.pw.js",
     "test:python": "npx playwright test test/test-python.pw.js test/test-python-apps.pw.js test/test-worker-offline.pw.js --workers=1",

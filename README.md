@@ -370,7 +370,8 @@ Use `columns` on inputs/outputs for dashboard-style layouts:
 - `design` — Design parameters
   - `layout` — Layout for the model/input/output blocks. If it's empty and the JSEE container is not, JSEE uses inner HTML as a template. If the container is empty too, it uses the default `blocks` template. Set `'sidebar'` for a fixed-width (280px) sticky input panel — inputs stay visible while scrolling outputs. Collapses to single column on mobile. `grid` sets its column split; a host that places the app below its own header can bound the panel with the `--jsee-sidebar-max-height` CSS variable (default `100vh`)
   - `framework` — Design framework to use (`'minimal'` by default). If a JavaScript object with the same name is present in a global context, JSEE loads it too (using Vue's `use` method)
-  - `theme` — Color theme. Set `'dark'` for dark mode
+  - `theme` — Visual preset: default minimal, or `'mono'` for monochrome controls, quiet headings and flat cards. Mono uses system colors by default. Existing `'dark'` selects the minimal dark palette; `'auto'` selects minimal with system colors
+  - `colorScheme` — `'light'`, `'dark'` or `'auto'`; overrides the preset's default. Auto follows system changes without JavaScript listeners. Applies separately to each app and its host regions
   - `primary` — Accent color (buttons, toggles, gradient). Hex string, e.g. `'#e74c3c'`
   - `secondary` — Second gradient color. Defaults to a darker shade of `primary`
   - `bg` — Background color. Derives card, input, and border colors automatically
@@ -379,6 +380,23 @@ Use `columns` on inputs/outputs for dashboard-style layouts:
   - `radius` — Border radius in pixels (number) or CSS value (string)
   - `grid` (array) — 12-column grid split for input/output sections. E.g. `[4, 8]` (default), `[6, 6]` (equal), `[3, 9]`. Values are `fr` units
   - All components use CSS custom properties that can be overridden via CSS: `--jsee-primary`, `--jsee-bg`, `--jsee-text`, `--jsee-text-secondary`, `--jsee-border`, `--jsee-input-bg`, `--jsee-input-border`, `--jsee-focus-border`, `--jsee-focus-ring`, `--jsee-card-bg`, `--jsee-bg-secondary`, `--jsee-label-bg`, `--jsee-error`, `--jsee-radius`
+Update appearance on an existing browser instance:
+
+```js
+await app.setDesign({ theme: 'mono', colorScheme: 'auto' })
+await app.setDesign({ colorScheme: 'dark' })
+```
+
+`setDesign(patch)` merges the existing reactive `design` state, waits for the DOM
+update, and preserves inputs, workers and renderer instances. It accepts `theme`,
+`colorScheme`, `primary`, `secondary`, `bg`, `fg`, `font`, `radius`, `grid` and
+`layout`; `null` removes an override. It cannot replace `framework`. Invalid
+patches apply nothing. `getSchema()` and exports include the current design.
+Explicit design colors override preset colors. Changes affect only this instance,
+not the host page or other apps; hosts own their theme switch and saved preference.
+See `examples/mono-theme.html` for a standalone switch. No external fonts or CSS
+are required.
+
 - `inputs` — Inputs definition
   - `name`* — Name of the input
   - `type`* — Type. Possible types:

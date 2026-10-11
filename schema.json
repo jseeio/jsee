@@ -192,6 +192,7 @@
         "layout": { "type": "string" },
         "framework": { "type": "string" },
         "theme": { "type": "string" },
+        "colorScheme": { "enum": ["auto", "light", "dark"] },
         "primary": { "type": "string" },
         "secondary": { "type": "string" },
         "bg": { "type": "string" },

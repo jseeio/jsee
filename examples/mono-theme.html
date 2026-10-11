@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mono theme · JSEE</title>
+<style>
+  body { margin: 0; padding: 24px; font: 14px system-ui, sans-serif; }
+  main { max-width: 1000px; margin: auto; }
+  nav { margin-bottom: 24px; display: flex; gap: 12px; align-items: center; }
+</style>
+<main>
+  <nav><label for="scheme">Color scheme</label><select id="scheme"><option value="auto">System</option><option value="light">Light</option><option value="dark">Dark</option></select></nav>
+  <div id="app"></div>
+</main>
+<script src="../dist/jsee.core.js"></script>
+<script>
+  const app = new JSEE({ container: '#app', schema: {
+    persist: false, design: { theme: 'mono' },
+    model: { title: 'Sample summary', description: 'A computation with a quiet, monochrome interface.', worker: true,
+      code: function (data) { return { summary: data.name + ': ' + data.samples + ' samples', total: data.samples } } },
+    inputs: [
+      { name: 'name', type: 'string', default: 'Experiment' },
+      { name: 'samples', type: 'slider', min: 1, max: 100, default: 25 },
+      { name: 'method', type: 'select', options: ['Mean', 'Median'], default: 'Mean' },
+      { name: 'notes', type: 'text', default: 'Describe your observations.' },
+      { name: 'normalize', type: 'checkbox', default: true }
+    ],
+    outputs: [{ name: 'summary', type: 'string' }, { name: 'total', type: 'number' }]
+  } })
+  document.getElementById('scheme').onchange = event => app.setDesign({ colorScheme: event.target.value })
+</script>
+</html>

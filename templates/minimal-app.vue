@@ -1,4 +1,5 @@
 <style scoped lang="scss">
+@use './mono';
 .jsee-app {
   /* Theme variables — light (default) */
   --jsee-primary: #00d1b2;
@@ -182,7 +183,7 @@
   }
 }
 /* Dark theme overrides */
-.jsee-app[data-theme="dark"] {
+@mixin dark-palette {
   --jsee-bg: #1a1a1a;
   --jsee-bg-secondary: #222;
   --jsee-text: #e0e0e0;
@@ -195,18 +196,25 @@
   --jsee-focus-ring: rgba(72, 139, 199, 0.35);
   --jsee-toggle-active: #00d1b2;
 }
+.jsee-app[data-color-scheme="dark"] { @include dark-palette; color-scheme: dark; }
+.jsee-app[data-color-scheme="light"] { color-scheme: light; }
+.jsee-app[data-color-scheme="auto"] { color-scheme: light; }
+@media (prefers-color-scheme: dark) {
+  .jsee-app[data-color-scheme="auto"] { @include dark-palette; color-scheme: dark; }
+}
+@include mono.theme;
 </style>
 
 <template>
   <section>
-    <div class="jsee-app" :data-theme="design && design.theme ? design.theme : undefined" :style="designStyle">
+    <div class="jsee-app" :data-theme="design && design.theme" :data-color-scheme="colorScheme" :style="designStyle">
       <div class="jsee-header" v-if="model">
         <h2 class="jsee-title" v-if="model.title">{{ model.title }}</h2>
         <p class="jsee-description" v-if="model.description">{{ model.description }}</p>
       </div>
       <div class="jsee-grid" :data-layout="design && design.layout ? design.layout : undefined" :style="gridStyle">
         <component :is="regions.inputs ? Teleport : 'div'" :to="regions.inputs" :style="regions.inputGroups ? { display: 'none' } : undefined">
-        <div :class="{ 'jsee-app': regions.inputs }" :style="designStyle" :data-theme="design && design.theme">
+        <div :class="{ 'jsee-app': regions.inputs }" :style="designStyle" :data-theme="design && design.theme" :data-color-scheme="colorScheme">
           <!-- Inputs -->
           <div class="jsee-card">
             <div class="jsee-card-body" id="inputs" v-if="inputs && inputs.length > 0"
@@ -214,8 +222,9 @@
               <component v-for="(input, index) in inputs" :key="index"
                 :is="regions.inputGroups ? Teleport : 'div'" :to="regions.inputGroups">
               <div v-show="!regions.inputGroups || state.selectedInputGroup === input.name"
-                class="jsee-input-col" :data-theme="design && design.theme"
-                :style="input.columns ? { gridColumn: 'span ' + input.columns } : undefined"
+                class="jsee-input-col" :class="{ 'jsee-app': regions.inputGroups }"
+                :data-theme="design && design.theme" :data-color-scheme="colorScheme"
+                :style="[regions.inputGroups ? designStyle : undefined, input.columns ? { gridColumn: 'span ' + input.columns } : undefined]"
               >
                 <vue-input
                   v-bind:input="input"
@@ -267,7 +276,7 @@
         </div>
         </component>
         <component :is="regions.outputs ? Teleport : 'div'" :to="regions.outputs">
-        <div id="outputs" :class="{ 'jsee-app': regions.outputs }" :style="designStyle" :data-theme="design && design.theme">
+        <div id="outputs" :class="{ 'jsee-app': regions.outputs }" :style="designStyle" :data-theme="design && design.theme" :data-color-scheme="colorScheme">
           <!-- Outputs -->
           <div v-if="outputs" :class="{ 'jsee-12-grid': hasOutputColumns }">
             <div
@@ -358,6 +367,10 @@
       },
       debug () {
         return this.state.debug === true
+      },
+      colorScheme () {
+        const d = this.design || {}
+        return d.colorScheme || (d.theme === 'dark' ? 'dark' : ['mono', 'auto'].includes(d.theme) ? 'auto' : 'light')
       },
       designStyle () {
         const d = this.design
