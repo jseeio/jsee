@@ -28,6 +28,7 @@
 - Expose one computation through official-SDK MCP stdio in Node and optional Python jsee[server], with structured runs, lazy file resources and cross-SDK protocol tests.
 
 ### Fixes:
+- Separate Node CLI options from explicit model-input overrides. Preserve schema defaults and request values for colliding names such as `b` and `port`; keep aliases, positional inputs and locked form values without changing host options.
 - Preserve declared scores rows in native Python JSON/SSE responses instead of auto-converting them into tables; keep legacy table conversion for other lists.
 - Keep live setDesign updates reactive when the original schema omits design.
 - Exclude tests from the Python source distribution while retaining bundled runtime assets.

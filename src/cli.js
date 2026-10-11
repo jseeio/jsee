@@ -1788,7 +1788,7 @@ function getDataFromArgv (schema, argv, loadFiles=true) {
       }
       if (!inp.name) return
       const inputName = sanitizeName(inp.name)
-      if (inputName in argv) {
+      if (Object.prototype.hasOwnProperty.call(argv, inputName)) {
         switch (inp.type) {
           case 'file':
             if (!loadFiles) {
@@ -2373,7 +2373,6 @@ async function gen (pargv, returnHtml=false) {
   const argvDefault = {
     execute: 'auto', // execute the model code on the server (auto = server-side when serving local .js models)
     fetch: false, // bundle runtime, local code and imports into generated output
-    inputs: 'schema.json', // default input is schema.json in the current working directory
     port: 3000, // default port for the server
     host: '127.0.0.1', // bind dev server to localhost by default
     version: 'latest', // default version of JSEE runtime to use
@@ -2384,11 +2383,13 @@ async function gen (pargv, returnHtml=false) {
     run: false
   }
   const booleanArgs = ['help', 'h', 'html', 'client', 'serve', 'run']
-  let argv = minimist(pargv, {
+  const argv = minimist(pargv, {
     alias: argvAlias,
     default: argvDefault,
     boolean: booleanArgs,
   })
+  const explicitSchema = Object.prototype.hasOwnProperty.call(argv, 'inputs')
+  if (!explicitSchema) argv.inputs = 'schema.json'
   if (Object.values(hostOptions.options).some(value => value !== undefined) && (argv.run || argv.outputs && !argv.serve || returnHtml)) throw new Error('HTTP host options require serving')
 
   // ── jsee init <template> ──────────────────────────────────────────
@@ -2564,7 +2565,8 @@ Options:
 
 Data inputs:
   Positional args after the schema file are mapped to schema inputs in order.
-  Named args (--name=value) are matched to schema inputs by name.
+  Named args (--name=value) are matched to schema inputs by name or alias.
+  CLI option names/aliases are reserved; use positional data or JSON run for collisions.
   Values are auto-detected: numbers, JSON arrays/objects, file paths, or strings.
   Inputs set from the CLI are locked (non-editable) in the GUI.
 
@@ -2575,7 +2577,7 @@ Examples:
   jsee schema.json                  Start dev server with schema
   jsee @scope/app --serve           Start dev server from a JSEE app package
   jsee schema.json 42 hello         Pass positional data to first two inputs
-  jsee schema.json --a=100 --b=200  Pass named data inputs
+  jsee schema.json --x=100 --y=200  Pass named data inputs
   jsee schema.json data.csv         Pass a file path as input
   jsee schema.json -o app.html      Generate static HTML file
   jsee schema.json -o app.html --bundle  Generate self-contained HTML with bundled runtime
@@ -2594,7 +2596,9 @@ Documentation: https://jsee.org
   // Check if first positional arg is a file/directory or JSEE app package.
   let identityResult = null
   let packageInput = null
-  if (!imported && argv._.length > 0) {
+  let positionalOffset = 0
+  if (!imported && !explicitSchema && argv._.length > 0) {
+    positionalOffset = 1
     identityResult = generateIdentitySchema(argv._[0], process.cwd())
     if (!identityResult) {
       packageInput = resolveJseePackageInput(argv._[0], process.cwd())
@@ -2602,7 +2606,7 @@ Documentation: https://jsee.org
   }
 
   // Set argv.inputs to the first positional argument if it looks like a schema/script/package.
-  if (!identityResult && !packageInput && !imported && argv._.length > 0 && argv.inputs === argvDefault.inputs) {
+  if (!identityResult && !packageInput && !imported && !explicitSchema && argv._.length > 0) {
     argv.inputs = argv._[0]
   }
 
@@ -2688,56 +2692,48 @@ Documentation: https://jsee.org
   log('Schema path:', schemaPath)
   assertSchemaVersion(schema)
 
-  // Second pass over CLI arguments
-  // Iterate over schema inputs and update argv aliases
-  if (schema.inputs) {
-    schema.inputs.forEach((inp, inp_index) => {
-      if (inp.name) {
-        const inputName = sanitizeName(inp.name)
-        const inputAliases = []
-        if (inp.alias) inputAliases.push(...toArray(inp.alias))
-        if (inp.name !== inputName) inputAliases.push(inp.name)
-        if (inputAliases.length) {
-          argvAlias[inputName] = inputAliases
-        }
-        // Use positional arguments as schema input defaults
-        if (imported && argv._.length > inp_index) {
-          log('Using positional argument for input:', inputName, argv._[inp_index])
-          argvDefault[inputName] = detectArgValue(argv._[inp_index])
-        } else if (!imported && argv._.length > inp_index + 1) {
-          // Skip first positional arg (schema file), map rest to inputs
-          const val = argv._[inp_index + 1]
-          log('Using positional argument for input:', inputName, val)
-          argvDefault[inputName] = detectArgValue(val)
-        }
-        // We don't need to duplicate defaults here, as we handle them on the frontend
-        // else if (inp.default) {
-        //   argvDefault[inputName] = inp.default
-        // }
-      }
-    })
-  }
-  // Update argv with the new aliases and defaults
-  argv = minimist(pargv, {
-    alias: argvAlias,
-    default: argvDefault,
-    boolean: booleanArgs
+  // Host options and their defaults never become model data. Only schema-owned
+  // names/aliases participate in the input parse; reserved flags keep CLI meaning.
+  const reserved = new Set([
+    ...Object.keys(argvDefault), ...Object.keys(argvAlias),
+    ...Object.values(argvAlias).flat(), ...booleanArgs,
+    'max-body-bytes', 'max-artifact-bytes'
+  ])
+  const fields = []
+  const collectFields = inputs => (inputs || []).forEach(input => {
+    if (input.type === 'group' && !input.name) collectFields(input.elements)
+    else if (input.name) fields.push(input)
+  })
+  collectFields(schema.inputs)
+  const inputAliases = Object.create(null)
+  const bindings = fields.map(input => {
+    const names = [...new Set([sanitizeName(input.name), input.name, ...toArray(input.alias || [])])]
+      .filter(name => !reserved.has(name))
+    if (names.length > 1) inputAliases[names[0]] = names.slice(1)
+    return names[0]
+  })
+  const parsedInputs = minimist(pargv, { alias: inputAliases, boolean: booleanArgs })
+  const inputArgv = Object.create(null)
+  fields.forEach((input, index) => {
+    const name = sanitizeName(input.name)
+    const binding = bindings[index]
+    if (binding && Object.prototype.hasOwnProperty.call(parsedInputs, binding)) {
+      inputArgv[name] = parsedInputs[binding]
+    } else if (argv._.length > index + positionalOffset) {
+      inputArgv[name] = detectArgValue(argv._[index + positionalOffset])
+    }
   })
 
-  // Now deactivate the inputs present in argv
-  // If you set parameter on the command line, it should not be editable in the GUI
-  // E.g. file selected
-  const dataFromArgvWithoutFileLoading = getDataFromArgv(schema, argv, false)
+  // Explicit model values become locked defaults in the generated form. The
+  // same overrides are used by legacy one-shot and HTTP execution below.
+  const dataFromArgvWithoutFileLoading = getDataFromArgv(schema, inputArgv, false)
   log('Data from argv without file loading:', dataFromArgvWithoutFileLoading)
-  if (schema.inputs) {
-    schema.inputs.forEach(inp => {
-      // Here data contains unsanitized input names
-      if (inp.name in dataFromArgvWithoutFileLoading) {
-        inp.default = dataFromArgvWithoutFileLoading[inp.name]
-        inp.disabled = true // Deactivate the input if it's present in argv
-      }
-    })
-  }
+  fields.forEach(input => {
+    if (Object.prototype.hasOwnProperty.call(dataFromArgvWithoutFileLoading, input.name)) {
+      input.default = dataFromArgvWithoutFileLoading[input.name]
+      input.disabled = true
+    }
+  })
   log('Argv:', argv)
 
   // Bundle/offline generation
@@ -2756,7 +2752,7 @@ Documentation: https://jsee.org
     const data = Object.assign(
       {},
       getSchemaInputDefaults(schema),
-      getDataFromArgv(schema, argv, true)
+      getDataFromArgv(schema, inputArgv, true)
     )
     const result = await runSchemaOnce(schema, data, schemaPath, cwd, log)
     emitRunOutputs(schema, result, argv, outputs, process.cwd())
@@ -3201,7 +3197,7 @@ Documentation: https://jsee.org
           if (m.name in modelFuncs) {
             const modelFunc = modelFuncs[m.name]
             try {
-              const dataFromArgv = getDataFromArgv(schema, argv)
+              const dataFromArgv = getDataFromArgv(schema, inputArgv)
               const contentType = req.headers['content-type'] || ''
               let dataFromGUI = req.body
               if (contentType.includes('multipart/form-data') && Buffer.isBuffer(req.body)) {
