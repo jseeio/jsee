@@ -328,6 +328,32 @@ curl http://localhost:5050/api/openapi.json
 
 Nested serialization: when returning a dict, each value is serialized individually. A dict value that is `bytes` becomes a MIME-sniffed base64 data URL, a `list[dict]` value becomes `{columns, rows}` table format, etc. Declared `scores` outputs preserve their row arrays in both JSON and SSE responses, including output aliases and groups.
 
+### WSGI deployment
+
+For production deployment, use `create_app()` to get a standard WSGI application:
+
+```python
+# app.py
+import jsee
+
+def multiply(x: float = 5) -> dict:
+    return {'result': x * 2}
+
+app = jsee.create_app(multiply)
+```
+
+Deploy with gunicorn, uWSGI, or any WSGI server:
+```bash
+python -m pip install gunicorn
+gunicorn app:app
+```
+
+`create_app()` accepts the same arguments as `serve()` — functions, dicts, or schema.json paths. Async functions are awaited before JSON serialization. Sync and async generators stream SSE using the same framing and error handling as `serve()`. The WSGI host pulls one chunk at a time and must close the response iterable on disconnect so suspended generators can finish cleanup. Async generators retain one task and context through iteration and cleanup.
+
+Python stages from the same source file share one module instance within an application; separate applications load separate instances. Explicit model names must identify callables, and duplicate endpoint names fail before model code is imported. Unnamed models infer a public callable defined in that file and expose it at `/model`.
+
+
+
 ## Offline
 
 The JSEE runtime (`jsee.core.js` / `jsee.full.js`) is bundled with the package. The server auto-selects the bundle based on output types, so the built-in GUI needs no CDN. Your model, imports, and data may still require network access; provide those assets locally for an offline application.
@@ -388,57 +414,13 @@ jsee schema.json
 
 ### Data inputs
 
-Same as Node.js — positional args after the function name and `--key=value` args are mapped to function parameters. Values are auto-detected (numbers, JSON, file paths, strings). Inputs set from the CLI are locked in the GUI.
+Positional args after the function name and `--key=value` args are mapped to function parameters. Values are auto-detected (numbers, JSON, file paths, strings). Inputs set from the CLI are locked in the GUI.
 
 ```bash
 jsee example.py greet Alice 5          # positional data
 jsee example.py greet --name=Alice     # named data
 jsee schema.json 42 hello              # positional data with schema
 ```
-
-### API endpoints
-
-Every server (both Node.js with `--execute` and Python) exposes these endpoints:
-
-| Route | Method | Description |
-|---|---|---|
-| `/` | GET | Interactive GUI |
-| `/api` | GET | Schema and endpoint discovery |
-| `/api/openapi.json` | GET | Auto-generated OpenAPI 3.1 spec |
-| `/{modelName}` | POST | Execute model with JSON or multipart input |
-
-Both servers support `application/json` and `multipart/form-data` POST bodies, CORS (`Access-Control-Allow-Origin: *`), and return JSON errors for invalid requests. The Node dev server accepts JSON and multipart request bodies up to 50 MiB. Python `serve()` and `create_app()` share request decoding and default to the same 50 MiB limit; set a positive `max_body_bytes` or the Python CLI's `--max-body-bytes` to change it. Invalid lengths or input values return 400; declared oversized bodies return 413 before reading the body. This size limit does not provide execution isolation or a request deadline. Python `serve()` runs with a threaded dev server, awaits async model functions, and streams sync or async generator functions as SSE when `stream=True`.
-
-The OpenAPI spec is generated from the same schema contract: request bodies include JSON inputs and multipart file uploads, responses include declared output properties (including outputs nested in groups), streaming models advertise `text/event-stream`, `schema.examples` become request examples, and standard JSON error responses are documented. This is descriptive only; the runtime response payload remains backward-compatible.
-
-```bash
-# Run the model via API (JSON)
-curl -X POST http://localhost:3000/modelName \
-  -H 'Content-Type: application/json' \
-  -d '{"x": 3, "y": 4}'
-
-# Run with file upload (multipart)
-curl -X POST http://localhost:3000/modelName \
-  -F 'text=hello' \
-  -F 'file=@image.png'
-
-# Get OpenAPI spec
-curl http://localhost:3000/api/openapi.json
-```
-
-#### Return value serialization
-
-Both servers normalize model return values consistently:
-
-| Return type | JSON response |
-|---|---|
-| Object/dict | returned as-is |
-| Primitive (number, string, bool) | `{"result": value}` |
-| Tuple/list (Python) | `{"result": [a, b]}` |
-| Buffer/bytes | MIME-sniffed data URL, e.g. `{"result": "data:application/pdf;base64,..."}` |
-| PIL Image (Python) | `{"result": "data:image/png;base64,..."}` |
-| list[dict] (Python) | `{"result": {"columns": [...], "rows": [...]}}` |
-
 
 ## Development
 

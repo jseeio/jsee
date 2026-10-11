@@ -2,6 +2,8 @@
 
 One computation, a web UI, a command line and an agent tool.
 
+[Python documentation](py/README.md)
+
 Describe inputs, outputs and a model in a JSON schema. JSEE builds the form, runs the model and displays its results. The same descriptor can expose a supported model through a CLI, HTTP API or MCP tool. JavaScript runs in the browser or Node.js; Python runs through Pyodide in the browser or natively on a Python server.
 
 ```text
@@ -20,7 +22,7 @@ Describe inputs, outputs and a model in a JSON schema. JSEE builds the form, run
 - [Schema](#schema), [inputs](#inputs), [outputs](#outputs) and [styling](#design)
 - [Browser API](#jsee-instance-api), [renderers](#persistent-output-renderers) and [embedding](#host-owned-regions)
 - [CLI and HTTP](#json-commands-and-canonical-http), [authentication](#http-authentication-and-cors), [MCP](#mcp-over-stdio) and [offline bundles](#--bundle)
-- [Python](#python) and [Python CLI](#cli--python)
+- [Python guide](py/README.md) and [Python CLI](py/README.md#cli--python)
 - [Status and limitations](#status-and-limitations), [development](#development) and [changelog](#changelog)
 
 ## Try it in the browser
@@ -117,7 +119,7 @@ curl http://localhost:5050/multiply \
   -d '{"a":3,"b":4}'
 ```
 
-The response is `{"result":12.0}`. Stop the server with Ctrl+C. For the shared `/run` endpoint and an MCP tool, use a file-backed descriptor as shown in the [tutorial](#use-python-instead). See [Python](#python) below for serving and WSGI deployment; the package’s [Python README](py/README.md) also covers annotations and schema generation.
+The response is `{"result":12.0}`. Stop the server with Ctrl+C. For the shared `/run` endpoint and an MCP tool, use a file-backed descriptor as shown in the [tutorial](#use-python-instead). See the [Python README](py/README.md) for annotations, schema generation, streaming and WSGI deployment.
 
 ## How it works
 
@@ -141,11 +143,11 @@ Create an empty directory and run `npm install @jseeio/jsee`. Save these two fil
   "schemaVersion": 1,
   "id": "multiply",
   "title": "Multiply two numbers",
-  "description": "Multiply left and right and produce a downloadable text report.",
+  "description": "Multiply a and b and produce a downloadable text report.",
   "model": { "url": "model.js", "name": "multiply", "worker": true },
   "inputs": [
-    { "name": "left", "type": "float", "default": 3 },
-    { "name": "right", "type": "float", "default": 4 }
+    { "name": "a", "type": "float", "default": 3 },
+    { "name": "b", "type": "float", "default": 4 }
   ],
   "outputs": [
     { "name": "product", "type": "number" },
@@ -157,9 +159,9 @@ Create an empty directory and run `npm install @jseeio/jsee`. Save these two fil
 `model.js`:
 
 ```js
-function multiply({ left, right }) {
-  const product = left * right
-  return { product, report: `${left} × ${right} = ${product}\n` }
+function multiply({ a, b }) {
+  const product = a * b
+  return { product, report: `${a} × ${b} = ${product}\n` }
 }
 
 if (typeof module !== 'undefined') module.exports = multiply
@@ -180,7 +182,7 @@ Open `http://localhost:3000` and click **Run**. The default inputs produce `12` 
 Save `input.json`:
 
 ```json
-{"left":3,"right":4}
+{"a":3,"b":4}
 ```
 
 Inspect the interface, validate the descriptor, then execute:
@@ -245,7 +247,7 @@ In an MCP client that supports local stdio servers, add a server entry like the 
 }
 ```
 
-Restart or reconnect the client. Ask it to call `multiply` with `left: 3` and `right: 4`. The tool returns `product: 12`, the report handle and artifact metadata. An MCP resource read retrieves the report bytes. JSEE uses stdin/stdout for the protocol and opens no HTTP port in this mode; do not send ordinary terminal input to that process.
+Restart or reconnect the client. Ask it to call `multiply` with `a: 3` and `b: 4`. The tool returns `product: 12`, the report handle and artifact metadata. An MCP resource read retrieves the report bytes. JSEE uses stdin/stdout for the protocol and opens no HTTP port in this mode; do not send ordinary terminal input to that process.
 
 The agent calls the computation described by your schema. JSEE does not need an LLM SDK or API key. Tool access and approval settings belong to your MCP client. See [MCP over stdio](#mcp-over-stdio) for upload chunks, quotas and session lifetime.
 
@@ -266,9 +268,9 @@ For models using API calls, external weights, dynamic imports or Python packages
 Install `python -m pip install jsee` and save this as `model.py` alongside the descriptor:
 
 ```python
-def multiply(left: float, right: float) -> dict:
-    product = left * right
-    return {'product': product, 'report': f'{left:g} × {right:g} = {product:g}\n'}
+def multiply(a: float, b: float) -> dict:
+    product = a * b
+    return {'product': product, 'report': f'{a:g} × {b:g} = {product:g}\n'}
 ```
 
 In `schema.json`, replace only `model` with:
@@ -1390,14 +1392,14 @@ Positional arguments after the schema file and named `--key=value` arguments are
 | `data.csv` (existing file) | File path |
 | `hello` | String |
 
-Inputs set from the CLI are locked (non-editable) in the GUI and used as defaults for server-side execution.
+Inputs explicitly set from the CLI are locked (non-editable) in the GUI and used as defaults for server-side execution. CLI options and their aliases are reserved: `--port`/`-p` configure the server even if the schema has an input named `port` or `p`. To override a colliding input such as `b`, pass positional values (`jsee schema.json 3 4` for inputs `a`, `b`), declare a non-conflicting input alias, or use JSON with `jsee run`. CLI option defaults never change model defaults. Unnamed groups use their child fields in positional order.
 
 ```bash
 # Positional — mapped to inputs in schema order
 jsee schema.json 42 hello
 
 # Named — matched by input name
-jsee schema.json --a=100 --b=200
+jsee schema.json --x=100 --y=200
 
 # File path
 jsee schema.json data.csv
@@ -1459,60 +1461,7 @@ Results retain accumulated pipeline data, including intermediate values. Only re
 
 This interface supports local JS functions/classes/async initializers and native Python sync/async functions in files. Python uses keyword binding by default and schema input order for `container: 'args'`. Python stages retain the loader's unique-name requirement. Schema imports, remote models, and streaming are rejected explicitly; normal imports inside model source remain usable. Calls execute on the caller's thread without forced interruption, worker isolation, or enforcement of browser timeout/security flags.
 
-## CLI — Python
-
-```
-jsee <target> [function] [data...] [options]
-jsee init [template]
-```
-
-### Commands
-
-#### `jsee init [template]`
-
-Scaffold a new project. Templates: `minimal` (default), `chat`. Generates `schema.json` + `model.py` + `README.md`.
-
-```bash
-jsee init                   # minimal template
-jsee init chat              # chat template
-```
-
-#### `jsee <file.py> <function> [data...]`
-
-Serve a Python function as a web app with auto-generated GUI and REST API.
-
-```bash
-jsee example.py greet                  # serve function
-jsee example.py greet --port=8080      # custom port
-```
-
-#### `jsee <schema.json>`
-
-Serve from a pre-built schema file.
-
-```bash
-jsee schema.json
-```
-
-### Options
-
-| Flag | Description |
-|---|---|
-| `--host <addr>` | Host to bind to (default: `127.0.0.1`; use `0.0.0.0` to expose on the local network) |
-| `--port <number>` | Port to listen on (default: `5050`) |
-| `--max-body-bytes <number>` | Positive request body limit in bytes (default: `52428800`, 50 MiB) |
-
-### Data inputs
-
-Same as Node.js — positional args after the function name and `--key=value` args are mapped to function parameters. Values are auto-detected (numbers, JSON, file paths, strings). Inputs set from the CLI are locked in the GUI.
-
-```bash
-jsee example.py greet Alice 5          # positional data
-jsee example.py greet --name=Alice     # named data
-jsee schema.json 42 hello              # positional data with schema
-```
-
-### API endpoints
+### Legacy HTTP endpoints
 
 Every server (both Node.js with `--execute` and Python) exposes these endpoints:
 
@@ -1555,61 +1504,12 @@ Both servers normalize model return values consistently:
 | PIL Image (Python) | `{"result": "data:image/png;base64,..."}` |
 | list[dict] (Python) | `{"result": {"columns": [...], "rows": [...]}}` |
 
+
+<a id="cli--python"></a>
+
 ## Python
 
-JSEE also ships a Python package (`py/`) that turns Python functions into web apps with the same GUI and API. Zero dependencies beyond Python stdlib.
-
-Install the published package:
-
-```bash
-python -m pip install jsee
-```
-
-Or programmatically:
-```python
-from typing import Annotated, Literal
-import jsee
-
-def calculator(
-    num1: float,
-    op: Literal['add', 'subtract', 'multiply', 'divide'],
-    num2: float,
-    precision: Annotated[int, jsee.Slider(0, 10)] = 2
-) -> dict:
-    """A simple calculator"""
-    ops = {'add': num1 + num2, 'subtract': num1 - num2,
-           'multiply': num1 * num2, 'divide': num1 / num2 if num2 else 0}
-    return {'result': round(ops[op], precision)}
-
-if __name__ == '__main__':
-    jsee.serve(calculator, port=5050)
-```
-
-Python type hints are auto-mapped to GUI widgets: `Literal` → dropdown, `Annotated[float, jsee.Slider()]` → slider, `bool` → checkbox, `Enum` → dropdown. See [`py/README.md`](py/README.md) for full Python documentation.
-
-### WSGI deployment
-
-For production deployment, use `create_app()` to get a standard WSGI application:
-
-```python
-# app.py
-import jsee
-
-def multiply(x: float = 5) -> dict:
-    return {'result': x * 2}
-
-app = jsee.create_app(multiply)
-```
-
-Deploy with gunicorn, uWSGI, or any WSGI server:
-```bash
-gunicorn app:app
-```
-
-`create_app()` accepts the same arguments as `serve()` — functions, dicts, or schema.json paths. Async functions are awaited before JSON serialization. Sync and async generators stream SSE using the same framing and error handling as `serve()`. The WSGI host pulls one chunk at a time and must close the response iterable on disconnect so suspended generators can finish cleanup. Async generators retain one task and context through iteration and cleanup.
-
-Python stages from the same source file share one module instance within an application; separate applications load separate instances. Explicit model names must identify callables, and duplicate endpoint names fail before model code is imported. Unnamed models infer a public callable defined in that file and expose it at `/model`.
-
+The [Python README](py/README.md) covers installation, type annotations, schema generation, CLI commands, streaming and WSGI deployment. The [Python quick start](#python-serve-a-function) above is a complete runnable example.
 
 ## Status and limitations
 
