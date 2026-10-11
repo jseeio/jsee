@@ -32,6 +32,10 @@ This checkout targets **0.9.0 for JavaScript and Python**. These repository chan
 
 To use the current checkout, run `npm install && npm run build`, then `node bin/jsee --help`. Install the maintained Python package with `python -m pip install ./py` after that build.
 
+Use Node.js 20+ for the npm CLI and Python 3.9+ for the base Python package; Python MCP requires 3.10+ and the `server` extra. Prepared Python packages include the browser runtime and do not require Node.js. Models may need additional dependencies.
+
+Browser regression tests currently qualify Chromium. Firefox and WebKit are not yet qualified. The CSP matrix below covers JavaScript execution; strict Python/WASM CSP deployments need separate verification. Native Python does not support identified pipeline stages; see the execution capabilities below before moving a browser schema to a server.
+
 **Browser CDN:**
 
 ```html
@@ -431,7 +435,7 @@ are required.
   - `display` (string) — Filtrex expression to conditionally show/hide this input. Evaluated against current input values. E.g. `"display": "mode == 'advanced'"` shows the input only when `mode` is `"advanced"`. Supports `len()` for string length
   - `reactive` (boolean) — Trigger a model run when this input changes (see **Execution triggers** below)
   - `disabled` (boolean) — Disables the input in the UI. Built-in input controls, selectors, folder selection checkboxes, and action buttons honor this flag. When combined with `reactive: true`, triggers an initial model run on page load (useful for server-populated values)
-  - `readonly` (boolean) — Prevent editing in the table/JSON/media controls while retaining the current value
+  - `readonly` (boolean) — Prevent editing while retaining the current value; controls without native readonly support are disabled
   - `accept` (string) — File/media MIME types, wildcards or extensions, separated by commas; checked against file selection and stored artifact metadata
   - `enter` (boolean) — If `true` on a `string` input, pressing Enter triggers a model run (useful for chat or search inputs)
   - `raw` (boolean, file input only) — If `true`, pass the raw source to the model instead of reading text in the UI (`File` object for disk files or `{ kind: 'url', url: '...' }` for URL input)

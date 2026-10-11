@@ -196,6 +196,8 @@ jsee.serve(report, outputs={'summary': jsee.Markdown(), 'data': jsee.Table()})
 | `jsee.Svg()` | `svg` | Inline SVG |
 | `jsee.File(filename)` | `file` | Download button |
 
+Output dictionaries/lists also accept the shared schema types without annotation helpers. For ranked scores, use `outputs=[{'name': 'predictions', 'type': 'scores', 'format': 'percent'}]` and return `{'predictions': [{'label': 'cat', 'score': 0.72}]}`. Canonical CLI/HTTP/MCP preserve row order and numeric values; the browser sorts the display. Scores must be finite. See the [shared output reference](../README.md#schema).
+
 Auto-detected output types:
 - `-> list` → `table` (list-of-dicts auto-converted to `{columns, rows}` format)
 - `-> bytes` → runtime auto-detection from a MIME-sniffed data URL
@@ -276,9 +278,13 @@ schema = jsee.generate_schema(predict)
 schema['inputs'][1]['min'] = 0.0
 schema['inputs'][1]['max'] = 2.0
 schema['inputs'][1]['type'] = 'slider'
-# Serve customized schema with function
-jsee.serve(predict, port=5050)
+# Save the browser descriptor for a separately served function
+import json
+schema['model']['url'] = 'http://localhost:5050/predict'
+print(json.dumps(schema, indent=2))
 ```
+
+Serve `predict` separately with `jsee.serve(predict, port=5050)`. The generated descriptor calls that endpoint; editing it does not change a later `serve(predict)` call. For a customized native server descriptor, declare a local Python model file and pass that descriptor to `serve()`.
 
 ### Server endpoints
 
@@ -328,7 +334,7 @@ curl http://localhost:5050/api/openapi.json
 | PIL `Image` | base64 image (auto-detected) |
 | `list[dict]` | table format: `{"result": {"columns": [...], "rows": [...]}}` |
 
-Nested serialization: when returning a dict, each value is serialized individually. A dict value that is `bytes` becomes a MIME-sniffed base64 data URL, a `list[dict]` value becomes `{columns, rows}` table format, etc.
+Nested serialization: when returning a dict, each value is serialized individually. A dict value that is `bytes` becomes a MIME-sniffed base64 data URL, a `list[dict]` value becomes `{columns, rows}` table format, etc. Declared `scores` outputs preserve their row arrays in both JSON and SSE responses, including output aliases and groups.
 
 ## Offline
 
