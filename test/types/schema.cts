@@ -1,3 +1,4 @@
+import { imageView } from '@jseeio/jsee/image-view'
 import { Schema, Input, Output, Model, ModelContext, prepareInputs, cloneSchema } from '@jseeio/jsee/schema'
 
 const schema: Schema = {
@@ -53,3 +54,6 @@ const renderer: import('@jseeio/jsee/schema').OutputRenderer<{ count: number }> 
 const renderers: import('@jseeio/jsee/schema').RendererRegistry = { count: renderer }
 const renderedOutput: Output = { name: 'count', type: 'object', renderer: 'count' }
 void renderers; void renderedOutput
+
+const imageRenderer: import('@jseeio/jsee/schema').OutputRenderer<import('@jseeio/jsee/image-view').ImageViewData> = imageView
+void imageRenderer

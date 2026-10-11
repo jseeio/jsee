@@ -828,6 +828,74 @@ selectable sensor table and a chart keep selection and scale across worker runs.
 TypeScript helpers `OutputRenderer<T>`, `RendererView<T>` and `RendererRegistry`
 are exported from `@jseeio/jsee/schema`.
 
+### Image annotations and source coordinates
+
+`JSEE.imageView(container, initial, options)` is a reusable renderer factory.
+Bundled hosts can import `{ imageView }` from `@jseeio/jsee/image-view`. Register
+it under an application name, or mount it directly in a host-owned region and
+call `dispose()` when that region is removed. The same update/dispose lifecycle
+works in both cases. [The annotation example](examples/image-annotations/index.html)
+uses worker results, a mask, a box and a point without ML dependencies.
+
+```js
+const view = JSEE.imageView(container, {
+  source: imageFile, revision: 1,
+  boxes: [{ x: 10, y: 20, width: 100, height: 80, color: '#fff' }],
+  points: [{ x: 60, y: 60 }],
+  masks: [{ width: 1, height: 1, data: [255, 0, 0, 255],
+    extent: { x: 10, y: 20, width: 100, height: 80 }, opacity: 0.4 }]
+}, { onSelect: ({ x, y, revision }) => console.log(x, y, revision) })
+await view.ready
+view.setViewport({ zoom: 2, panX: 10, panY: 0 })
+view.update({ revision: 1, points: [{ x: 70, y: 60 }] })
+```
+
+Coordinates refer to the decoded/oriented source image, independent of screen
+size or device pixel ratio. Masks are row-major RGBA bytes with explicit grid
+width/height and an `extent` in source pixels; JSEE does not infer mask scaling,
+decode model tensors or normalize scores. Masks paint without interpolation.
+Boxes and point markers use the same source coordinates. `fit` is `contain`
+by default; `cover` and `fill` are also supported. `mirror: true` flips source
+presentation and its coordinate mapping together. Pan offsets are CSS pixels.
+
+`sourceToClient({x,y})` and `clientToSource({x,y})` map to/from viewport CSS
+coordinates; the latter includes `inside` and does not clamp letterbox clicks
+onto an image edge. Mapping returns `null` before source pixels are available.
+Transform precision does not undo pointer-event rounding when a large image is
+scaled down. `onSelect` reports source coordinates and the current revision;
+it does not execute a model. Hosts can use `setInputs` and invoke explicitly.
+`setSelection(pointOrNull)` changes the marker without emitting another click.
+
+Every new source requires an increasing nonnegative integer `revision`.
+Updates for older revisions return `false`. An update at the current revision
+can replace boxes, points or masks; omitted fields remain unchanged. Use empty
+arrays to clear layers. Changing the source with the same revision throws.
+A new revision clears the prior layers, selection, zoom and pan. Annotation-only
+updates keep that state. Use `getState()` to read viewport and selection.
+
+Sources may be URLs, Blobs/Files, bitmaps, canvases, or image/video elements.
+URL/Blob decoding is asynchronous; `ready` resolves `true` when the current load
+is accepted, or `false` on failure/supersession. `onError` receives load failures.
+Owned decoded bitmaps close on replacement/disposal, including late loads;
+caller-supplied bitmaps and media elements remain caller-owned. Dispose releases
+observers/listeners and view references. This is browser presentation, not a
+new model input/output transport; borrowed bitmap execution restrictions remain.
+
+For an existing image/video, use `{ overlay: true }` and set `source` to that
+element. The view paints only annotations and follows the media element's
+object-fit box and pixel/percentage object-position on resize/load. The host owns playback, positioning and
+viewport transforms; `setViewport` is unavailable in overlay mode. Match
+`mirror` to the host's horizontal mirroring. Arbitrary CSS rotations and
+calculated (`calc()`) object-position are not supported. `{ canvas }` optionally reuses
+a host canvas; disposal clears it and restores its style instead of removing it.
+Give the container a height when a specific display area is required.
+
+The helper owns asynchronous image loading and stale-revision checks, not model
+inference. It does not repaint live video continuously in owned-image mode;
+use overlay mode on a playing video. Heatmaps, annotation editing and a gesture
+UI for pan/zoom remain outside this API. Host renderer bundling restrictions
+from the preceding section still apply.
+
 ### Named stages in the existing pipeline
 
 Composers flatten tool schemas into ordinary `model` entries, input groups and

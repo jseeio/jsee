@@ -29,6 +29,7 @@ const notyf = new Notyf({
 
 const Overlay = require('./overlay')
 const ImageInput = require('./image-input')
+const { imageView } = require('./image-view')
 const { imageFrames, withImageFrames, assertFrameResult } = require('./image-frame')
 
 require('notyf/notyf.min.css')
@@ -143,6 +144,8 @@ function applySecurityToInputs (inputs, security) {
 }
 
 export default class JSEE {
+  static imageView (container, value, options) { return imageView(container, value, options) }
+
   constructor (params, alt1, alt2) {
     // Check if JSEE was initialized with args rather than with a params object
     // So two ways to init JSEE:

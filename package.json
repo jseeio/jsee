@@ -48,7 +48,11 @@
     "./schema.json": "./schema.json",
     "./dist/jsee.worker.mjs": "./dist/jsee.worker.mjs",
     "./dist/jsee.worker.js": "./dist/jsee.worker.js",
-    "./pipeline": "./src/pipeline.js"
+    "./pipeline": "./src/pipeline.js",
+    "./image-view": {
+      "types": "./src/image-view.d.ts",
+      "default": "./src/image-view.js"
+    }
   },
   "unpkg": "dist/jsee.core.js",
   "jsdelivr": "dist/jsee.core.js",

@@ -2147,3 +2147,169 @@ for (const registered of [false, true]) for (const initial of [false, true]) tes
   }, { registered, initial })
   expect(result).toEqual({ disposed: 1, empty: true, listeners: 0 })
 })
+
+for (const deviceScaleFactor of [1, 2]) for (const width of [390, 1000]) test(`image view preserves source coordinates and selection at width ${width}, DPR ${deviceScaleFactor}`, async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width, height: 800 }, deviceScaleFactor })
+  const page = await context.newPage()
+  try {
+    await page.goto('/load/')
+    const result = await page.evaluate(async () => {
+      const container = document.createElement('div'); container.style.cssText = 'width:80vw;height:300px;margin:20px'; document.body.append(container)
+      const source = document.createElement('canvas'); source.width = 800; source.height = 400
+      source.getContext('2d').fillRect(0, 0, 800, 400)
+      const picks = [], view = JSEE.imageView(container, { source, revision: 1, mirror: true }, { onSelect: point => picks.push(point) })
+      await view.ready
+      view.setViewport({ zoom: 1.5, panX: 7, panY: -9 })
+      const target = { x: 360, y: 220 }, point = view.sourceToClient(target)
+      // MouseEvent init rounds CSS coordinates; retain exact source probes separately from physical pointer precision.
+      const click = new MouseEvent('click')
+      Object.defineProperties(click, { clientX: { value: point.x }, clientY: { value: point.y } })
+      container.querySelector('canvas').dispatchEvent(click)
+      const selected = view.getState(), back = view.clientToSource(point)
+      view.update({ revision: 1, boxes: [{ x: 40, y: 30, width: 100, height: 80 }] })
+      const kept = view.getState(), before = container.querySelector('canvas')
+      container.style.width = '200px'; await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame)
+      const resizedPoint = view.sourceToClient(target), resized = view.clientToSource(resizedPoint)
+      view.update({ revision: 2, source })
+      const reset = view.getState(), stale = view.update({ revision: 1, points: [{ x: 1, y: 2 }] })
+      const stableCanvas = before === container.querySelector('canvas'), raster = [before.width, before.getBoundingClientRect().width * window.devicePixelRatio]
+      view.dispose(); view.dispose()
+      return { selected, kept, back, resized, reset, stale, stableCanvas, picks, raster, remaining: container.children.length }
+    })
+    expect(result.back.x).toBeCloseTo(360, 6); expect(result.back.y).toBeCloseTo(220, 6)
+    expect(result.resized.x).toBeCloseTo(360, 6); expect(result.resized.y).toBeCloseTo(220, 6)
+    expect(result.picks).toHaveLength(1)
+    expect(Math.abs(result.picks[0].x - 360)).toBeLessThan(1)
+    expect(Math.abs(result.picks[0].y - 220)).toBeLessThan(1)
+    expect(result.kept).toEqual(result.selected)
+    expect(result.reset).toEqual({ revision: 2, zoom: 1, panX: 0, panY: 0, selection: null })
+    expect(result).toMatchObject({ stale: false, stableCanvas: true, remaining: 0 })
+    expect(Math.abs(result.raster[0] - result.raster[1])).toBeLessThanOrEqual(1)
+  } finally { await context.close() }
+})
+
+test('image masks use explicit source extents and reject invalid updates atomically', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const container = document.createElement('div'); container.style.cssText = 'width:200px;height:200px'; document.body.append(container)
+    const source = document.createElement('canvas'); source.width = 200; source.height = 100
+    const ctx = source.getContext('2d'); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 200, 100)
+    const mask = { width: 1, height: 1, data: [255, 0, 0, 255], extent: { x: 50, y: 25, width: 100, height: 50 } }
+    const view = JSEE.imageView(container, { revision: 1, source, masks: [mask] })
+    await view.ready
+    const canvas = container.querySelector('canvas'), context = canvas.getContext('2d')
+    const center = Array.from(context.getImageData(100, 100, 1, 1).data), outside = Array.from(context.getImageData(20, 100, 1, 1).data)
+    const errors = []
+    for (const invalid of [{ ...mask, extent: undefined }, { ...mask, data: [1, 2] }, { ...mask, data: [NaN, 0, 0, 255] }]) {
+      try { view.update({ revision: 1, masks: [invalid] }) } catch (error) { errors.push(error.message) }
+    }
+    const unchanged = Array.from(context.getImageData(100, 100, 1, 1).data)
+    view.update({ revision: 1, masks: [{ ...mask, opacity: 0.5 }] })
+    const faded = Array.from(context.getImageData(100, 100, 1, 1).data)
+    view.dispose()
+    return { center, outside, errors, unchanged, faded }
+  })
+  expect(result.center).toEqual([255, 0, 0, 255]); expect(result.outside).toEqual([0, 0, 0, 255])
+  expect(result.unchanged).toEqual(result.center); expect(result.errors).toHaveLength(3)
+  expect(result.faded[0]).toBeGreaterThanOrEqual(127); expect(result.faded[0]).toBeLessThanOrEqual(128)
+})
+
+test('image view closes late owned decodes and preserves borrowed sources', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const source = document.createElement('canvas'); source.width = source.height = 20
+    const borrowed = await createImageBitmap(source), late = await createImageBitmap(source)
+    const create = window.createImageBitmap; let resolve
+    window.createImageBitmap = () => new Promise(done => { resolve = done })
+    const container = document.createElement('div'); container.style.cssText = 'width:100px;height:100px'; document.body.append(container)
+    const view = JSEE.imageView(container, { revision: 1, source: new Blob(['pending']) })
+    const pending = view.ready
+    view.update({ revision: 2, source: borrowed }); await view.ready
+    resolve(late); const accepted = await pending
+    view.dispose(); window.createImageBitmap = create
+    const result = { accepted, lateWidth: late.width, borrowedWidth: borrowed.width, remaining: container.children.length }
+    borrowed.close(); return result
+  })
+  expect(result).toEqual({ accepted: false, lateWidth: 0, borrowedWidth: 20, remaining: 0 })
+})
+
+test('image overlay follows a borrowed media box and disposes without removing media', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const container = document.createElement('div'); container.style.cssText = 'width:400px;height:300px;position:relative'; document.body.append(container)
+    const source = document.createElement('canvas'); source.width = 200; source.height = 100
+    const image = document.createElement('img'); image.style.cssText = 'width:200px;height:200px;object-fit:contain;margin:20px 30px'; image.src = source.toDataURL(); await image.decode(); container.append(image)
+    const view = JSEE.imageView(container, { revision: 1, source: image, boxes: [{ x: 10, y: 10, width: 50, height: 20 }] }, { overlay: true })
+    await view.ready
+    const actual = view.sourceToClient({ x: 10, y: 10 }), box = image.getBoundingClientRect()
+    const error = [actual.x - (box.left + 10), actual.y - (box.top + 50 + 10)]
+    const outside = view.clientToSource({ x: box.left + 20, y: box.top + 10 })
+    image.style.objectPosition = 'left top'; view.update({ revision: 1 })
+    const aligned = view.sourceToClient({ x: 10, y: 10 }), alignedError = [aligned.x - box.left - 10, aligned.y - box.top - 10]
+    image.style.objectPosition = 'center'; view.update({ revision: 1 })
+    await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame)
+    const canvas = container.querySelector('canvas'), before = canvas.toDataURL()
+    image.style.width = '300px'
+    await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame)
+    const redrawn = canvas.toDataURL() !== before
+    view.dispose()
+    return { error, alignedError, redrawn, outside: outside.inside, children: container.children.length, source: container.firstChild === image }
+  })
+  expect(result).toEqual({ error: [0, 0], alignedError: [0, 0], redrawn: true, outside: false, children: 1, source: true })
+})
+
+test('registered image view retains selection and zoom through worker annotation updates', async ({ page }) => {
+  await page.goto('/examples/image-annotations/')
+  await expect(page.locator('#scene canvas')).toHaveCount(1)
+  // The source is decoded asynchronously, independently of the worker invocation.
+  await page.waitForFunction(() => {
+    const canvas = document.querySelector('#scene canvas')
+    return canvas && canvas.getContext('2d').getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data[3] > 0
+  })
+  await page.locator('#scene canvas').click({ position: { x: 200, y: 160 } })
+  await page.locator('#zoom').fill('2')
+  const result = await page.evaluate(async () => {
+    const canvas = document.querySelector('#scene canvas'), label = document.querySelector('#point').textContent
+    await window.demo.invoke({ opacity: 0.8 }); await new Promise(requestAnimationFrame)
+    const same = canvas === document.querySelector('#scene canvas'), kept = label === document.querySelector('#point').textContent
+    window.demo.destroy()
+    return { same, kept, removed: !document.querySelector('#scene canvas') }
+  })
+  expect(result).toEqual({ same: true, kept: true, removed: true })
+})
+
+test('image view waits for borrowed media pixels rather than its CSS dimensions', async ({ page }) => {
+  await page.goto('/load/')
+  const result = await page.evaluate(async () => {
+    const host = document.createElement('div'); host.style.cssText = 'width:100px;height:100px'; document.body.append(host)
+    const image = new Image(); image.width = image.height = 100
+    let error, view
+    try { view = JSEE.imageView(host, { revision: 1, source: image }) } catch (err) { error = err.message }
+    const before = view?.sourceToClient({ x: 5, y: 5 })
+    const source = document.createElement('canvas'); source.width = source.height = 10
+    source.getContext('2d').fillRect(0, 0, 10, 10)
+    image.src = source.toDataURL(); await image.decode(); await new Promise(requestAnimationFrame)
+    const ready = view?.sourceToClient({ x: 5, y: 5 })
+    view?.dispose()
+    return { error, before: !!before, ready: !!ready, removed: host.children.length === 0 }
+  })
+  expect(result).toEqual({ error: undefined, before: false, ready: true, removed: true })
+})
+
+test('image view has stable intrinsic layout at DPR 2 without a host height', async ({ browser }) => {
+  const context = await browser.newContext({ deviceScaleFactor: 2 })
+  try {
+    const page = await context.newPage(); await page.goto('/load/')
+    const result = await page.evaluate(async () => {
+      const host = document.createElement('div'); host.style.width = '200px'; document.body.append(host)
+      const source = document.createElement('canvas'); source.width = source.height = 10
+      const view = JSEE.imageView(host, { revision: 1, source })
+      const heights = []
+      for (let i = 0; i < 3; i++) { await new Promise(requestAnimationFrame); heights.push(host.getBoundingClientRect().height) }
+      view.dispose()
+      return heights
+    })
+    expect(Math.max(...result) - Math.min(...result)).toBeLessThan(1)
+    expect(Math.max(...result)).toBeLessThan(300)
+  } finally { await context.close() }
+})

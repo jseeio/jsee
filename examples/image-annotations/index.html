@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Image annotations — JSEE</title>
+<style>body{max-width:900px;margin:24px auto;padding:0 16px;font:16px system-ui}#point{min-height:1.5em}</style></head>
+<body>
+<h1>Image annotations</h1>
+<p>Click the image to select a source pixel. Run with a different opacity; selection and zoom stay in place.</p>
+<label>Zoom <input id="zoom" type="range" min="1" max="3" step="0.1" value="1"></label>
+<p id="point" aria-live="polite">No point selected.</p><div id="app"></div>
+<script src="../../dist/jsee.core.js"></script>
+<script>
+  const source=document.createElement('canvas');source.width=640;source.height=320
+  const ctx=source.getContext('2d');ctx.fillStyle='#dce7ef';ctx.fillRect(0,0,640,320)
+  ctx.fillStyle='#174e75';ctx.fillRect(80,60,200,200);ctx.fillStyle='#d78d36';ctx.beginPath();ctx.arc(440,160,90,0,Math.PI*2);ctx.fill()
+  let view
+  window.demo=new JSEE({container:'#app',toasts:false,renderers:{annotated:(container,data)=>{
+    container.style.height='360px'
+    view=JSEE.imageView(container,data,{onSelect:({x,y})=>{document.querySelector('#point').textContent=`Source: ${x.toFixed(1)}, ${y.toFixed(1)}`}})
+    return view
+  }},schema:{schemaVersion:1,persist:false,autorun:false,
+    inputs:[{name:'opacity',type:'float',default:0.4,min:0,max:1,step:0.1},{name:'source',type:'string',default:source.toDataURL(),display:false}],
+    model:{worker:true,code:({opacity,source})=>({scene:{source,revision:1,
+      boxes:[{x:80,y:60,width:200,height:200,color:'#fff'}],points:[{x:440,y:160,color:'#111'}],
+      masks:[{width:2,height:1,data:[0,255,0,255,255,0,0,255],extent:{x:80,y:60,width:200,height:200},opacity}]
+    }})},outputs:[{name:'scene',type:'object',renderer:'annotated'}]
+  }})
+  document.querySelector('#zoom').oninput=event=>view?.setViewport({zoom:Number(event.target.value)})
+  demo.ready.then(()=>demo.invoke())
+</script>
+</body>
+</html>
