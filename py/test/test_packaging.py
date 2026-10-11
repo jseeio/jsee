@@ -67,6 +67,7 @@ def test_sdist_rebuild_and_installed_gui_api(tmp_path):
         for name in PACKAGE_ASSETS:
             assert any(member.endswith('/jsee/static/' + name) for member in members)
         assert not any(Path(member).name in ('AGENTS.md', 'CLAUDE.md', 'PLAN.md') for member in members)
+        assert not any('/test/' in member for member in members), members
         # This archive was just built from the controlled fixture source above.
         archive.extractall(tmp_path / 'rebuilt')
     rebuilt = next((tmp_path / 'rebuilt').iterdir())

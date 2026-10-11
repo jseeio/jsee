@@ -1,1 +1,2 @@
 recursive-include jsee/static *
+prune test
