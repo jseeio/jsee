@@ -24,3 +24,20 @@ minima:
     github: jseeio
 
 remote_theme: "jseeio/minima"
+
+# The theme's page layout supplies the heading sidebar and copy/download controls.
+defaults:
+  - scope:
+      path: "README.md"
+    values:
+      layout: page
+      title: JSEE
+      show_title: false
+      permalink: /
+  - scope:
+      path: "py/README.md"
+    values:
+      layout: page
+      title: JSEE for Python
+      show_title: false
+      permalink: /py/

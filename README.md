@@ -1,19 +1,10 @@
 # JSEE
 
-One computation, a web UI, a command line and an agent tool.
+Portable, schema-driven web apps for local computation.
+
+JSEE turns a model function plus a small JSON schema into a reactive browser app, CLI-served tool, offline HTML bundle and API surface. It is meant for computations that should be easy to share, inspect, rerun and keep on the user's machine.
 
 [Python documentation](py/README.md)
-
-Describe inputs, outputs and a model in a JSON schema. JSEE builds the form, runs the model and displays its results. The same descriptor can expose a supported model through a CLI, HTTP API or MCP tool. JavaScript runs in the browser or Node.js; Python runs through Pyodide in the browser or natively on a Python server.
-
-```text
-                 schema + model
-                       │
-           ┌───────────┼───────────┐
-           ▼           ▼           ▼
-        Browser    CLI / HTTP   MCP tool
-        for people  for programs for agents
-```
 
 ## Contents
 
@@ -50,33 +41,25 @@ JSEE infers a simple form from this function. Use an explicit schema when you ne
 
 ## When JSEE fits
 
-Use JSEE for calculators, data transformations, simulations and model interfaces that need a reusable computation behind them. It supplies forms, file inputs, workers, progress, cancellation and output rendering. Browser apps can keep data on the device; [bundling](#--bundle) can make a computation portable as an HTML file.
+Use JSEE for calculators, data transformations, simulations and model interfaces. It supplies forms, file inputs, workers, progress, cancellation and output rendering. Browser apps can keep data on the device; [bundling](#--bundle) can make a computation portable as an HTML file.
 
 It also [embeds in an existing application](#host-owned-regions), with host-owned controls and persistent renderers. The host still owns routing, accounts and collaboration. JSEE is not an application framework or a sandbox for untrusted code.
 
 ## Installation
 
-**Browser** — no build step:
+**Browser**: no build step:
 
 ```html
 <script src="https://cdn.jsdelivr.net/npm/@jseeio/jsee@0.9.0/dist/jsee.core.js"></script>
 ```
 
-**JavaScript** — CLI and Node.js execution:
+**JavaScript**: CLI and Node.js execution:
 
 ```sh
 npm install @jseeio/jsee
 ```
 
 Use `npx @jseeio/jsee` to run the installed CLI. It requires Node.js 20+.
-
-**Python** — includes the browser runtime; no Node.js required:
-
-```sh
-python -m pip install jsee
-```
-
-Requires Python 3.9+. For Python MCP support, use Python 3.10+ and `python -m pip install 'jsee[server]'`. Models may need additional packages.
 
 These docs describe **0.9.0**. Pin package versions when reproducing a deployment. See [runtime bundles](#runtime-bundles) for core versus full and [development](#development) for installation from a checkout.
 
@@ -95,42 +78,19 @@ The first command creates `schema.json`, `model.js` and a README. Open `http://l
 
 For a complete example you can call from the UI, CLI, HTTP and an MCP client, follow [Your first computation](#your-first-computation). It includes every file and the expected results.
 
-### Python: serve a function
-
-Save as `app.py`:
-
-```python
-import jsee
-
-
-def multiply(a: float, b: float = 2.0) -> float:
-    return a * b
-
-
-if __name__ == '__main__':
-    jsee.serve(multiply, port=5050)
-```
-
-Run `python app.py`, then open `http://localhost:5050`. The form uses the function’s type hints. You can also call it from another terminal:
-
-```sh
-curl http://localhost:5050/multiply \
-  -H 'Content-Type: application/json' \
-  -d '{"a":3,"b":4}'
-```
-
-The response is `{"result":12.0}`. Stop the server with Ctrl+C. For the shared `/run` endpoint and an MCP tool, use a file-backed descriptor as shown in the [tutorial](#use-python-instead). See the [Python README](py/README.md) for annotations, schema generation, streaming and WSGI deployment.
-
 ## How it works
 
-The schema names a `model`, declares its `inputs` and describes its `outputs`. Browser JSEE creates editable controls, loads the model and routes returned values to matching output names. Models can run in workers and report progress; an array of models forms a pipeline. The browser API lets a host update controls, invoke a run, stop it and dispose of resources.
+A **model** is the function, class or API that performs the work. A **schema**
+(also called a descriptor in this reference) declares the model, its inputs and
+its outputs. Browser JSEE creates editable controls, loads the model and routes returned values to matching output names. Models can run in workers and report progress; an array of models forms a pipeline. The browser API lets a host update controls, invoke a run, stop it and dispose of resources.
 
-CLI, HTTP and MCP derive their input/output descriptions from the same schema. They validate values and return declared outputs. File and media results use retrievable artifacts; their handles can be passed to another run in the same store. Models stay ordinary source files. A runtime must support the model’s language and execution features; moving a descriptor does not translate its code.
+CLI, HTTP and MCP derive their input/output descriptions from the same schema. They validate values and return declared outputs. File and media results use **artifacts**: stored files returned as references with
+download metadata. A reference can be passed to another run using the same store. Models stay ordinary source files. A runtime must support the model's language and execution features; moving a descriptor does not translate its code.
 
 
 ## Your first computation
 
-Build a calculator that multiplies two numbers and offers a text report. Use the same files as a browser app, a command-line computation, an HTTP API and an MCP tool. You need Node.js 20+ for the JavaScript version; the [Python variation](#use-python-instead) needs Python 3.9+.
+Build a calculator that multiplies two numbers and offers a text report. Use the same files as a browser app, a command-line computation, an HTTP API and an MCP tool. You need Node.js 20+ for the JavaScript version; the [Python variation](py/README.md#use-python-instead) needs Python 3.9+.
 
 ### Create the files
 
@@ -163,11 +123,9 @@ function multiply({ a, b }) {
   const product = a * b
   return { product, report: `${a} × ${b} = ${product}\n` }
 }
-
-if (typeof module !== 'undefined') module.exports = multiply
 ```
 
-The named function works in the browser; the guarded export also makes it available to Node. The model receives one object with input names and returns an object matching the declared output names. It does not need to know about forms, HTTP or MCP.
+JSEE loads the function named by `model.name` in both the browser and Node. The model receives one object with input names and returns an object matching the declared output names. It does not need to know about forms, HTTP or MCP.
 
 ### Open the browser app
 
@@ -209,7 +167,7 @@ Inspection shows the input/output JSON Schemas without loading the model. Valida
 }
 ```
 
-Read the file at the returned `file:` URI. Artifacts persist under `.jsee-artifacts/` in your working directory. The canonical command returns declared outputs only; it does not leak intermediate pipeline values. Models execute in Node for this step, not in browser workers.
+Read the file at the returned `file:` URI. Artifacts persist under `.jsee-artifacts/` in your working directory. `jsee run` returns declared outputs only, omitting intermediate pipeline values. Models execute in Node for this step, not in browser workers.
 
 ### Serve the computation
 
@@ -231,7 +189,8 @@ The server binds to localhost by default. For authenticated hosting, see [HTTP a
 
 ### Connect an agent through MCP
 
-In an MCP client that supports local stdio servers, add a server entry like the following. Replace `/absolute/path/multiply/schema.json` with the actual absolute path to your descriptor. Client configuration file locations differ.
+MCP (Model Context Protocol) lets an agent discover and call tools. In a client
+that supports local stdio servers, add a server entry like the following. Replace `/absolute/path/multiply/schema.json` with the actual absolute path to your descriptor. Client configuration file locations differ.
 
 ```json
 {
@@ -261,36 +220,7 @@ npx @jseeio/jsee schema.json -o multiply.html --bundle=offline-strict
 
 Open `multiply.html` with networking disabled and click **Run**. This example has no external model dependencies, so the generated file contains what it needs. The generated browser app runs locally; it does not include the Node HTTP or MCP server.
 
-For models using API calls, external weights, dynamic imports or Python packages, read [bundle requirements](#--bundle) before claiming offline support. Native ES-module and Python HTML export have additional constraints. Host-owned renderers and editor closures are not serialized automatically.
-
-### Use Python instead
-
-Install `python -m pip install jsee` and save this as `model.py` alongside the descriptor:
-
-```python
-def multiply(a: float, b: float) -> dict:
-    product = a * b
-    return {'product': product, 'report': f'{a:g} × {b:g} = {product:g}\n'}
-```
-
-In `schema.json`, replace only `model` with:
-
-```json
-{"url":"model.py","type":"py","entry":"multiply"}
-```
-
-Keep the same inputs, outputs and `input.json`. Use the Python environment’s `jsee` executable:
-
-```sh
-jsee inspect schema.json --json
-jsee validate schema.json
-jsee run schema.json --input input.json --json
-jsee serve schema.json --port 3000
-```
-
-The product and report match the JavaScript version. No Node.js is needed for these commands or the served form. Python MCP additionally requires Python 3.10+ and `python -m pip install 'jsee[server]'`; configure the client’s command as the absolute path to that environment’s `jsee`, with `args: ["serve", "/absolute/path/multiply/schema.json", "--mcp-only"]`.
-
-This step uses native Python on the server. Browser-only Python uses Pyodide and needs a browser-compatible package set; it is a separate deployment choice. See the [Python guide](py/README.md) for function annotations, streaming and deployment.
+For models using API calls, external weights, dynamic imports or Python packages, check the [bundle requirements](#--bundle). Native ES-module and Python HTML export have additional constraints. Host-owned renderers and editor closures are not serialized automatically.
 
 ### Next steps
 
@@ -319,17 +249,17 @@ These declarations cover descriptors and the pure input helpers exported from `@
 
 JSEE takes a schema object that contains three main blocks:
 
-- `model` — describes a model/script/API (its location, is it a function or class, should it be called automatically on every GUI change or not)
-- `inputs` — list of inputs and their descriptions
-- `outputs` — list of outputs and their descriptions
+- `model`: code location, language and execution options
+- `inputs`: values the model receives, with types, defaults, validation rules and editing controls
+- `outputs`: named results, their data types and how the browser displays them
 
 Extra blocks can be provided for further customization:
 
-- `id` — optional stable computation identifier for discovery and OpenAPI, independent of the display title. Use 1–128 ASCII letters, digits, `_`, `.`, or `-`, starting with a letter. Defaults to `computation`
-- `schemaVersion` — optional descriptor format version. Use the number `1`; omitting it retains the same behavior. Unsupported explicit versions are rejected before model loading. This is independent of JS/Python package versions
-- `render` / `view` — visualization part (optional). Defines custom rendering code
-- `design` — overall appearance (optional). Defines how the app looks overwriting defaults
-- `imports` — a list of scripts and stylesheets to load before the model is initialized. CSS files (`.css` extension) are injected as `<link rel="stylesheet">` in `<head>`, JS files are loaded as scripts. In the browser, relative paths (e.g. `dist/core.js`, `./lib.js`) resolve against the page URL. With `--bundle`, the CLI resolves imports by checking the local filesystem first — if a file exists on disk it is bundled; otherwise it is fetched from CDN
+- `id`: optional stable computation identifier for discovery and OpenAPI, independent of the display title. Use 1-128 ASCII letters, digits, `_`, `.`, or `-`, starting with a letter. Defaults to `computation`
+- `schemaVersion`: optional descriptor format version. Use the number `1`; omitting it retains the same behavior. Unsupported explicit versions are rejected before model loading. This is independent of JS/Python package versions
+- `render` / `view`: visualization part (optional). Defines custom rendering code
+- `design`: optional layout, theme and color overrides
+- `imports`: a list of scripts and stylesheets to load before the model is initialized. CSS files (`.css` extension) are injected as `<link rel="stylesheet">` in `<head>`, JS files are loaded as scripts. In the browser, relative paths (e.g. `dist/core.js`, `./lib.js`) resolve against the page URL. With `--bundle`, the CLI resolves imports by checking the local filesystem first: if a file exists on disk it is bundled; otherwise it is fetched from CDN
 
   ```json
   "imports": [
@@ -339,7 +269,7 @@ Extra blocks can be provided for further customization:
   ]
   ```
 
-- `examples` — a list of examples (optional). Defines a list of examples that can be used to overwrite inputs
+- `examples`: optional sets of input values that users can select to fill the form
 
   ```json
   "examples": [
@@ -351,56 +281,64 @@ Extra blocks can be provided for further customization:
 
 ### Model
 
-- `model` — Contains main parameters of the model/script
-  - `url` (string) — URL of a JS/Python script or POST/GET API
-  - `code` (function or string) — It's possible to pass code directly to JSEE instead of using an URL
-  - `name` (string) — Name of the executed object. Default value is taken from `url` or `code`
-  - `type` (string, default — `function`) — What kind of script is loaded. Influences how the code is initialized. Possible values:
-    - `function`
-    - `class`
-    - `module` — Load an ES module URL with native dynamic import and call `model.export`, `model.name`, `default`, or `model`. Module models default to `worker: false`; set `worker: true` to run the module in JSEE's Web Worker. This is the JavaScript path intended for `security.allowEval: false`
-    - `async-function`
-    - `async-init`
-    - `py` — Run browser Python through Pyodide. Browser Pyodide models receive Python globals `inputs` and `ctx`. Use `inputs['name']` for input values and `ctx.get('caller')` for runtime metadata. Legacy `from js import name` still works for non-colliding names, but JSEE no longer overwrites existing JavaScript globals such as `location`, `history`, `name`, `top`, or `parent`
-    - `get` / `post` — Call an HTTP API model instead of local JavaScript/Python code. Use `model.stream: true` for SSE responses
+Declare the code JSEE should run and how it receives inputs. A `model` object runs
+one step; an array of model objects defines a sequential pipeline.
+
+- `model`: Contains main parameters of the model/script
+  - `url` (string): URL of a JS/Python script or POST/GET API
+  - `code` (function or string): It's possible to pass code directly to JSEE instead of using an URL
+  - `name` (string): Name of the executed object. Default value is taken from `url` or `code`
+  - `type` (string, default: `function`): What kind of script is loaded. Influences how the code is initialized. Possible values:
+    - `function`: Call a JavaScript function with the current inputs
+    - `class`: Create a JavaScript instance, then call `method` (default: `predict`) on each run
+    - `module`: Load an ES module URL with native dynamic import and call `model.export`, `model.name`, `default`, or `model`. Module models default to `worker: false`; set `worker: true` to run the module in JSEE's Web Worker. This is the JavaScript path intended for `security.allowEval: false`
+    - `async-function`: Await an asynchronous JavaScript function
+    - `async-init`: Await a setup function once; it must return the function to call on each run
+    - `py`: Run browser Python through Pyodide. Browser Pyodide models receive Python globals `inputs` and `ctx`. Use `inputs['name']` for input values and `ctx.get('caller')` for runtime metadata. Legacy `from js import name` still works for non-colliding names, but JSEE no longer overwrites existing JavaScript globals such as `location`, `history`, `name`, `top`, or `parent`
+    - `get` / `post`: Call an HTTP API model instead of local JavaScript/Python code. Use `model.stream: true` for SSE responses
     - Inference note: when `code` is present (including code loaded from a `.js` URL), JSEE treats the model as `function` unless `type` is explicitly set
     - TensorFlow.js is not a dedicated model type. Load it through `imports` and call it from a normal JavaScript `function` or `class` model
-  - `entry` (string) — For Python models, selects the callable independently of the endpoint `name`. Modules load once per application. Pyodide functions can declare individual input parameters, `inputs`, and/or `ctx`; native Python passes the declared request arguments.
-  - `export` (string) — For `type: "module"` models, names the ES module export to call. If omitted, JSEE tries `default` and then `model`
-  - `pyodide` (string or object) — Browser Python defaults to Pyodide **314.0.7** (Python 3.14.2). Override with an ES-module loader URL, or `{ "url": "/pyodide/pyodide.mjs", "indexURL": "/pyodide/" }`. Declare `imports` or `packages` for wheels included by `--bundle=pyodide` / `--bundle=pyodide-single`. Pyodide 314.x requires module workers; use its `.mjs` loader. Explicit older `.js` loader overrides retain a classic-worker compatibility path; 0.24.1 is covered by a regression. Pyodide 314 bundles sqlite3/lzma, removes pydecimal/test packages and OpenSSL-backed hashlib algorithms, and stubs actual TLS operations in ssl. Browser fetch remains the HTTP path.
-  - `method` (string) — If `type` is `class`, `method` defines the name of the class method to call during evaluation
-  - `container` (string) — How input values are passed to the function/method:
-    - `object` (default) — Pass inputs wrapped in an object, i.e. `{'x': 1, 'y': 2}`
-    - `args` — Pass inputs as separate arguments
+  - `entry` (string): For Python models, selects the callable independently of the endpoint `name`. Modules load once per application. Pyodide functions can declare individual input parameters, `inputs`, and/or `ctx`; native Python passes the declared request arguments.
+  - `export` (string): For `type: "module"` models, names the ES module export to call. JSEE tries `export` or `name` first, then falls back to `default` or `model`
+  - `pyodide` (string or object): Browser Python defaults to Pyodide **314.0.7** (Python 3.14.2). Override with an ES-module loader URL, or `{ "url": "/pyodide/pyodide.mjs", "indexURL": "/pyodide/" }`. Declare `imports` or `packages` for wheels included by `--bundle=pyodide` / `--bundle=pyodide-single`. Pyodide 314.x requires module workers; use its `.mjs` loader. Explicit older `.js` loader overrides retain a classic-worker compatibility path; 0.24.1 is covered by a regression. Pyodide 314 bundles sqlite3/lzma, removes pydecimal/test packages and OpenSSL-backed hashlib algorithms, and stubs actual TLS operations in ssl. Browser fetch remains the HTTP path.
+  - `method` (string): If `type` is `class`, `method` defines the name of the class method to call during evaluation
+  - `container` (string): How input values are passed to the function/method:
+    - `object` (default): Pass inputs wrapped in an object, i.e. `{'x': 1, 'y': 2}`
+    - `args`: Pass inputs as separate arguments
     - In `object` mode, JavaScript models receive the runtime context as a second argument: `function model(inputs, ctx) { ... }`
-  - `worker` (boolean) — If `true`, JSEE initializes a Web Worker to run the script
-    - `ctx.log(...args)` — Write runtime logs
-    - `ctx.progress(value)` — Report progress (`0..100` or `null` for indeterminate)
-    - `ctx.isCancelled()` — Returns true once this invocation completes, is cancelled, or is replaced. Context callbacks belong to the invocation; late `ctx.log()`/`ctx.progress()` calls are ignored. Browser `ctx.output()`/`ctx.outputAsync()` follow the same rule. Browser instance fields and methods remain accessible through the context
-  - `timeout` (number, default: `30000`) — Worker execution timeout in milliseconds. Only applies when `worker: true`. If exceeded, the worker is terminated with an error. Initialization has its own deadline
-  - `initTimeout` (number, default: `120000`) — Worker initialization deadline in milliseconds, including runtime/import loading and async initialization. Failures and timeouts terminate the worker; increase explicitly for large models.
-  - `workerUrl` (string) — Optional external worker entry, e.g. `/dist/jsee.worker.mjs`, for a same-origin `worker-src 'self'` deployment. Default creation remains dynamic: the bundled worker source becomes a Blob URL on HTTP(S), or a data URL for standalone `file://` HTML. The classic entry is `jsee.worker.js`; use it for classic JS models and the compatibility modes below. Both files are built from `src/worker.js` and share execution, cancellation and messaging.
+  - `worker` (boolean): If `true`, JSEE initializes a Web Worker to run the script
+    - `ctx.log(...args)`: Write runtime logs
+    - `ctx.progress(value)`: Report progress (`0..100` or `null` for indeterminate)
+    - `ctx.isCancelled()`: Returns true once this invocation completes, is cancelled, or is replaced. Context callbacks belong to the invocation; late `ctx.log()`/`ctx.progress()` calls are ignored. Browser `ctx.output()`/`ctx.outputAsync()` follow the same rule. Browser instance fields and methods remain accessible through the context
+  - `timeout` (number, default: `30000`): Worker execution timeout in milliseconds. Only applies when `worker: true`. If exceeded, the worker is terminated with an error. Initialization has its own deadline
+  - `initTimeout` (number, default: `120000`): Worker initialization deadline in milliseconds, including runtime/import loading and async initialization. Failures and timeouts terminate the worker; increase explicitly for large models.
+  - `workerUrl` (string): Optional external worker entry, e.g. `/dist/jsee.worker.mjs`, for a same-origin `worker-src 'self'` deployment. Default creation remains dynamic: the bundled worker source becomes a Blob URL on HTTP(S), or a data URL for standalone `file://` HTML. The classic entry is `jsee.worker.js`; use it for classic JS models and the compatibility modes below. Both files are built from `src/worker.js` and share execution, cancellation and messaging.
 
   Python 314, native ES-module models and API models use module workers. Classic JavaScript functions/classes/imports keep classic workers, including `allowEval: false` URL scripts. ES-module models with classic JS imports also select that compatibility build; CSS imports do not. Explicit older Python `.js` loaders use it too. Both builds share one worker implementation: no script concatenation, extra eval adapter or silent main-thread fallback. This preserves independent script strictness, global declarations and the existing CSP requirements.
 
-  - `imports` (array) — Per-model imports loaded before this model's code executes. Accepts URLs as strings or objects `{ url: "..." }`. Top-level `imports` are moved to the first model internally
-  - `model` can also be an **array of model objects** to create a pipeline. Models execute sequentially — each receives the merged output of the previous one. First model defaults to `worker: true`, others to `worker: false`. Return `{ stop: true }` from any model to halt the pipeline early
-- `render` — Custom rendering script. Instead of relying on JSEE for output visualization, you can provide a custom script that visualizes the results. That can be useful if you rely on custom libs for plotting
+  - `imports` (array): Per-model imports loaded before this model's code executes. Accepts URLs as strings or objects `{ url: "..." }`. Top-level `imports` are moved to the first model internally
+  - `model` can also be an **array of model objects** to create a pipeline. Models execute sequentially: each receives the merged output of the previous one. First model defaults to `worker: true`, others to `worker: false`. Return `{ stop: true }` from any model to halt the pipeline early
+- `render`: Custom rendering script, for example to draw results with a plotting library. For a view that keeps selection or zoom between updates, see [persistent output renderers](#persistent-output-renderers)
+
 ### Design
 
-- `design` — Design parameters
-  - `layout` — Layout for the model/input/output blocks. If it's empty and the JSEE container is not, JSEE uses inner HTML as a template. If the container is empty too, it uses the default `blocks` template. Set `'sidebar'` for a fixed-width (280px) sticky input panel — inputs stay visible while scrolling outputs. Collapses to single column on mobile. `grid` sets its column split; a host that places the app below its own header can bound the panel with the `--jsee-sidebar-max-height` CSS variable (default `100vh`)
-  - `framework` — Design framework to use (`'minimal'` by default). If a JavaScript object with the same name is present in a global context, JSEE loads it too (using Vue's `use` method)
-  - `theme` — Visual preset: default minimal, or `'mono'` for monochrome controls, quiet headings and flat cards. Mono uses system colors by default. Existing `'dark'` selects the minimal dark palette; `'auto'` selects minimal with system colors
-  - `colorScheme` — `'light'`, `'dark'` or `'auto'`; overrides the preset's default. Auto follows system changes without JavaScript listeners. Applies separately to each app and its host regions
-  - `primary` — Accent color (buttons, toggles, gradient). Hex string, e.g. `'#e74c3c'`
-  - `secondary` — Second gradient color. Defaults to a darker shade of `primary`
-  - `bg` — Background color. Derives card, input, and border colors automatically
-  - `fg` — Text color. Derives secondary text color automatically
-  - `font` — Font family string, e.g. `'Georgia, serif'`
-  - `radius` — Border radius in pixels (number) or CSS value (string)
-  - `grid` (array) — 12-column grid split for input/output sections. E.g. `[4, 8]` (default), `[6, 6]` (equal), `[3, 9]`. Values are `fr` units
+Use `design` to set the app layout and appearance. Use `setDesign` to change them
+after the app has loaded.
+
+- `design`: Design parameters
+  - `layout`: Layout for the model/input/output blocks. If it's empty and the JSEE container is not, JSEE uses inner HTML as a template. If the container is empty too, it uses the default `blocks` template. Set `'sidebar'` for a fixed-width (280px) sticky input panel: inputs stay visible while scrolling outputs. Collapses to single column on mobile. `grid` sets its column split; a host that places the app below its own header can bound the panel with the `--jsee-sidebar-max-height` CSS variable (default `100vh`)
+  - `framework`: Design framework to use (`'minimal'` by default). If a JavaScript object with the same name is present in a global context, JSEE loads it too (using Vue's `use` method)
+  - `theme`: Visual preset: default minimal, or `'mono'` for monochrome controls, quiet headings and flat cards. Mono uses system colors by default. Existing `'dark'` selects the minimal dark palette; `'auto'` selects minimal with system colors
+  - `colorScheme`: `'light'`, `'dark'` or `'auto'`; overrides the preset's default. Auto follows system changes without JavaScript listeners. Applies separately to each app and its host regions
+  - `primary`: Accent color (buttons, toggles, gradient). Hex string, e.g. `'#e74c3c'`
+  - `secondary`: Second gradient color. Defaults to a darker shade of `primary`
+  - `bg`: Background color. Derives card, input, and border colors automatically
+  - `fg`: Text color. Derives secondary text color automatically
+  - `font`: Font family string, e.g. `'Georgia, serif'`
+  - `radius`: Border radius in pixels (number) or CSS value (string)
+  - `grid` (array): 12-column grid split for input/output sections. E.g. `[4, 8]` (default), `[6, 6]` (equal), `[3, 9]`. Values are `fr` units
   - All components use CSS custom properties that can be overridden via CSS: `--jsee-primary`, `--jsee-bg`, `--jsee-text`, `--jsee-text-secondary`, `--jsee-border`, `--jsee-input-bg`, `--jsee-input-border`, `--jsee-focus-border`, `--jsee-focus-ring`, `--jsee-card-bg`, `--jsee-bg-secondary`, `--jsee-label-bg`, `--jsee-error`, `--jsee-radius`
+
 Update appearance on an existing browser instance:
 
 ```js
@@ -420,194 +358,298 @@ are required.
 
 ### Inputs
 
-- `inputs` — Inputs definition
-  - `name`* — Name of the input
-  - `type`* — Type. Possible types:
-    - `int`, `float` or `number` — Number
-    - `string` — String (text input)
-    - `color` — Color picker (HTML5 `<input type="color">`)
-    - `text` — Textarea (auto-resizes to fit content, up to 400px)
-    - `checkbox` or `bool` — Checkbox
-    - `select` or `categorical` — Select (one of many `options`)
-    - `slider` — Range slider (`min`, `max`, `step`)
-    - `range` — Dual-handle range slider, returns `[min, max]` array
-    - `radio` — Radio button group (one of many `options`)
-    - `toggle` — Toggle switch (boolean)
-    - `date` — Date picker
-    - `multi-select` — Checkbox group, returns array of selected `options`
-    - `group` — Group of inputs. Use `elements` array for child inputs. Supports three display styles via `style` property:
-      - `blocks` (default) — flat list of child inputs
-      - `accordion` — collapsible section (also triggered by `collapsed` or `label` props)
-      - `section` — collapsible section with a prominent heading, for module-level groups in long forms
-      - `tabs` — tabbed view where each child element becomes a tab (child groups use their `name`/`label` as tab label)
-    - `object` — JSON editor for nested objects, lists or other JSON values
-    - `table` — Editable table using row objects or `{columns, rows}`. Clipboard CSV/TSV paste expands from the selected cell; choose whether an empty table takes its column names from the first pasted row. Duplicate headers reject without changing data. Unsafe integers and non-finite numeric text stay strings. This bounded editor does not ingest large CSV files or virtualize rows.
-    - `image`, `audio`, `video` — Typed media selection and preview; models receive bytes
-    - `file` — File Input
-    - `folder` — Directory input. Shows a file listing with optional selection. In the browser, uses `<input webkitdirectory>` or drag-drop. On the server, reads from a directory path. Returns array of `{name, path, size, type, selected}` objects. Props:
-      - `select` (boolean) — Show checkboxes for file selection (default: all files passed)
-      - `reactive` (boolean) — Trigger model run on selection change
-    - `action` or `button` — Button (its `name` will be passed as a `caller` to the model unless a computation input already declares `caller`). Works as a top-level input or inside input groups
-  - `default` — Default value
-  - `nullable` (boolean) — Allow JSON `null` as an input value. A `null` default also permits `null`, preserving optional Python argument defaults
-  - `alias` (string or array of strings) — Alternative names for URL parameter matching. E.g. `"alias": ["f", "file"]` allows `?f=value` or `?file=value` to set this input
-  - `display` (string) — Filtrex expression to conditionally show/hide this input. Evaluated against current input values. E.g. `"display": "mode == 'advanced'"` shows the input only when `mode` is `"advanced"`. Supports `len()` for string length
-  - `reactive` (boolean) — Trigger a model run when this input changes (see **Execution triggers** below)
-  - `disabled` (boolean) — Disables the input in the UI. Built-in input controls, selectors, folder selection checkboxes, and action buttons honor this flag. When combined with `reactive: true`, triggers an initial model run on page load (useful for server-populated values)
-  - `readonly` (boolean) — Prevent editing while retaining the current value; controls without native readonly support are disabled
-  - `accept` (string) — File/media MIME types, wildcards or extensions, separated by commas; checked against file selection and stored artifact metadata
-  - `enter` (boolean) — If `true` on a `string` input, pressing Enter triggers a model run (useful for chat or search inputs)
-  - `raw` (boolean, file input only) — If `true`, pass the raw source to the model instead of reading text in the UI (`File` object for disk files or `{ kind: 'url', url: '...' }` for URL input)
-  - `stream` (boolean, file input only) — If `true`, pass an async iterable `ChunkedReader` to the model instead of raw source handles. Supports `for await (const chunk of reader)`, `await reader.text()`, `await reader.bytes()`, and `for await (const line of reader.lines())`. Works in both main-thread and worker execution. Reader metadata (`reader.name`, `reader.size`, `reader.type`) is preserved and remains available in downstream pipeline models
-  - `validate` (string) — Browser control validation using Filtrex. The variable `value` holds the current input value. Expression must return truthy for valid input. E.g. `"validate": "value >= 0 and value <= 150"`. Runs on input changes (debounced) and before browser execution, including programmatic `jsee.run()` calls. Nested groups are traversed; group expressions receive their collected field values. Invalid controls show errors and block execution
-  - `required` (boolean) — Ordinary browser controls reject empty strings, null, undefined, and empty arrays, including when a `validate` expression is also present. Table/JSON controls use field-presence semantics and permit empty collections as values. HTTP/CLI contracts use it for required field presence; portable value constraints come from declared types, options, and numeric bounds
-  - `error` (string) — Custom error message for `validate` or `required` failures (default: `"Invalid value"` / `"Required"`)
-  - `columns` (number, 1-12) — Grid column span for this input. When any input has `columns`, the inputs section switches to a 12-column CSS grid. E.g. `"columns": 6` makes the input take half width
+Each input declares a value the model receives and the control used to edit it.
+Use `name` to match the model argument and `type` to choose the control.
+
+- `inputs`: Inputs definition
+  - `name`: Key passed to the model
+  - `type`: Input control type:
+    - `int`, `float` or `number`: Number
+    - `string`: String (text input)
+    - `color`: Color picker (HTML5 `<input type="color">`)
+    - `text`: Textarea (auto-resizes to fit content, up to 400px)
+    - `checkbox` or `bool`: Checkbox
+    - `select` or `categorical`: Select (one of many `options`)
+    - `slider`: Range slider (`min`, `max`, `step`)
+    - `range`: Dual-handle range slider, returns `[min, max]` array
+    - `radio`: Radio button group (one of many `options`)
+    - `toggle`: Toggle switch (boolean)
+    - `date`: Date picker
+    - `multi-select`: Checkbox group, returns array of selected `options`
+    - `group`: Group of inputs. Use `elements` array for child inputs. Supports four display styles via `style` property:
+      - `blocks` (default): flat list of child inputs
+      - `accordion`: collapsible section (also triggered by `collapsed` or `label` props)
+      - `section`: collapsible section with a prominent heading, for module-level groups in long forms
+      - `tabs`: tabbed view where each child element becomes a tab (child groups use their `name`/`label` as tab label)
+    - `object`: JSON editor for nested objects, lists or other JSON values
+    - `table`: Editable table using row objects or `{columns, rows}`. Clipboard CSV/TSV paste expands from the selected cell; choose whether an empty table takes its column names from the first pasted row. Duplicate headers reject without changing data. Unsafe integers and non-finite numeric text stay strings. This bounded editor does not ingest large CSV files or virtualize rows.
+    - `image`, `audio`, `video`: Typed media selection and preview; models receive bytes
+    - `file`: File Input
+    - `folder`: Directory input. Shows a file listing with optional selection. In the browser, uses `<input webkitdirectory>` or drag-drop. On the server, reads from a directory path. Returns array of `{name, path, size, type, selected}` objects. Props:
+      - `select` (boolean): Show checkboxes for file selection (default: all files passed)
+      - `reactive` (boolean): Trigger model run on selection change
+    - `action` or `button`: Button (its `name` will be passed as a `caller` to the model unless a computation input already declares `caller`). Works as a top-level input or inside input groups
+  - `label` (string): Text displayed beside the control; defaults to `name`
+  - `options` (array): Choices for select/radio/multi-select inputs; values can be strings, numbers, booleans or objects such as `{value: 'price', label: 'Price'}`
+  - `min`, `max`, `step` (numbers): Numeric limits and step size; `step` must be positive
+  - `default`: Initial value when none is supplied
+  - `nullable` (boolean): Allow JSON `null` as an input value. A `null` default also permits `null`, preserving optional Python argument defaults
+  - `alias` (string or array of strings): Alternative names for URL parameter matching. E.g. `"alias": ["f", "file"]` allows `?f=value` or `?file=value` to set this input
+  - `display` (boolean or string): Show/hide the input directly, or use a Filtrex expression for a condition. Evaluated against current input values. E.g. `"display": "mode == 'advanced'"` shows the input only when `mode` is `"advanced"`. Supports `len()` for string length
+  - `reactive` (boolean): Trigger a model run when this input changes (see [when models run](#when-models-run))
+  - `disabled` (boolean): Disables the input in the UI. Built-in input controls, selectors, folder selection checkboxes, and action buttons honor this flag. When combined with `reactive: true`, triggers an initial model run on page load (useful for server-populated values)
+  - `readonly` (boolean): Prevent editing while retaining the current value; controls without native readonly support are disabled
+  - `accept` (string): File/media MIME types, wildcards or extensions, separated by commas; checked against file selection and stored artifact metadata
+  - `enter` (boolean): If `true` on a `string` input, pressing Enter triggers a model run (useful for chat or search inputs)
+  - `raw` (boolean, file input only): If `true`, pass the raw source to the model instead of reading text in the UI (`File` object for disk files or `{ kind: 'url', url: '...' }` for URL input)
+  - `stream` (boolean, file input only): If `true`, pass an async iterable `ChunkedReader` to the model instead of raw source handles. Supports `for await (const chunk of reader)`, `await reader.text()`, `await reader.bytes()`, and `for await (const line of reader.lines())`. Works in both main-thread and worker execution. Reader metadata (`reader.name`, `reader.size`, `reader.type`) is preserved and remains available in downstream pipeline models
+  - `validate` (string): Browser control validation using Filtrex. The variable `value` holds the current input value. Expression must return truthy for valid input. E.g. `"validate": "value >= 0 and value <= 150"`. Runs on input changes (debounced) and before browser execution, including programmatic `jsee.run()` calls. Nested groups are traversed; group expressions receive their collected field values. Invalid controls show errors and block execution
+  - `required` (boolean): Ordinary browser controls reject empty strings, null, undefined, and empty arrays, including when a `validate` expression is also present. Table/JSON controls use field-presence semantics and permit empty collections as values. HTTP/CLI contracts use it for required field presence; portable value constraints come from declared types, options, and numeric bounds
+  - `error` (string): Custom error message for `validate` or `required` failures (default: `"Invalid value"` / `"Required"`)
+  - `columns` (number, 1-12): Grid column span for this input. When any input has `columns`, the inputs section switches to a 12-column CSS grid. E.g. `"columns": 6` makes the input take half width
   - URL params for file inputs (e.g. `?file=https://...`) auto-load on init, so bookmarkable links run without an extra Load click
+
 ### Outputs
 
-- `outputs` — Outputs definition. Outputs also support `alias` (string or array of strings) for matching model result keys by alternative names. Per-output `columns` (number, 1-12) sets grid column span, same as inputs
-  - `name`* — Name of the output
-  - `type`* — Type. Possible types:
-    - `file` — Download-only file output. With a static schema filename, return the file body under the output name:
+Return values under the names declared in `outputs`. Each output type chooses a
+browser presentation, such as a download button, table or chart. The
+[CLI/HTTP result rules](#output-validation-and-files) describe serialization outside
+the browser.
+
+- `outputs`: Outputs definition. Outputs also support `alias` (string or array of strings) for matching model result keys by alternative names. Per-output `columns` (number, 1-12) sets grid column span, same as inputs
+  - `name`: Key in the model result
+  - `type`: Output presentation type:
+    - `file`: Download-only file output. With a static schema filename, return the file body under the output name:
+
       ```json
       { "name": "report", "type": "file", "filename": "report.csv" }
       ```
+
       ```javascript
       return { report: "col1,col2\n1,2\n" }
       ```
       For dynamic filenames, formats, or MIME types, return a descriptor object matching the output name:
+
       ```javascript
       return {
-        file: {
+        report: {
           filename: "dataset.csv",
           content: csvText,
           mime: "text/csv"
         }
       }
       ```
-      Descriptor fields: `filename` or `name`; `content`, `value`, `data`, or `url`; optional `mime` or `contentType`.
-    - `object` — JavaScript Object
-    - `html` or `svg` — SVG element
-    - `code` — Code block
-    - `markdown` — Rendered Markdown (supports tables, headings, lists, etc.)
-    - `image` — Image (`<img>` tag from data URL or URL)
-    - `audio` — Audio player (`<audio>` from URL or data URL)
-    - `video` — Video player (`<video>` from URL or data URL)
-    - `table` — Virtualized table with scrolling
-    - `chat` — Chat message list. Accumulates `{role, content}` messages across runs instead of replacing. Renders user/assistant bubbles with Markdown support, auto-scrolls to latest message. See **Chat mode** below
-    - `group` — Group of outputs. Use `elements` array for child outputs. Supports `style: 'tabs'` for tabbed display or default blocks (stacked). Child outputs are matched by name against model results
-    - `chart` — SVG chart via [Observable Plot](https://observablehq.com/plot/). Model returns array of objects, column-oriented data, or a full Plot config. Schema props: `mark` (line/dot/bar/area/etc.), `x`, `y`, `color`, `width`, `height`. Included in full bundle or load Plot via `imports`
-    - `3d` — 3D model viewer via [Three.js](https://threejs.org/). Model returns a URL (GLTF/GLB), data URL, or geometry object `{vertices, faces}`. Schema props: `width`, `height`. Included in full bundle or load Three.js via `imports`
-    - `map` — Interactive map via [Leaflet](https://leafletjs.com/). Model returns markers `[{lat, lng, popup}]`, `{center, markers, zoom}`, or GeoJSON. Schema props: `height`, `zoom`, `center`, `tiles`. Included in full bundle or load Leaflet via `imports`
-    - `pdf` — Browser-native PDF viewer. Model returns a URL, data URL, Blob, ArrayBuffer, or Uint8Array. Schema prop: `height`. Included in the core bundle
-    - `gallery` — CSS grid of images. Model returns array of URLs/data URLs. Click to expand lightbox. Schema props: `columns` (default 3), `gap` (default 8px). Zero-cost, included in core bundle
-    - `highlight` — Highlighted text with labels. Model returns `[{text, label, color}]` segments. Unlabeled segments render as plain text. Zero-cost, included in core bundle
-    - `scores` — Ranked `{label, score}` rows, with bars on a shared display scale and accessible meters. Accepts an array (including empty), string labels and finite numeric scores. Extra row metadata is preserved. Sorts only the view; model data and CLI/HTTP/MCP values retain their original order and numbers. `min`/`max` set the display range (default 0/1, finite and increasing); values outside it clip only the bar and are identified in accessible text. `format: 'number' | 'percent'` defaults to number; percent changes display only. `precision` sets maximum decimal places (0–20, default 3); `prefix`/`suffix` decorate the displayed value. No normalization, inferred probability semantics or history. Rows update through the existing renderer lifecycle and inherit the app theme. Included in the core/offline runtime; no chart dependency. Example: `examples/scores/` ([build and serving instructions](https://github.com/jseeio/jsee/tree/main/examples/scores/README.md))
-    - `gauge` — Semicircle gauge. Model returns a number or `{value, label}`. Schema props: `min` (default 0), `max` (default 100), `label`, `color`. Zero-cost, included in core bundle
-    - `number` — Large KPI number display. Model returns a number or `{value, delta, label}`. Delta shown with colored up/down arrow. Schema props: `label`, `prefix` (e.g. `"$"`), `suffix` (e.g. `"%"`), `precision`
-    - `alert` — Colored status banner with left accent border. Model returns a string or `{message, type}`. Four variants: `info` (blue, default), `success` (green), `warning` (amber), `error` (red). Schema prop: `alertType` (default type when value is a string)
-    - `viewer` — Intelligent media viewer. Model returns a URL string. Auto-detects content type from extension: images (png, jpg, gif, svg, webp), audio (mp3, wav, ogg, flac), video (mp4, webm, mov), or iframe (fallback). Useful with `folder` input for file preview
-    - `function` — Render function. Rather than returning a value, a model returns a function that JSEE will call passing the container element
-    - `blank` — Empty container for custom rendering via `function` output or external code
-- `examples` — List of examples
-- **Execution triggers** — by default the model only runs when the user clicks Run. Three schema-level options change this:
-  - `autorun` (boolean, default: `false`) — run the model once on first load, then wait for manual Run clicks
-  - `reactive` (boolean, default: `false`) — re-run the model on **any** input change (debounced 300ms). Useful for lightweight models where instant feedback is desired
-  - `interval` (number, default: `0`) — after an autorun or manual Run, repeat execution every N milliseconds until Stop is clicked. `0` means no repetition. The first run keeps its original `caller` value (`autorun` or `run`); scheduled repeats use `caller: "interval"`
-  - Per-input `reactive` — set `reactive: true` on an **individual input** to trigger a model run only when that specific input changes (fires immediately, not debounced). Other inputs still require a manual Run click. Useful when one input is interactive (e.g. a slider) but others are expensive to recompute
+      Browser descriptor fields: `filename` or `name`; `content`, `value`, `data`, or `url`; optional `mime` or `contentType`. CLI/HTTP/MCP file results require content; they do not fetch a `url`.
+    - `object`: JSON tree for objects, lists and other JSON values
+    - `html`: HTML markup; sanitization follows `security.allowRawHtml`
+    - `svg`: Inline SVG markup; sanitization follows `security.allowRawHtml`
+    - `code`: Code block
+    - `markdown`: Rendered Markdown (supports tables, headings, lists, etc.)
+    - `image`: Image (`<img>` tag from data URL or URL)
+    - `audio`: Audio player (`<audio>` from URL or data URL)
+    - `video`: Video player (`<video>` from URL or data URL)
+    - `table`: Virtualized table with scrolling
+    - `chat`: Chat message list. Accumulates `{role, content}` messages across runs instead of replacing. Renders user/assistant bubbles with Markdown support, auto-scrolls to latest message. See **Chat mode** below
+    - `group`: Group of outputs. Use `elements` array for child outputs. Supports `style: 'tabs'` for tabbed display or default blocks (stacked). Child outputs are matched by name against model results
+    - `chart`: SVG chart via [Observable Plot](https://observablehq.com/plot/). Model returns array of objects, column-oriented data, or a full Plot config. Schema props: `mark` (line/dot/bar/area/etc.), `x`, `y`, `color`, `width`, `height`. Included in full bundle or load Plot via `imports`
+    - `3d`: 3D model viewer via [Three.js](https://threejs.org/). Model returns a URL (GLTF/GLB), data URL, or geometry object `{vertices, faces}`. Schema props: `width`, `height`. Included in full bundle or load Three.js via `imports`
+    - `map`: Interactive map via [Leaflet](https://leafletjs.com/). Model returns markers `[{lat, lng, popup}]`, `{center, markers, zoom}`, or GeoJSON. Schema props: `height`, `zoom`, `center`, `tiles`. Included in full bundle or load Leaflet via `imports`
+    - `pdf`: Browser-native PDF viewer. Model returns a URL, data URL, Blob, ArrayBuffer, or Uint8Array. Schema prop: `height`. Included in the core bundle
+    - `gallery`: CSS grid of images. Model returns array of URLs/data URLs. Click to expand lightbox. Schema props: `columns` (default 3), `gap` (default 8px). Included in the core bundle
+    - `highlight`: Highlighted text with labels. Model returns `[{text, label, color}]` segments. Unlabeled segments render as plain text. Included in the core bundle
+    - `scores`: Ranked labels with numeric scores and bars, for example classifier predictions. See [ranked scores](#ranked-scores) for data and display options.
+    - `gauge`: Semicircle gauge. Model returns a number or `{value, label}`. Schema props: `min` (default 0), `max` (default 100), `label`, `color`. Included in the core bundle
+    - `number`: Large KPI number display. Model returns a number or `{value, delta, label}`. Delta shown with colored up/down arrow. Schema props: `label`, `prefix` (e.g. `"$"`), `suffix` (e.g. `"%"`), `precision`
+    - `alert`: Colored status banner with left accent border. Model returns a string or `{message, type}`. Four variants: `info` (blue, default), `success` (green), `warning` (amber), `error` (red). Schema prop: `alertType` (default type when value is a string)
+    - `viewer`: Preview a media URL. Model returns a URL string. Auto-detects content type from extension: images (png, jpg, gif, svg, webp), audio (mp3, wav, ogg, flac), video (mp4, webm, mov), or iframe (fallback). Useful with `folder` input for file preview
+    - `function`: Render function. Rather than returning a value, a model returns a function that JSEE will call passing the container element
+    - `blank`: Empty container for custom rendering via `function` output or external code
 
-  | Option | Scope | When it runs | Debounced |
-  |--------|-------|-------------|-----------|
-  | `autorun: true` | schema | once on load | no |
-  | `reactive: true` | schema | every input change | yes (300ms) |
-  | `reactive: true` | input | that input changes | no |
-  | `interval: N` | schema | after autorun or Run, then every N ms | no |
-- **Chat mode** — declare an output with `"type": "chat"` to enable conversational UI. The runtime manages state:
-  1. User types a message in a text input and presses Run (or Enter if the input has `"enter": true`)
-  2. The runtime injects `history` (array of `{role, content}` dicts) into the model payload alongside the user's `message`, unless a computation input already declares `history`
-  3. The model returns `{chat: "response string"}` (or `{chat: {role, content}}`)
-  4. The runtime appends both the user message and assistant response to the chat output's internal `_messages` array, clears the input, and auto-scrolls
-  5. Messages render with Markdown support (code blocks, bold, links, tables)
+#### Ranked scores
 
-  Works with both Workers (postMessage) and server POST — no special execution mode needed. Python shorthand: `jsee.serve(fn, chat=True)` auto-generates the schema from `fn(message, history) -> str`
+Use `type: "scores"` to compare labeled values, such as classifier predictions.
+Return an array like `[{label: 'cat', score: 0.72}, {label: 'dog', score: 0.28}]`.
+The view sorts rows and displays bars; CLI/HTTP/MCP retain the original order,
+numbers and extra row metadata. Empty arrays are valid; labels must be strings
+and scores finite numbers.
 
-- **Input persistence** — by default, JSEE saves input values to `localStorage` and restores them on page refresh. Values are namespaced by app/container/input shape, include grouped inputs, skip file/folder/action/button/disabled inputs, and are validated against type/options/min/max before restore. Priority: URL params > localStorage > schema defaults. Set `persist: false` in the schema to disable. Clicking Reset clears saved values
-- **Notifications** — set `notify: true` in the schema to show a browser notification when a run completes while the tab is hidden. JSEE requests permission on first load and fires `new Notification()` after successful runs only
+| Option | Display behavior |
+|---|---|
+| `min`, `max` | Bar scale, default 0-1; both must be finite and increasing |
+| `format` | `number` (default) or `percent`; does not change the stored value |
+| `precision` | Maximum decimal places, 0-20; default 3 |
+| `prefix`, `suffix` | Text around the displayed value |
+
+Out-of-range scores clip the bar and are identified in accessible text. The view
+does not normalize scores, interpret them as probabilities or record history.
+It updates in place, inherits the app theme and is included in the core/offline
+runtime without a chart library. See the [scores example](https://github.com/jseeio/jsee/tree/main/examples/scores/README.md).
+
+### When models run
+
+By default, the model runs when the user clicks Run. Three schema-level options change this:
+- `autorun` (boolean, default: `false`): run the model once on first load, then wait for manual Run clicks
+- `reactive` (boolean, default: `false`): re-run the model on **any** input change (debounced 300ms). Useful for lightweight models where instant feedback is desired
+- `interval` (number, default: `0`): after an autorun or manual Run, repeat execution every N milliseconds until Stop is clicked. `0` means no repetition. The first run keeps its original `caller` value (`autorun` or `run`); scheduled repeats use `caller: "interval"`
+- Per-input `reactive`: set `reactive: true` on an **individual input** to trigger a model run only when that specific input changes (fires immediately, not debounced). Other inputs still require a manual Run click. Useful when one input is interactive (e.g. a slider) but others are expensive to recompute
+
+| Option | Scope | When it runs | Debounced |
+|--------|-------|-------------|-----------|
+| `autorun: true` | schema | once on load | no |
+| `reactive: true` | schema | every input change | yes (300ms) |
+| `reactive: true` | input | that input changes | no |
+| `interval: N` | schema | after autorun or Run, then every N ms | no |
+
+### Chat mode
+
+Declare an output with `"type": "chat"` to enable conversational UI. The runtime manages state:
+1. User types a message in a text input and presses Run (or Enter if the input has `"enter": true`)
+2. The runtime injects `history` (array of `{role, content}` dicts) into the model payload alongside the user's `message`, unless a computation input already declares `history`
+3. The model returns `{chat: "response string"}` (or `{chat: {role, content}}`)
+4. The runtime appends both the user message and assistant response to the chat conversation, clears the input, and auto-scrolls
+5. Messages render with Markdown support (code blocks, bold, links, tables)
+
+Works with browser workers and server POST models. For Python, see [chat mode](py/README.md#chat-mode).
+
+### Saving input values
+
+By default, JSEE saves input values to `localStorage` and restores them on page refresh. Values are namespaced by app/container/input shape, include grouped inputs, skip file/folder/action/button/disabled inputs, and are validated against type/options/min/max before restore. Priority: URL params > localStorage > schema defaults. Set `persist: false` in the schema to disable. Clicking Reset clears saved values
+
+### Notifications
+
+Set `notify: true` in the schema to show a browser notification when a run completes while the tab is hidden. JSEE requests permission on first load and fires `new Notification()` after successful runs only
+
 ### Security and CSP
 
-- **Security mode** — set `security.mode: "secure"` or `security.trusted: false` to opt into stricter trust settings. Secure mode defaults `allowEval`, `allowNetwork`, `allowRawHtml`, `allowNotifications`, and `allowFileViewer` to `false`; explicit booleans such as `security.allowNetwork: true` can override individual defaults. `allowEval: false` blocks inline JavaScript/Python model code, cached hidden JavaScript assets, Blob-script worker execution, worker class lookup, and Pyodide source execution; use `type: "module"` with a module URL for the no-eval JavaScript path. Module models default to the main thread and can opt into `worker: true`. `allowNetwork: false` blocks API model requests plus network model/import/Pyodide runtime loads when JSEE can evaluate the schema before the request; same-origin relative model/import URLs are checked as relative schema URLs even when JSEE later resolves them for browser or worker loading. `allowRawHtml: false` sanitizes `html`, `svg`, `markdown`, and `chat` outputs, disables raw HTML inside Markdown, removes event handlers/scripts/unsafe URLs, and preserves ordinary Markdown formatting. `allowNotifications: false` skips browser Notification permission requests and completion notifications. `allowFileViewer: false` disables built-in file/folder input controls and replaces file/media outputs (`image`, `audio`, `video`, `pdf`, `gallery`, `viewer`, `file`) with a blocked placeholder. Loading the schema URL itself happens before schema security can be known
-These security flags gate JSEE-managed operations. They do not sandbox arbitrary model code, intercept all network calls, restrict the host filesystem, or enforce CPU/memory limits. Web Workers provide a separate execution thread and message passing; they retain browser worker capabilities such as network access. Deployment isolation must be provided and tested by the host.
+`security.mode: "secure"` or `security.trusted: false` defaults the flags below to
+`false`. Explicit booleans, such as `security.allowNetwork: true`, override those
+defaults.
 
-- **CSP deployment matrix** — for strict CSP/no-eval deployments, prefer `security.mode: "secure"` plus `type: "module"`. The current browser bundle injects built-in CSS at runtime, so built-in UI styles require `style-src 'unsafe-inline'`. Dynamically embedded workers require `worker-src blob:` over HTTP(S), or `worker-src data:` for file-origin HTML. An external `model.workerUrl` can use `worker-src 'self'`
+| Flag set to `false` | Blocks or changes |
+|---|---|
+| `allowEval` | Inline JS/Python code, cached hidden JS assets, Blob-script execution, worker class lookup and Pyodide source execution |
+| `allowNetwork` | JSEE-managed API requests and network model/import/Pyodide loads |
+| `allowRawHtml` | Sanitize HTML, SVG, Markdown and chat; remove raw Markdown HTML, event handlers, scripts and unsafe URLs |
+| `allowNotifications` | Skip notification permission requests and completion notifications |
+| `allowFileViewer` | Disable file/folder controls; replace file/media outputs with a blocked placeholder |
 
-  Baseline same-origin module policy:
+For JavaScript without eval, use `type: "module"` with a module URL. It runs on the
+main thread by default; set `worker: true` for worker execution. Relative
+model/import URLs are checked before resolution, so a same-origin relative URL is
+not treated as an external network URL. Loading a schema URL happens before its
+security settings can be known.
 
-  ```http
-  Content-Security-Policy:
-    default-src 'self';
-    script-src 'self';
-    style-src 'self' 'unsafe-inline';
-    img-src 'self' data: blob:;
-    font-src 'self' data:;
-    connect-src 'self';
-    worker-src 'none';
-    object-src 'none';
-    base-uri 'none';
-    form-action 'none'
-  ```
+These flags control JSEE-managed operations. They do not restrict arbitrary model
+code, all network calls, the host filesystem, CPU or memory. Workers run on a
+separate thread but retain capabilities such as network access. The host must
+provide any required execution sandbox.
 
-  Use `worker-src blob:` instead of `worker-src 'none'` for `worker: true` module models. If the runtime, module URL, imports, images, API endpoints, or Pyodide assets come from another origin, add those origins to the matching CSP directive and keep `security.allowNetwork` aligned with that choice.
+#### Content Security Policy (CSP)
 
-  | Schema path | Required CSP additions | No `unsafe-eval` | Notes |
-  | --- | --- | --- | --- |
-  | `type: "module", worker: false` | `script-src` must allow the module URL | yes | Verified with `security.mode: "secure"` and `worker-src 'none'` |
-  | `type: "module", worker: true` | `worker-src blob:` (or `self` with `workerUrl`) and `script-src` must allow the module URL | yes | Embedded and external entry points are tested |
-  | Main-thread JavaScript `model.code` string | `script-src 'unsafe-eval'` | no | Blocked by `security.allowEval: false` |
-  | Worker classic JavaScript `model.code` string | `worker-src blob:` plus `script-src blob:` | no | Blocked by `security.allowEval: false`; class lookup also uses `eval` |
-  | Hidden bundled JavaScript model/import code | Same as inline code | no | Intentionally blocked when `security.allowEval` is false |
-  | Remote API/model/import/Pyodide URLs | Matching `connect-src`, `script-src`, or worker/runtime directives | depends on model type | Blocked by `security.allowNetwork: false` unless explicitly allowed |
-- **Streaming outputs (SSE)** — set `model.stream: true` for progressive GET/POST results on the main thread or in a worker. SSE frames join multiline `data:` fields and preserve `null`, `false`, `0`, and empty strings. `[DONE]` completes the invocation and releases its reader without waiting for the server to close; `event: error` rejects the run. Unsuccessful HTTP responses also reject, while ordinary data objects containing an `error` key remain model results. The last data frame is the pipeline result; EOF without a sentinel remains accepted, including legacy unterminated final frames. A presentation callback is optional. Node server-side execution streams sync/async generator results from local JavaScript models, and Python generators are auto-detected:
-  ```python
-  def stream_count(n: int = 5):
-      for i in range(n):
-          yield {'count': i}
-  jsee.serve(stream_count, stream=True)
-  ```
-- **Stream cleanup and rendering** — Node and Python servers send generator failures as `event: error` frames followed by `[DONE]` once SSE headers have been sent. They close suspended generators when a response write detects disconnection; Node also releases waits for response backpressure. Producers blocked inside computation still need cooperative cancellation. Rendering copies result records before consuming metadata, so streamed pipeline fields such as `stop` survive. Chat records the user message once per run and does not append the last streamed assistant chunk again at completion; each partial chunk is a message, not an inferred text delta
-- **Efficient binary outputs** — large base64 image data URLs (>50KB) in `image` outputs are automatically converted to `URL.createObjectURL()` blob URLs, reducing memory usage by ~33%. Previous blob URLs are revoked on each update
-- **Typed array passing** — declare `arrayBuffer: true` on an input to convert JS arrays to typed arrays before passing to workers/WASM. Set `dtype` to control the type (`float32`, `float64`, `uint8`, `int32`, etc., default: `float64`). Typed-array conversions preserve numeric values and subarray boundaries; raw ArrayBuffer/DataView inputs retain byte interpretation. Worker requests use structured cloning so the caller can reuse its buffers on subsequent runs
-  ```json
-  "inputs": [{ "name": "data", "type": "string", "arrayBuffer": true, "dtype": "float32" }]
-  ```
-- Runtime cancellation: call `jsee.cancelCurrentRun()` on the JSEE instance to request stop of the active run. Long-running models should check `ctx.isCancelled()` and return early:
-  ```javascript
-  async function model (inputs, ctx) {
-    for (let i = 0; i < inputs.steps; i++) {
-      if (ctx.isCancelled()) throw new Error('Cancelled')
-      await doStep(i)
-      ctx.progress(Math.round(100 * (i + 1) / inputs.steps))
-    }
-    return { done: true }
+For deployments that prohibit eval, prefer `security.mode: "secure"` plus `type: "module"`. The current browser bundle injects built-in CSS at runtime, so built-in UI styles require `style-src 'unsafe-inline'`. Dynamically embedded workers require `worker-src blob:` over HTTP(S), or `worker-src data:` for file-origin HTML. An external `model.workerUrl` can use `worker-src 'self'`
+
+Baseline same-origin module policy:
+
+```http
+Content-Security-Policy:
+  default-src 'self';
+  script-src 'self';
+  style-src 'self' 'unsafe-inline';
+  img-src 'self' data: blob:;
+  font-src 'self' data:;
+  connect-src 'self';
+  worker-src 'none';
+  object-src 'none';
+  base-uri 'none';
+  form-action 'none'
+```
+
+Use `worker-src blob:` instead of `worker-src 'none'` for `worker: true` module models. If the runtime, module URL, imports, images, API endpoints, or Pyodide assets come from another origin, add those origins to the matching CSP directive and keep `security.allowNetwork` aligned with that choice.
+
+| Schema path | Required CSP additions | No `unsafe-eval` | Notes |
+| --- | --- | --- | --- |
+| `type: "module", worker: false` | `script-src` must allow the module URL | yes | Verified with `security.mode: "secure"` and `worker-src 'none'` |
+| `type: "module", worker: true` | `worker-src blob:` (or `self` with `workerUrl`) and `script-src` must allow the module URL | yes | Embedded and external entry points are tested |
+| Main-thread JavaScript `model.code` string | `script-src 'unsafe-eval'` | no | Blocked by `security.allowEval: false` |
+| Worker classic JavaScript `model.code` string | `worker-src blob:` plus `script-src blob:` | no | Blocked by `security.allowEval: false`; class lookup also uses `eval` |
+| Hidden bundled JavaScript model/import code | Same as inline code | no | Intentionally blocked when `security.allowEval` is false |
+| Remote API/model/import/Pyodide URLs | Matching `connect-src`, `script-src`, or worker/runtime directives | depends on model type | Blocked by `security.allowNetwork: false` unless explicitly allowed |
+
+### Streaming results
+
+Use Server-Sent Events (SSE) to display results as they arrive, such as generated
+text or successive measurements. Set `model.stream: true` for progressive GET/POST results on the main thread or in a worker. SSE frames join multiline `data:` fields and preserve `null`, `false`, `0`, and empty strings. `[DONE]` completes the invocation and releases its reader without waiting for the server to close; `event: error` rejects the run. Unsuccessful HTTP responses also reject, while ordinary data objects containing an `error` key remain model results. The last data frame is the pipeline result; EOF without a sentinel remains accepted, including legacy unterminated final frames. A presentation callback is optional. Node serving can stream sync/async JavaScript generators; see the [Python streaming example](py/README.md#streaming-results) for native Python. Streaming uses browser/API models and legacy stage endpoints, not the JSON `/run` operation.
+
+Node and Python servers send generator failures as `event: error` frames followed by `[DONE]` once SSE headers have been sent. They close suspended generators when a response write detects disconnection; Node also releases waits for response backpressure. Producers blocked inside computation still need cooperative cancellation. Rendering copies result records before consuming metadata, so streamed pipeline fields such as `stop` survive. Chat records the user message once per run and does not append the last streamed assistant chunk again at completion; each partial chunk is a message, not an inferred text delta
+
+### Binary data and typed arrays
+
+Browser `image` outputs convert data URL strings longer than 50,000 characters
+to Blob URLs and revoke previous Blob URLs on updates.
+
+In browser execution, declare `arrayBuffer: true` on an input to convert numeric
+arrays to typed arrays before passing them to JavaScript models or WebAssembly code. The example below uses a
+JSON editor to collect an array such as `[1, 2, 3]`. Set `dtype` to control the type (`float32`, `float64`, `uint8`, `int32`, etc., default: `float64`). Typed-array conversions preserve numeric values and subarray boundaries; raw ArrayBuffer/DataView inputs retain byte interpretation. Worker requests use structured cloning so the caller can reuse its buffers on subsequent runs. Node invocation leaves numeric arrays as arrays; convert them in model code if needed. This differs from reading file artifacts as binary bytes.
+
+```json
+"inputs": [{ "name": "data", "type": "object", "default": [1, 2, 3], "arrayBuffer": true, "dtype": "float32" }]
+```
+
+### Cancellation and validation
+
+Call `jsee.cancelCurrentRun()` on the JSEE instance to request stop of the active run. Long-running models should check `ctx.isCancelled()` and return early:
+
+```javascript
+async function model (inputs, ctx) {
+  for (let i = 0; i < inputs.steps; i++) {
+    if (ctx.isCancelled()) throw new Error('Cancelled')
+    await doStep(i)
+    ctx.progress(Math.round(100 * (i + 1) / inputs.steps))
   }
-  ```
-- Schema validation — JSEE validates schema structure during initialization and logs warnings for non-critical issues (e.g. unknown input types, malformed aliases)
-- Invocation validation — Browser runs, CLI runs, and Node/Python model endpoints check declared types, option values, numeric bounds/steps, and required input presence before invoking a model. Invalid HTTP inputs return 400. APIs apply explicit defaults; UI/legacy CLI controls also retain their type-based initial values. `required: false` permits omission; `required: true` requires the field even when a default is advertised. UI-only validation expressions and nonempty-field checks remain control behavior
-- Run lifecycle — Worker rebuilding reserves the run slot: overlapping automatic runs are dropped and manual runs queue. Stop aborts model-source fetches during rebuilding; stopped or failed rebuilds remain retryable and release partially initialized workers. A cancelled run cannot enter its first or a later pipeline stage. Main-thread initialization that cannot be interrupted keeps the slot until it settles. Invocation contexts guard supported callbacks; direct instance mutation and legacy raw worker `postMessage()` callbacks carry no such guard
-- Shared input contracts —Named groups become nested objects; unnamed layout groups flatten into their containing object. Buttons are excluded. Option objects use `value`, then `name`, then `label`; numeric and boolean options retain their types. Positional JS models (`container: 'args'`) receive declared inputs in schema order, without extra caller metadata
-- Legacy metadata — Browser `caller` and chat `history` injection never replaces declared computation inputs. Browser and CLI output lookup accept names, sanitized names, and string/array aliases inside output groups. Fields named `caller`, `stop`, `_status`, `_log`, and `_progress` stay hidden from automatic output discovery, but explicit output names/aliases can present them. A truthy `stop` still halts the pipeline, even if displayed as an output
-- Legacy worker callbacks — Raw `postMessage()` progress/partial callbacks are accepted while the worker stage is pending and ignored after it settles. They have no invocation identity: a delayed raw message arriving during a later call cannot be attributed safely. Use invocation-bound `ctx.log()`/`ctx.progress()` for asynchronous callbacks; raw messages do not have their lifetime guarantee
-- Instance state — JSEE copies descriptor containers before normalization and keeps mutable UI values separate. Reusing the same schema across instances does not share input values. Verbosity and embedded log sinks belong to each instance
-- Input inference warnings — when `schema.inputs` is omitted and JSEE infers inputs from JavaScript function parameters, inferred inputs default to `string` for compatibility. JSEE logs warnings for inferred string inputs, numeric defaults, JSDoc numeric hints, and unsupported destructured parameters so authors know when to declare `schema.inputs` explicitly. Set top-level `inferInputTypes: true` to opt into inferred `number` controls from numeric defaults or numeric JSDoc and `checkbox` controls from boolean defaults or JSDoc
-- `jsee.download(title)` — Downloads a self-contained HTML file that works offline. All external scripts are inlined and the schema/model/imports are cached in the same safe hidden-asset format used by `--bundle`. `title` defaults to `'output'`
-- `page` (CLI only) — Page metadata for generated HTML:
-  - `title` (string) — Page title
-  - `url` (string) — Page URL
-  - `ga` (string) — Google Analytics measurement ID (e.g. `"G-XXXXXXXXXX"`). Invalid IDs are omitted from generated HTML
-  - `social` (object) — Social media links: `twitter`, `github`, `facebook`, `linkedin`, `instagram`, `youtube` (values are usernames/handles)
-  - `org` (object) — Organization footer: `name`, `url`, `description`
+  return { done: true }
+}
+```
+
+- Schema validation: JSEE validates schema structure during initialization and logs warnings for non-critical issues (e.g. unknown input types, malformed aliases)
+- Invocation validation: Browser runs, CLI runs, and Node/Python model endpoints check declared types, option values, numeric bounds/steps, and required input presence before invoking a model. Invalid HTTP inputs return 400. APIs apply explicit defaults; UI/legacy CLI controls also retain their type-based initial values. `required: false` permits omission; `required: true` requires the field even when a default is advertised. UI-only validation expressions and nonempty-field checks remain control behavior
+
+#### Concurrent runs
+
+Worker rebuilding reserves the run slot: overlapping automatic runs are dropped and manual runs queue. Stop aborts model-source fetches during rebuilding; stopped or failed rebuilds remain retryable and release partially initialized workers. A cancelled run cannot enter its first or a later pipeline stage. Main-thread initialization that cannot be interrupted keeps the slot until it settles. Invocation contexts guard supported callbacks; direct instance mutation and legacy raw worker `postMessage()` callbacks carry no such guard
+
+#### Input groups and reserved metadata
+
+Named groups become nested objects; unnamed layout groups flatten into their containing object. Buttons are excluded. Option objects use `value`, then `name`, then `label`; numeric and boolean options retain their types. Positional JS models (`container: 'args'`) receive declared inputs in schema order, without extra caller metadata
+
+Browser `caller` and chat `history` injection never replaces declared computation inputs. Browser and CLI output lookup accept names, sanitized names, and string/array aliases inside output groups. Fields named `caller`, `stop`, `_status`, `_log`, and `_progress` stay hidden from automatic output discovery, but explicit output names/aliases can present them. A truthy `stop` still halts the pipeline, even if displayed as an output
+
+Raw `postMessage()` progress/partial callbacks are accepted while the worker stage is pending and ignored after it settles. They have no invocation identity: a delayed raw message arriving during a later call cannot be attributed safely. Use invocation-bound `ctx.log()`/`ctx.progress()` for asynchronous callbacks; raw messages do not have their lifetime guarantee
+
+#### Instance state and inferred inputs
+
+JSEE copies descriptor containers before normalization and keeps mutable UI values separate. Reusing the same schema across instances does not share input values. Verbosity and embedded log sinks belong to each instance
+
+When `schema.inputs` is omitted and JSEE infers inputs from JavaScript function parameters, inferred inputs default to `string` for compatibility. JSEE logs warnings for inferred string inputs, numeric defaults, JSDoc numeric hints, and unsupported destructured parameters so authors know when to declare `schema.inputs` explicitly. Set top-level `inferInputTypes: true` to opt into inferred `number` controls from numeric defaults or numeric JSDoc and `checkbox` controls from boolean defaults or JSDoc
+
+### Exporting browser apps
+
+`jsee.download(title)` exports an HTML app, with `title` defaulting to `'output'`.
+Offline use depends on the declared models and dependencies; see
+[bundle requirements](#--bundle) and [renderer export restrictions](#registration-and-export).
+
+### Generated page metadata
+
+The CLI uses `page` to set metadata on generated HTML:
+- `title` (string): Page title
+- `url` (string): Page URL
+- `ga` (string): Google Analytics measurement ID (e.g. `"G-XXXXXXXXXX"`). Invalid IDs are omitted from generated HTML
+- `social` (object): Social media links: `twitter`, `github`, `facebook`, `linkedin`, `instagram`, `youtube` (values are usernames/handles)
+- `org` (object): Organization footer: `name`, `url`, `description`
 
 ## Smart output auto-detection
+
+In the browser, JSEE can choose a view from a returned value. Declare output types
+explicitly when you need stable CLI, HTTP or MCP result schemas.
 
 When outputs are not explicitly defined in the schema, or when a model returns keys that don't match any named output, JSEE infers the output type from the value:
 
@@ -632,19 +674,46 @@ When outputs are not explicitly defined in the schema, or when a model returns k
 
 ## Structured and media inputs
 
-`object` accepts JSON values, including nested objects and variable-length lists. Its editor reports invalid JSON and blocks execution until corrected. `table` accepts the same values as table outputs: an array of row objects or `{ "columns": ["name"], "rows": [["Ada"]] }`. The table editor supports adding/removing rows, adding columns and editing JSON. Cells preserve JSON types: `0`, `false`, `null` and `""` are distinct. Column-specific validation is not inferred. An `object` input or output can declare an optional `valueSchema`, for example:
+Use these inputs for data that does not fit a single text or number field.
+
+### JSON objects and editable tables
+
+`object` accepts JSON values, including nested objects and variable-length lists. Its editor reports invalid JSON and blocks execution until corrected. `table` accepts the same values as table outputs: an array of row objects or `{ "columns": ["name"], "rows": [["Ada"]] }`. The table editor supports adding/removing rows, adding columns and editing JSON. Cells preserve JSON types: `0`, `false`, `null` and `""` are distinct. Column-specific validation is not inferred. Use an optional `valueSchema` to validate the structure of an `object` input or
+output. For example, require a `counts` array of nonnegative integers:
 
 ```json
-{"name":"info","type":"object","valueSchema":{"type":"object","properties":{"counts":{"type":"array","items":{"type":"integer","minimum":0}}},"required":["counts"],"additionalProperties":false}}
+{
+  "name": "info",
+  "type": "object",
+  "valueSchema": {
+    "type": "object",
+    "properties": {
+      "counts": {
+        "type": "array",
+        "items": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "required": [
+      "counts"
+    ],
+    "additionalProperties": false
+  }
+}
 ```
 
-`valueSchema` uses a bounded JSON Schema vocabulary: `type` (including type arrays and `null`), `properties`, `required`, boolean `additionalProperties`, `items`, `enum`, `minimum`, `maximum`, `minLength`, `maxLength`, `minItems`, `maxItems`, and `description`. Browser, Node and Python enforce these rules, and HTTP/MCP discovery exposes them. Unsupported keywords fail descriptor validation; references, formats, nested defaults and coercion are not supported. A provided shape owns nullability: include `"null"` in its type if needed; outer `nullable` or `default: null` do not widen it. Without a shape, `object` keeps accepting any finite JSON value.
+`valueSchema` uses a bounded JSON Schema vocabulary: `type` (including type arrays and `null`), `properties`, `required`, boolean `additionalProperties`, `items`, `enum`, `minimum`, `maximum`, `minLength`, `maxLength`, `minItems`, `maxItems`, and `description`. Browser, Node and Python enforce these rules, and HTTP/MCP discovery exposes them. Unsupported keywords fail descriptor validation; references, formats, nested defaults and coercion are not supported. When `valueSchema` is present, it determines whether null is allowed: include `"null"` in its type if needed; outer `nullable` or `default: null` do not widen it. Without a shape, `object` keeps accepting any finite JSON value.
 
-Named groups remain useful for fixed nested forms.
+Use named input groups when each field should have its own control; use `object`
+when users need to edit JSON directly.
+
+### Image, audio and video files
 
 `image`, `audio` and `video` provide file selection and previews. Declare `accept`, such as `"image/png"` or `"audio/*"`, to restrict selection; the media type also requires its own MIME family. Browser JS models receive an ArrayBuffer; native Python models receive bytes. Pyodide models can use `bytes(value)` on the received buffer. Canonical CLI/HTTP/MCP inputs use `{ "artifact": "<runId>/<index>" }`, rather than encoded media strings. MIME describes supplied metadata; it does not prove that a codec can decode the content. JSEE does not implicitly convert images to PIL/NumPy or audio to sample arrays.
 
-Media outputs may return bytes (with `mime` in the output descriptor), or `{content: bytes, mime: "image/png"}`. Canonical hosts store these as reusable artifacts. Existing media URL strings remain URLs. The canonical served UI uploads selected media, invokes the whole pipeline through `/run`, and displays its artifacts. Standalone browser apps keep local file data on the device. The new editors support `disabled` and `readonly`.
+Media outputs may return bytes (with `mime` in the output descriptor), or `{content: bytes, mime: "image/png"}`. Canonical hosts store these as reusable artifacts. Existing media URL strings remain URLs. The canonical served UI uploads selected media, invokes the whole pipeline through `/run`, and displays its artifacts. Standalone browser apps keep local file data on the device. These editors support `disabled` and `readonly`.
 
 ## Runtime Bundles
 
@@ -731,7 +800,7 @@ Sequential models pass merged results forward:
 }
 ```
 
-First model returns `{ cleaned: [...] }`, second receives `{ cleaned: [...], ...originalInputs }`. Return `{ stop: true }` from any model to halt early.
+First model returns `{ cleaned: [...] }`, second receives `{ ...originalInputs, cleaned: [...] }`. Return `{ stop: true }` from any model to halt early.
 
 ### Multi-column layout
 
@@ -752,9 +821,10 @@ Use `columns` on inputs/outputs for dashboard-style layouts:
 
 ## JSEE instance API
 
-After creating an instance with `new JSEE({schema, container})`, these methods are available:
-
-Multiple JSEE instances can run on the same page; progress and overlay DOM nodes are scoped per instance.
+Use the instance API to read inputs, run a model or embed JSEE in another page.
+Create an instance with `new JSEE({schema, container})` and await `ready` before
+interacting with it. Multiple instances can share a page; each owns its inputs,
+progress display and overlays.
 
 | Method | Description |
 |---|---|
@@ -770,7 +840,7 @@ Multiple JSEE instances can run on the same page; progress and overlay DOM nodes
 | `jsee.output(result)` | Process and render results to output cards |
 | `jsee.cancelCurrentRun()` | Stop the active run. Rejects the current run promise, sets cancellation state, and signals/terminates workers |
 | `jsee.isCancelled()` | Returns `true` if cancellation was requested |
-| `jsee.progress(value, details?)` | Report progress: `0`–`100` for determinate, `null` for indeterminate; optional `loaded`, `total` and `phase` metadata |
+| `jsee.progress(value, details?)` | Report progress: `0`-`100` for determinate, `null` for indeterminate; optional `loaded`, `total` and `phase` metadata |
 | `jsee.download(title)` | Export the current app; see [offline requirements](#--bundle) |
 | `jsee.destroy()` | Cancel runs and initialization fetches, terminate workers, unmount Vue, and release UI resources. Repeated calls are safe; later runs return `false` and late progress/output calls are ignored |
 | `jsee.notify(text)` | Show a success toast notification |
@@ -817,6 +887,9 @@ runtimes need not supply `ctx.signal`.
 
 ### Host control state and progress
 
+Use `setInputState` to change controls without changing their values. Subscribe to
+`progress` when the host supplies its own progress display.
+
 ```js
 const tool = new JSEE({ schema, container: '#app', progress: false })
 await tool.ready
@@ -831,32 +904,48 @@ const unsubscribe = tool.on('progress', event => {
 // In a model: ctx.progress(50, { loaded: 1024, total: 2048, phase: 'load' })
 ```
 
-A string path is one literal field name, including any dots. An array traverses
-named groups; unnamed groups share their parent's namespace. Named pipeline
-scopes are ordinary input groups. Groups support `display` updates only; set
-`disabled`/`readonly` on their fields. Unknown paths, unsupported properties and
-invalid patches reject before changing anything. State patches preserve values,
-do not emit `inputs`, and do not run reactive models or invalidate stage caches.
-Changing options retains the current selection; an unavailable selection fails
-normal validation until the caller or user explicitly changes the value.
-`readonly` uses native readonly controls where possible and disables selectors,
-sliders and other controls without a native readonly mode. Presentation state
-does not bypass validation or authorize execution.
+#### Updating controls
 
-`progress: false` hides JSEE's progress bars while keeping `progress` events.
-It is a constructor option, independent of `controls` and `toasts`. Each event
-has a per-instance invocation `runId` and a named `stageId` (or `null` for unnamed
-stages); progress outside an invocation has `runId: null`. `mode` is
-`determinate` or `indeterminate`, and `value` is a clamped percentage or `null`.
-Byte counts and phase are included only when supplied. Progress 100 does not mean
-the model is ready; use the invocation's terminal result/error/cancel instead.
-The runtime may emit zero when resetting progress after a worker call.
+| Patch property | Effect |
+|---|---|
+| `disabled` | Disable a field |
+| `readonly` | Use native readonly behavior where available; disable selectors, sliders and other controls without it |
+| `display` | Show or hide a field or group |
+| `options` | Replace the options of a choice input; retain its current value |
 
-Use `ctx.progress` inside models so reports are bound to that invocation. Tagged
-worker messages and retired contexts cannot update a newer call. Legacy manually
-posted messages without request identity remain supported, but late messages from
-that legacy path cannot be reliably attributed. Stop still terminates workers;
-cooperative model retention is a separate feature.
+A string path is a literal field name, including dots. Use an array such as
+`['settings', 'target']` to traverse named groups. Unnamed groups share their
+parent's namespace; named pipeline scopes are input groups.
+
+- Groups accept only `display`; update their individual fields for `disabled` or `readonly`.
+- Invalid paths or patches reject before any state changes.
+- Patches preserve values, emit no `inputs` event, and do not run reactive models or invalidate stage caches.
+- If new options exclude the current selection, validation fails until the user or host changes the value with `setInputs`.
+
+Control state does not bypass validation or grant permission to execute.
+
+#### Reading progress
+
+The constructor option `progress: false` hides JSEE's progress bars but keeps
+emitting events. It is independent of `controls` and `toasts`.
+
+| Event field | Meaning |
+|---|---|
+| `runId` | Per-instance invocation ID; `null` outside an invocation |
+| `stageId` | Named stage ID, or `null` for an unnamed stage |
+| `mode` | `determinate` or `indeterminate` |
+| `value` | Clamped percentage, or `null` for indeterminate progress |
+| `loaded`, `total`, `phase` | Optional metadata supplied by the model |
+
+Use the invocation's result, error or cancellation to detect completion; progress
+100 does not establish readiness. The runtime may emit zero when resetting after
+a worker call.
+
+Report through `ctx.progress` inside models: JSEE associates it with the current
+invocation and ignores reports from retired contexts. Legacy manually posted
+worker messages without request IDs remain supported, but late reports cannot be
+reliably attributed. For stopping a run while retaining its model, see
+[cooperative cancellation](#cooperative-cancellation).
 
 ### Image acquisition in browser apps
 
@@ -872,6 +961,8 @@ Live. Camera access requires browser permission on a secure origin. `facingMode`
 is optionally `"user"` or `"environment"` (default). `maxFps` defaults to 5 and
 must be greater than zero and at most 60. Actual throughput depends on capture
 and execution time. Snapshots use PNG, JPEG or WebP according to `accept`.
+
+#### Capture in a custom layout
 
 Custom layouts use the same acquisition implementation:
 
@@ -890,45 +981,59 @@ await image.stop({ snapshot: true }) // release camera; keep its last image
 image.dispose()                     // remove listeners and release tracks
 ```
 
-Use an array path for named groups, such as `['settings', 'photo']`. `select(files)`
-uses the same validation and selection path as upload/paste. `start()` opens a
-snapshot preview; `start({live:true})` requires `capture.live`. `stop()` releases
-tracks immediately and waits for an in-flight frame consumer. Each live frame
-waits for the previous consumer; no capture queue accumulates. A host can supply
-`onFrame: async file => ...` to handle frames itself. Do not await `stop()` or
-`select()` from inside `onFrame`, since those wait for that callback to settle.
+Use an array path such as `['settings', 'photo']` for an input in a named group.
 
-The default live consumer invokes an ordinary pipeline without changing stored
-form inputs. Its general API is `app.invoke(values, {transient:true})`: supplied
-values are validated for this run but are not stored in the form. Named pipelines
-keep their existing explicit target/override semantics; a custom layout must
-provide `onFrame` to choose that target. The generated named-pipeline control
-supports snapshots only.
+| Method | Behavior |
+|---|---|
+| `select(files)` | Validate and store a selection, as upload/paste does |
+| `start()` | Open a camera preview for snapshots |
+| `start({live: true})` | Start live capture; requires `capture.live` |
+| `stop()` | Release camera tracks immediately, then wait for an in-flight frame consumer |
+| `stop({snapshot: true})` | Also keep the last image |
+| `dispose()` | Remove listeners and release tracks |
 
-Disable/readonly changes, runtime Stop, page hiding and disposal stop capture.
-Destroying the app disposes its acquisition instances. Stopping capture alone
-does not cancel model execution; `app.stop()` controls execution separately.
-Frames use encoded files by default. Opt into decoded live frames with
-`capture: {camera:true, live:true, transport:"bitmap"}`. The callback then receives
-an `ImageBitmap`; snapshots and uploads still supply files. Local browser JS
-models must handle that distinction. Python and remote models require files.
+Disabling the input, making it readonly, stopping the runtime, hiding the page or
+disposing the control stops capture. App destruction disposes its acquisition
+instances. Stopping capture alone does not cancel a model run; use `app.stop()`
+for execution.
 
-A bitmap passed to `app.invoke({photo: bitmap}, {transient:true})` remains owned
-by the caller. Each model call borrows a separate copy; worker delivery transfers
-only that copy. JSEE closes model copies after settlement, including failures;
-forced worker termination disposes the worker. A model may close its borrowed
-copy early, but must copy it itself if it needs to retain it. Return files or
-pixel data, not borrowed bitmaps. Ordinary buffers keep their existing cloning
-behavior. Named stages use `invoke(undefined, {target, transient:true,
-overrides:{photo:bitmap}})`; frames do not enter retained stage results.
+#### Processing live frames
 
-The capture callback borrows its frame only until its returned promise settles;
-JSEE also closes late frames after Stop/disposal. Bitmaps cannot be stored with
-`setInputs` or sent through JSON, Python or HTTP/MCP. There is no automatic
-fallback that changes a bitmap model's input type. This avoids PNG encode/decode
-on the live path, but does not promise zero-copy execution or a particular speed.
-Capture UI and permission are browser-only; HTTP, CLI and MCP continue to accept ordinary image files or artifact references. JSEE
-owns acquisition and execution; models retain preprocessing and inference.
+Live capture waits for the previous frame consumer before sending another frame;
+it does not accumulate a queue. The default consumer calls an ordinary pipeline
+with `app.invoke(values, {transient: true})`: values are validated for this run
+without changing stored form inputs.
+
+Supply `onFrame: async file => ...` to handle frames yourself. Named pipelines
+require this callback to choose a target; their generated controls offer snapshots
+only. Do not await `stop()` or `select()` inside `onFrame`, because those methods
+wait for the callback to settle.
+
+#### Bitmap transport and ownership
+
+Frames are encoded files by default. Set
+`capture: {camera: true, live: true, transport: 'bitmap'}` to receive decoded
+`ImageBitmap` live frames. Snapshots and uploads remain files, so the model must
+handle both types. Bitmap execution supports local browser JavaScript; Python,
+HTTP, CLI and MCP use files or artifact references.
+
+| Bitmap source | Owner and lifetime |
+|---|---|
+| Passed to `app.invoke({photo: bitmap}, {transient: true})` | Caller owns the original; each model call borrows a separate copy |
+| Received by a model | JSEE closes the copy after settlement, including failures; worker delivery transfers only this copy |
+| Received by `onFrame` | Valid until the callback's returned promise settles; JSEE also closes late frames after Stop/disposal |
+
+A model may close its copy early. To retain it, make another copy; return files
+or pixel data rather than the borrowed bitmap. Forced worker termination disposes
+the worker. Ordinary buffers retain their existing cloning behavior.
+
+For named stages, use
+`invoke(undefined, {target, transient: true, overrides: {photo: bitmap}})`.
+Frames do not enter retained stage results. Bitmaps cannot be stored with
+`setInputs` or sent over JSON; there is no automatic fallback to another input
+type. Bitmap transport avoids PNG encoding/decoding on the live path but does not
+guarantee zero-copy execution or a particular speed. Models still own
+preprocessing and inference.
 
 ### Persistent output renderers
 
@@ -959,45 +1064,61 @@ const app = new JSEE({
 })
 ```
 
-The factory runs once as `renderer(container, initialData)` and returns
-`{ update(data), dispose?() }`. Later output values call `update` on that same
-view. JSEE does not clear its DOM on updates, so the view can retain selection,
-scroll or zoom. Submit a new output value to trigger an update; nested in-place
-mutations are not watched. Synchronous updates in one UI tick may be coalesced
-into the latest value; this is a view lifecycle, not an event log.
+#### Renderer lifecycle
 
-Hooks run synchronously on the UI thread. If a renderer starts asynchronous
-work, it owns cancellation and checks that late results still belong to the
-current source. `dispose` releases its listeners, observers, timers and graphics
-resources; JSEE clears the container. Replacing the renderer or output descriptor,
-removing the output, clearing its value to `undefined`, blocking its media output,
-or destroying the app disposes it once. `null` is a data value passed to the view.
-CSS hiding, output tabs and hidden host regions preserve mounted views; setting
-`output.display: false` removes the component and disposes it. Update errors
-retire the view and show an error in its card; a subsequent value can mount again.
+The factory is called as `renderer(container, initialData)` and returns
+`{ update(data), dispose?() }`.
 
-Registrations are copied at construction and scoped to the instance. Two apps
-may use the same name for different renderers. Unknown names and invalid
-controllers show explicit errors. The registry applies to leaf outputs; group
-containers retain their existing layout. Existing function outputs that return
-a cleanup function remain supported. Registered code is trusted host code;
-security options gate JSEE-managed operations, not arbitrary renderer code.
-Save/Copy still use the output's declared data type.
+| Action | What JSEE calls or preserves |
+|---|---|
+| First value | Create the view |
+| Later value | Call `update(data)`; keep DOM, selection, scroll and zoom |
+| `null` value | Passed to the view as data |
+| In-place mutation | No update; send a new value |
+| Values in one UI tick | May coalesce into the latest update |
+| CSS hide or tab switch | Keep the view, including hidden host regions |
+| `output.display: false` | Unmount and dispose the view |
 
-Schema export retains renderer names. Standalone `exportHTML()` and `download()`
-reject outputs with host renderer registrations: they cannot serialize host
-closures and dependencies. Bundle the host application with its renderer imports,
-or remove `output.renderer` to use built-in presentation. The `minimal`/`bulma`
-theme selection is independent; the registry does not replace Vue themes.
+JSEE also disposes a view when its renderer or descriptor is replaced, its output
+is removed or cleared to `undefined`, a media output is blocked, or the app is
+destroyed. `dispose()` runs once to release listeners, observers, timers and
+graphics resources; JSEE clears the container. An update error retires the view
+and displays an error in its card. A subsequent value can mount it again.
 
-See [the persistent views example](https://github.com/jseeio/jsee/tree/main/examples/persistent-renderers/index.html): a
-selectable sensor table and a chart keep selection and scale across worker runs.
+Hooks run synchronously on the UI thread. Renderers that start asynchronous work
+must cancel it or ignore late results when the source changes.
+
+#### Registration and export
+
+Registrations are copied at construction and belong to that instance. Different
+apps can register different views under the same name. The registry handles leaf
+outputs; groups keep their layout. Unknown names and invalid controllers show
+errors. Existing function outputs that return a cleanup function still work.
+
+Save/Copy use the output's declared type. Schema export retains renderer names,
+but `exportHTML()` and `download()` reject host renderer registrations because
+they cannot serialize host closures and dependencies. Bundle the host app and its
+renderer imports, or remove `output.renderer` to use the built-in view.
+
+Renderers are trusted host code; JSEE's security options do not constrain arbitrary
+renderer code. Registration is independent of the `minimal`/`bulma` Vue theme.
+
+[Persistent views example](https://github.com/jseeio/jsee/tree/main/examples/persistent-renderers/index.html):
+a selectable sensor table and chart retain selection and scale across worker runs.
 TypeScript helpers `OutputRenderer<T>`, `RendererView<T>` and `RendererRegistry`
 are exported from `@jseeio/jsee/schema`.
 
-### Image annotations and source coordinates
+<a id="image-annotations-and-source-coordinates"></a>
 
-`JSEE.imageView(container, initial, options)` is a reusable renderer factory.
+### Display images with annotations
+
+Use `JSEE.imageView` to display an image with boxes, points or colored masks over
+it, for example, detection boxes or a segmentation mask supplied by your model.
+Clicks report positions in the original image, so your app can use them as model
+inputs. You can also zoom and pan the display without changing the image data.
+The viewer draws annotations; it does not perform detection or segmentation.
+
+Create a view with `JSEE.imageView(container, initial, options)`.
 Bundled hosts can import `{ imageView }` from `@jseeio/jsee/image-view`. Register
 it under an application name, or mount it directly in a host-owned region and
 call `dispose()` when that region is removed. The same update/dispose lifecycle
@@ -1017,57 +1138,73 @@ view.setViewport({ zoom: 2, panX: 10, panY: 0 })
 view.update({ revision: 1, points: [{ x: 70, y: 60 }] })
 ```
 
-Coordinates refer to the decoded/oriented source image, independent of screen
-size or device pixel ratio. Masks are row-major RGBA bytes with explicit grid
-width/height and an `extent` in source pixels; JSEE does not infer mask scaling,
-decode model tensors or normalize scores. Masks paint without interpolation.
-Boxes and point markers use the same source coordinates. `fit` is `contain`
-by default; `cover` and `fill` are also supported. `mirror: true` flips source
-presentation and its coordinate mapping together. Pan offsets are CSS pixels.
+#### Coordinates and selection
 
-`sourceToClient({x,y})` and `clientToSource({x,y})` map to/from viewport CSS
-coordinates; the latter includes `inside` and does not clamp letterbox clicks
-onto an image edge. Mapping returns `null` before source pixels are available.
-Transform precision does not undo pointer-event rounding when a large image is
-scaled down. `onSelect` reports source coordinates and the current revision;
-it does not execute a model. Hosts can use `setInputs` and invoke explicitly.
-`setSelection(pointOrNull)` changes the marker without emitting another click.
+Annotation positions use pixels in the decoded/oriented source image. A box at
+`{x: 100, y: 50}` starts 100 pixels from its left edge and 50 from its top edge,
+regardless of the image's displayed size or device pixel ratio.
 
-Every new source requires an increasing nonnegative integer `revision`.
-Updates for older revisions return `false`. An update at the current revision
-can replace boxes, points or masks; omitted fields remain unchanged. Use empty
-arrays to clear layers. Changing the source with the same revision throws.
-A new revision clears the prior layers, selection, zoom and pan. Annotation-only
-updates keep that state. Use `getState()` to read viewport and selection.
+Masks contain row-major RGBA bytes, grid width/height and an explicit `extent` in source pixels. They paint without
+interpolation. JSEE does not infer scaling, decode tensors or normalize scores.
 
-Sources may be URLs, Blobs/Files, bitmaps, canvases, or image/video elements.
-URL/Blob decoding is asynchronous; `ready` resolves `true` when the current load
-is accepted, or `false` on failure/supersession. `onError` receives load failures.
-Owned decoded bitmaps close on replacement/disposal, including late loads;
-caller-supplied bitmaps and media elements remain caller-owned. Dispose releases
-observers/listeners and view references. This is browser presentation, not a
-new model input/output transport; borrowed bitmap execution restrictions remain.
+| Setting or method | Behavior |
+|---|---|
+| `fit` | Show the whole image (`contain`, default), crop to fill the viewer (`cover`), or stretch it (`fill`) |
+| `mirror: true` | Flip the image horizontally, including annotations and click coordinates |
+| `setViewport(patch)` | Zoom or pan the display using `zoom`, `panX` and `panY`; pan is in CSS pixels |
+| `sourceToClient(point)` | Map source pixels to viewport CSS coordinates |
+| `clientToSource(point)` | Map back; includes `inside`, without clamping letterbox clicks to image edges |
+| `onSelect` | Report source coordinates and revision; does not run a model |
+| `setSelection(pointOrNull)` | Change the marker without emitting another click |
+| `getState()` | Read viewport and selection |
 
-For an existing image/video, use `{ overlay: true }` and set `source` to that
-element. The view paints only annotations and follows the media element's
-object-fit box and pixel/percentage object-position on resize/load. The host owns playback, positioning and
-viewport transforms; `setViewport` is unavailable in overlay mode. Match
-`mirror` to the host's horizontal mirroring. Arbitrary CSS rotations and
-calculated (`calc()`) object-position are not supported. `{ canvas }` optionally reuses
-a host canvas; disposal clears it and restores its style instead of removing it.
-Give the container a height when a specific display area is required.
+Mapping methods take a point `{x, y}` and return `null` until source pixels are
+available. Mapping cannot recover precision lost to pointer-event rounding on a
+scaled-down image. A host can pass a selection to `setInputs` and invoke the model
+explicitly.
 
-The helper owns asynchronous image loading and stale-revision checks, not model
-inference. It does not repaint live video continuously in owned-image mode;
-use overlay mode on a playing video. Heatmaps, annotation editing and a gesture
-UI for pan/zoom remain outside this API. Host renderer bundling restrictions
-from the preceding section still apply.
+#### Source revisions and loading
+
+| Update | Result |
+|---|---|
+| New source | Requires an increasing nonnegative integer `revision`; clears layers, selection, zoom and pan |
+| Current revision | Replace supplied boxes, points or masks; omitted fields and viewport state remain unchanged |
+| Empty layer array | Clear that layer |
+| Older revision | Return `false` |
+| Changed source at the same revision | Throw an error |
+
+Sources can be URLs, Blobs/Files, bitmaps, canvases or image/video elements.
+URL/Blob decoding is asynchronous: `ready` resolves `true` for an accepted load or
+`false` for failure/supersession; `onError` receives load failures.
+
+JSEE closes bitmaps it decodes on replacement/disposal, including late loads.
+Caller-supplied bitmaps and media elements remain caller-owned. `dispose()` releases
+observers, listeners and view references. This renderer does not change model
+input/output types or the bitmap execution ownership rules above.
+
+#### Overlaying an existing image or video
+
+Set `{overlay: true}` and use the media element as `source`. JSEE paints annotations
+and follows the element's object-fit box and pixel/percentage object-position on
+resize/load. The host owns playback, positioning and viewport transforms;
+`setViewport` is unavailable. Match `mirror` to the host's horizontal mirroring.
+Arbitrary CSS rotations and `calc()` object-position are unsupported.
+
+Pass `{canvas}` to reuse a host canvas. Disposal clears it and restores its style
+instead of removing it. Give the container a height when a fixed display area is
+needed.
+
+Use overlay mode for playing video; owned-image mode does not continuously repaint
+video frames. Inference, heatmaps, annotation editing and a pan/zoom gesture UI are
+outside this API. The [host renderer export restrictions](#registration-and-export)
+also apply.
 
 ### Named stages in the existing pipeline
 
-Composers flatten tool schemas into ordinary `model` entries, input groups and
-namespaced outputs. JSEE does not accept nested module schemas. Named and unnamed
-lists use the same pipeline loop; unnamed lists retain their existing merge/stop behavior.
+Give stages IDs to connect model outputs to later inputs and rerun only affected
+stages. JSEE expects a flat `model` array, input groups and namespaced outputs; a
+host combining tool schemas must flatten them first. Unnamed pipelines keep their
+existing merge/stop behavior.
 
 ```js
 const schema = {
@@ -1087,59 +1224,84 @@ await app.ready
 await app.invoke({ gen1: { n: 5 } }, { target: 'fit1' }) // { 'fit1.result': 10 }
 ```
 
-When using IDs, every stage must have a unique ID. `scope` selects a root input
-group; bindings accept `{stage, path: ['output', 'nestedField']}`, `{input: ['publicInput']}`
-or `{value: literal}`. Bindings replace scoped values. `from: 'previous-stage'`
-continues an internal model stack: records merge and `stop` propagates through
-that chain, without stopping independent branches. Cycles/missing stages fail
-before execution. `enabled: false` excludes a stage from full runs; dependents
-require it enabled. Browser-only stages use `render: true` and run after their
-upstream computation. Mark their public outputs `required: false` for headless use.
+#### Stage definitions
 
-Default **Run** and `invoke()` reuse current named stages. `{target}` executes
-only its ancestor closure and associated views; `{force: true}` explicitly reruns
-all stages, or just the selected target when provided. The form exposes **Rerun all**.
-Input and upstream revision changes invalidate descendants. `getStages()` reports
-status/revision/results; `planPipeline(target)` returns execution order.
-`getStageInputs(id)` returns mapped, unprepared values. `stop()` cancels execution.
+| Field | Meaning |
+|---|---|
+| `id` | Unique stage ID; required on every stage when using named stages |
+| `scope` | Root input group supplying the stage's values |
+| `bindings` | Replace scoped values using `{stage, path: ['output', 'nestedField']}`, `{input: ['publicInput']}` or `{value: literal}` |
+| `from` | Continue another stage's internal model stack; records merge and `stop` propagates along that chain, not independent branches |
+| `enabled: false` | Exclude the stage from full runs; dependents require it enabled |
+| `render: true` | Run a browser view after its upstream models; mark public outputs `required: false` for headless use |
 
-`invoke(undefined, {target, transient: true, overrides: {inspect: true}})` supports
-an author-defined inspection operation without replacing retained trained results.
-JSEE does not interpret the override's meaning. Scoped dynamic input updates stay
-inside the stage's input group. File bindings follow the receiver's text/raw/stream
-contract. Stream sources must be replayable, not live iterators in saved projects.
+Cycles and missing stages fail before execution. Dynamic input updates stay within
+the stage's declared input group. File bindings use the receiver's text/raw/stream
+mode; saved projects need replayable stream sources, not live iterators.
 
-`getSchema()` captures the document and live defaults. `getPipelineState()` and
-`restorePipelineState(state)` store results separately, with SHA-256 definition
-fingerprints instead of source copies. Restoring compares file bytes once, then
-ordinary edits use immutable file identity. Render functions are not persisted;
-views recreate them on restore. Function outputs may return cleanup functions.
-Hosts own storage and authoring metadata.
+#### Running and inspecting stages
 
-`exportSchema()` preserves code references, resolves their URLs and pins loaded
-bytes with `sha256`. File data becomes JSON-safe. `exportHTML({runtime})` embeds
-JavaScript assets once per content hash through JSEE's existing offline DOM cache,
-plus the supplied runtime. Named-pipeline `download()` uses `runtimeURL`.
-HTML export supports JavaScript function models and declared assets, not Python,
-ES-module models or undeclared network dependencies. Exports are recipes, not
-retained run snapshots; random sources need seeds for identical regeneration.
+| Call | Behavior |
+|---|---|
+| Default **Run** or `invoke()` | Reuse current stage results |
+| `invoke(values, {target})` | Execute the target's required upstream stages and associated views |
+| `invoke(values, {force: true})` | Rerun all stages, or the selected target when supplied; the form also offers **Rerun all** |
+| `getStages()` | Read stage status, revisions and results |
+| `planPipeline(target)` | Read execution order |
+| `getStageInputs(id)` | Read mapped values before input preparation |
+| `stop()` | Cancel execution |
 
-Node CLI, canonical HTTP and MCP execute the same flat schema and skip render
-stages. Remote JavaScript references require SHA-256 pins; model/import bytes are
-verified before execution and `security.allowNetwork: false` blocks fetching.
-Python execution of named stages is not implemented. See
-`test/fixtures/composition.json` and `test/mcp/composition.test.js`.
+Input or upstream revision changes invalidate dependent stages.
+`invoke(undefined, {target, transient: true, overrides: {inspect: true}})` can run
+an app-defined inspection operation without replacing retained trained results.
+JSEE does not interpret the meaning of `inspect`.
+
+#### Saving state and exporting an app
+
+| Method | Contents |
+|---|---|
+| `getSchema()` | Descriptor with live defaults |
+| `getPipelineState()` | Stage results with SHA-256 definition fingerprints, separate from source code |
+| `restorePipelineState(state)` | Restore those saved results |
+| `exportSchema()` | Resolved code URLs, loaded bytes pinned with `sha256`, and JSON-safe file data |
+| `exportHTML({runtime})` | JavaScript assets deduplicated by content hash in the offline DOM cache, plus the supplied runtime |
+| Named-pipeline `download()` | HTML export using `runtimeURL` |
+
+Restore compares file bytes once; subsequent edits use immutable file identity.
+Render functions are recreated rather than persisted, and function outputs may
+return cleanup functions. Hosts own storage and authoring metadata.
+
+HTML export supports JavaScript function models and declared assets. Python,
+ES-module models and undeclared network dependencies are unsupported. An exported
+app reruns the computation; it is not a saved result snapshot. Random sources need
+seeds for repeatable results.
+
+#### Running named stages outside the browser
+
+Node CLI, HTTP `/run` and MCP execute the same flat schema, skipping render stages.
+Remote JavaScript references require SHA-256 pins: model/import bytes are verified
+before execution, and `security.allowNetwork: false` blocks fetching. Native Python
+does not implement named stages. See `test/fixtures/composition.json` and
+`test/mcp/composition.test.js`.
 
 ### Host-owned regions
 
-Embedded hosts can pass `controls: false` to omit JSEE's Run/Stop/Reset footer and
-`toasts: false` to suppress this instance's toast messages (including loading and
-error toasts). Both default to `true`. Invocation errors still reject and emit
-`error`; the host must display them. These options do not change `schema.notify`,
-which controls browser notifications, or the computation's execution policy.
+Choose which UI the host supplies:
 
+| Constructor option | Effect |
+|---|---|
+| `controls: false` | Omit JSEE's Run/Stop/Reset footer |
+| `toasts: false` | Suppress this instance's toast messages, including loading/errors |
+| `regions: {inputs, outputs}` | Mount those sections in host elements |
+| `regions: {inputGroups: '#inspector'}` | Place selected input groups in a shared inspector |
 
-To keep JSEE’s normal form and Run/Stop, mount an optional host editor inside an
+`controls` and `toasts` default to `true`. Errors still reject the invocation and
+emit `error`; the host must display them. These settings do not affect browser
+notifications (`schema.notify`) or execution permissions.
+
+#### Mounting a host editor in an input group
+
+To keep JSEE's normal form and Run/Stop, mount an optional host editor inside an
 input group instead of moving the form out of the app:
 
 ```js
@@ -1158,17 +1320,17 @@ In the normal form, `selectInputGroup(name)` finds nested groups and expands
 the selected section and its ancestors/children, collapsing unrelated sections.
 Selection changes presentation without executing or remounting models.
 
-`getInputGroupContainer(name)` returns the group’s editor element, or `null` when
+`getInputGroupContainer(name)` returns the group's editor element, or `null` when
 it is not rendered. The target lives until the group or app is removed and follows
 accordion visibility. The host retains its own framework context; JSEE does not
-load the editor’s framework. Editors are authoring UI and are not serialized into
+load the editor's framework. Editors are authoring UI and are not serialized into
 schema/HTML exports; their settings remain ordinary input values.
 
+#### Placing controls and outputs in host elements
 
 For a shared inspector use `regions: {inputGroups: '#inspector'}` and call
 `selectInputGroup('fit1')` after `ready`. It changes field visibility without
 rerunning or disposing stages. Use `controls: false` when the host owns Run/Stop.
-
 
 ```js
 const tool = new JSEE({
@@ -1189,20 +1351,30 @@ Each region carries JSEE's theme variables from `schema.design`. Hide the host's
 region elements to switch views without rerunning or disposing the tool. Destroy
 removes teleported content and listeners. Run/Stop controls remain with inputs.
 
-The `inputs` event reports current values after Vue updates, including UI edits,
-programmatic patches, reset and model-driven input updates. `start` receives the
-input snapshot; `result` receives the same values returned by `invoke`; `error`
-and `cancel` receive errors. Reactive schemas retain their automatic-run behavior;
+#### Host events and invocation
+
+| Event | Payload |
+|---|---|
+| `inputs` | Current values after Vue applies a UI edit, programmatic patch, reset or model-driven input update |
+| `start` | Input snapshot for the run |
+| `result` | Values returned by `invoke` |
+| `error`, `cancel` | Error object |
+
+Reactive schemas retain their automatic-run behavior;
 use `reactive: false` and no reactive input flags for manual workspace tools.
 Plain objects/arrays are copied; opaque runtime values retain their identities.
 `invoke()` never queues behind another run. Existing `run()` queue/interval
 behavior remains available to standalone applications.
 
-JSEE is part of the [StatSim](https://statsim.com) ecosystem. The schema/runtime contract is the public surface; lower-level packaging and renderer internals may continue to evolve.
+JSEE is part of the [StatSim](https://statsim.com) ecosystem.
 
 ## JSON commands and canonical HTTP
 
-Both packages provide a command named `jsee`: the npm command executes JavaScript models; the Python command executes Python models. If both are installed, use `npx @jseeio/jsee` for Node and the full path to your Python environment’s `bin/jsee` for Python. Existing flag-based commands remain supported.
+These commands run the whole pipeline and return declared outputs in a consistent
+JSON response. Here, **canonical HTTP** means the shared `/run` endpoint; the
+older per-model endpoints are documented under [legacy HTTP](#legacy-http-endpoints).
+
+Both packages provide a command named `jsee`: the npm command executes JavaScript models; the Python command executes Python models. If both are installed, use `npx @jseeio/jsee` for Node and the full path to your Python environment's `bin/jsee` for Python. Existing flag-based commands remain supported.
 
 The Node and Python CLIs accept the same descriptor commands. Use a JS model descriptor with Node and a Python model descriptor with Python:
 
@@ -1213,13 +1385,32 @@ jsee run schema.json --input input.json --json
 jsee serve schema.json --port 3000
 ```
 
+### Inspection and execution
+
 `inspect` reports input/output JSON Schemas and runtime capabilities without importing models. `validate` checks computation structure, names, known field types, numeric constraints and defaults. It requires a model; render-only descriptors remain valid for the browser. Neither command tests model availability, executes custom browser validation expressions, or validates every UI extension. The full authoring vocabulary remains available in `schema.json`.
 
 `run` reads UTF-8 JSON from stdin by default (`--input -`), or from the selected file. It writes one JSON envelope to stdout; model diagnostics go to stderr. Successful calls return `{runId, status: "succeeded", outputs, artifacts}`. Failed calls return `{runId, status: "failed", error: {code, message}}`. Exit codes are 0 for success, 2 for descriptor/JSON-request errors, and 1 for invocation or output failures.
 
-`outputs` contains declared, flattened output names, using existing alias lookup. Accumulated inputs and undeclared intermediates are omitted. Missing outputs and non-JSON values fail with `JSEE_OUTPUT_INVALID`. Invalid values report their path and kind, for example `info.a: undefined is not a JSON value`. Non-finite numbers (`NaN`, `Infinity`, `-Infinity`) fail at any depth; they are never silently replaced by null. Canonical CLI/HTTP/MCP results are checked against the generated output schema before files are stored: numeric/string/boolean types, table containers, and declared media fields. This validates built-in shapes and optional object `valueSchema` rules; chart semantics and unsupported JSON Schema keywords are outside this validation. An `object` output accepts any JSON value. Declare binary data as `type: "file"`.
+### Output validation and files
 
-File outputs accept text or bytes, directly or in a descriptor with `content`, `value`, or `data`, plus optional `filename` and `mime`. A file output becomes `{artifact: "<runId>/<index>"}`. The corresponding `artifacts` entry contains `id`, `output`, `name`, `mime`, `size` in bytes, `sha256`, and `uri`. Model-provided paths and URLs are never read or fetched by this adapter. CLI files persist under `.jsee-artifacts/` in the working directory (change with `--artifact-dir`) and use `file:` URIs.
+Results include only declared outputs, with group names flattened and aliases
+resolved. Accumulated inputs and undeclared intermediate values are omitted.
+
+- Missing outputs or non-JSON values fail with `JSEE_OUTPUT_INVALID`. Errors identify the path and value kind, such as `info.a: undefined is not a JSON value`.
+- `NaN`, `Infinity` and `-Infinity` fail at any depth; they are never silently replaced by `null`.
+- Before storing files, CLI/HTTP/MCP validate numeric, string and boolean outputs, table containers, media fields and optional object `valueSchema` rules. Chart semantics and unsupported JSON Schema keywords are not checked.
+- Without `valueSchema`, `object` accepts any JSON value. Declare bytes as `type: "file"`.
+
+| File result | Representation |
+|---|---|
+| Model return value | Text or bytes, directly or under `content`, `value` or `data`; optional `filename` and `mime` |
+| Value in `outputs` | `{artifact: "<runId>/<index>"}` |
+| Entry in `artifacts` | `id`, `output`, `name`, `mime`, `size` in bytes, `sha256`, `uri` |
+| CLI storage | `.jsee-artifacts/` in the working directory, or `--artifact-dir`; files have `file:` URIs |
+
+Model-provided paths and URLs are never opened or fetched as file content.
+
+### HTTP routes and limits
 
 Canonical serving adds these routes to the existing UI and per-stage endpoints:
 
@@ -1231,9 +1422,24 @@ Canonical serving adds these routes to the existing UI and per-stage endpoints:
 | `POST /__jsee/artifacts?name=data.csv` | Upload raw bytes; Content-Type declares MIME; returns `{artifact, metadata}` |
 | `GET /__jsee/artifacts/<runId>/<index>` | Download the referenced file as an attachment |
 
-A stage named `run` conflicts with canonical `/run` and is rejected before loading. Rename that stage or retain the legacy serving command. Existing `jsee schema.json --run`, `--serve`, and `-o index.html -f` forms keep their behavior. Python also accepts `serve(path, canonical=True)` and `create_app(path, canonical=True)`; call the WSGI application's `close()` when retiring it.
+A stage named `run` conflicts with canonical `/run` and is rejected before loading. Rename that stage or retain the legacy serving command. Existing `jsee schema.json --run`, `--serve`, and `-o index.html -f` forms keep their behavior. Python also accepts `serve(schema, canonical=True)` and `create_app(schema, canonical=True)` with a descriptor path or dict referencing local model files; call the WSGI application's `close()` when retiring it.
 
-Requests default to a 50 MiB limit (`--max-body-bytes`). Artifact storage defaults to 64 MiB and 1,024 files per server or persistent CLI artifact directory (`--max-artifact-bytes` changes the byte limit). A batch exceeding the quota fails without publishing partial artifacts. Artifact downloads verify size/SHA256 and return 409 if stored bytes changed. HTTP files live in a private temporary directory until server shutdown; a killed process can leave temporary files for host cleanup. HTTP URIs are relative to that server and do not survive a restart. Retained input/output artifacts and pending uploads share the quota; a transform retaining both a large input and output may need a larger store. Quotas do not bound model allocations or computation time.
+| Limit | Default | Option |
+|---|---|---|
+| JSON request or raw HTTP upload | 50 MiB | `--max-body-bytes` |
+| Stored artifacts, including pending uploads | 64 MiB | `--max-artifact-bytes` |
+| Stored file count | 1,024 | Fixed |
+
+A batch that exceeds the quota publishes no partial artifacts. Input and output
+files share the store: a transform retaining both may need a larger quota. These
+limits do not bound model memory or execution time.
+
+HTTP artifacts live in a private temporary directory until shutdown. Their URIs
+are relative to the server and do not survive a restart; a killed process may
+leave temporary files for host cleanup. Downloads verify size/SHA256 and return
+409 if stored bytes changed.
+
+### Passing files between runs
 
 Ordinary `type: "file"` inputs accept inline text or an existing `{ "artifact": "<runId>/<index>" }` handle. References resolve in the current store before model execution: ordinary files become strict UTF-8 text, while `arrayBuffer: true` becomes ArrayBuffer in JS or bytes in native Python. Legacy inline numeric arrays keep their existing meaning. Raw/stream file modes retain their separate semantics and do not accept artifact references.
 
@@ -1248,7 +1454,27 @@ jsee run schema.json --input input.json --artifact-dir .jsee-artifacts
 
 CLI registrations persist alongside bytes, so subsequent invocations can reuse handles. Registrations created before this feature cannot be recovered from old bare files. Writers serialize publication with `.write-lock`; after an interrupted CLI write, verify that no writer remains before removing that lock. HTTP registrations last until host shutdown; MCP registrations last for the session. Moving a file to another host/session requires explicit download/upload. The JSON request and raw HTTP upload limits are both controlled by `--max-body-bytes`; ingestion does not remove store quotas.
 
-Canonical `/run` accepts JSON only, returns 400 for invalid inputs, 413 for excessive bodies, 415 for other content types, 422 for unsupported execution capabilities, 500 for model/output errors, and 507 for artifact quota failures. Canonical serving applies same-origin access to every route by default, including legacy endpoints and static files. Legacy serving commands retain wildcard CORS until host policy is explicitly configured. Servers default to localhost. Authentication and CORS are configured for the whole host as described below. Existing security flags gate JSEE-managed operations and do not provide an OS sandbox. Remote MCP, streaming/cancellation through the canonical operation, and multi-descriptor serving remain future work.
+### HTTP errors and access
+
+`/run` accepts JSON only.
+
+| Status | Cause |
+|---|---|
+| 400 | Invalid inputs |
+| 413 | Request body too large |
+| 415 | Unsupported content type |
+| 422 | Unsupported execution capability |
+| 500 | Model or output error |
+| 507 | Artifact quota exceeded |
+
+Servers bind to localhost by default. Canonical serving applies same-origin
+access to every route, including legacy endpoints and static files. Legacy serving
+retains wildcard CORS until a host policy is configured. See
+[authentication and CORS](#http-authentication-and-cors) for host-wide settings.
+
+Security flags gate JSEE-managed operations; they do not provide an OS sandbox.
+Remote MCP, streaming/cancellation through `/run`, and multi-descriptor serving
+remain unsupported.
 
 ## HTTP authentication and CORS
 
@@ -1262,7 +1488,11 @@ jsee serve schema.json --auth-token-env APP_TOKEN --cors-origin https://client.e
 
 Alternatively use `--auth-token TOKEN`. The options also work with legacy serving commands. Python `serve()` and `create_app()` accept `auth_token`, `auth_token_env`, and `cors_origins` (a list). Token configuration is validated before importing descriptor models; missing/empty environment values fail startup. Auth/CORS flags are server-only and cannot become schema defaults, model inputs or verbose argv output. They are rejected in MCP stdio and JSON command modes.
 
+### Client authentication
+
 Clients send `Authorization: Bearer TOKEN`. Browsers use the built-in HTTP login prompt: username `jsee`, password the same token. Both authenticate every actual request; there are no public UI, asset or discovery bypasses. Tokens are never embedded in generated HTML or schemas. Missing/invalid credentials return JSON 401 with authentication challenges. Authenticated responses use `Cache-Control: no-store`, including streams and downloads. OpenAPI declares Bearer and Basic as alternatives.
+
+### Allowed origins
 
 | Setting | Origin policy |
 |---|---|
@@ -1277,6 +1507,8 @@ Origins must use their serialized HTTP(S) form, without paths, trailing slashes,
 
 Allowed preflights return 204 without credentials and permit `Authorization`/`Content-Type` for GET, HEAD, POST and OPTIONS. The actual request still needs credentials. Disallowed origins, requested methods or headers fail before routing/body parsing. CORS headers also cover authorized-origin error responses; `Vary: Origin` prevents mixing origins in caches. File attachment names are exposed through `Content-Disposition`.
 
+### Proxies and deployment
+
 Serve credentials over HTTPS through a trusted TLS proxy, or use an SSH tunnel. For a TLS proxy, explicitly allow its public HTTPS origin; JSEE does not trust forwarded headers. Runtime URLs in served Node pages are relative, so they retain the browser's host, scheme and authentication. This is shared-token access control, with no user accounts, OAuth, per-tool permissions or execution sandbox. See the [Bearer](https://www.rfc-editor.org/rfc/rfc6750.html#section-2.1), [Basic](https://www.rfc-editor.org/rfc/rfc7617.html) and [CORS](https://fetch.spec.whatwg.org/#http-cors-protocol) standards.
 
 ## MCP over stdio
@@ -1285,17 +1517,38 @@ Start one descriptor as an MCP tool with `jsee serve schema.json --mcp-only`. Th
 
 Configure an MCP client to launch the installed `jsee` executable with arguments `['serve', '/absolute/path/schema.json', '--mcp-only']`. Use the executable belonging to the descriptor's language. For a Node checkout, use command `node` and prepend `/absolute/path/jsee/bin/jsee` to those arguments.
 
+### Tool discovery and results
+
 `tools/list` derives a computation tool from the descriptor's stable `id`, title, description and input schema without importing model code. `tools/call` executes the same whole-pipeline invocation as JSON CLI/HTTP. Success returns the complete `{runId, status, outputs, artifacts}` envelope as `structuredContent` and JSON text, with its generated `outputSchema`. Invalid inputs, execution/output failures and artifact quota failures return `isError: true` and the failed envelope as text. Unknown tools or artifact URIs produce protocol errors.
+
+### Reading MCP artifacts
 
 File results include `resource_link` entries with session-scoped `jsee-artifact:` URIs. `resources/list` exposes metadata; `resources/read` returns exact bytes as a base64 blob only when requested. Verify the decoded bytes against `size` and `sha256` in the run envelope. Store limits remain 64 MiB/1,024 files per session (`--max-artifact-bytes` changes bytes); rejected batches expose no files. Files disappear on orderly close or SIGTERM and cannot be retrieved by another session. SIGKILL or a crash can leave temporary files.
 
 `--max-body-bytes` bounds decoded arguments (50 MiB by default); Node also applies that limit to its incoming wire buffer, including protocol overhead. Python's SDK reads a message before JSEE checks its arguments. These limits do not bound model memory. A resource read returns the entire file: base64 adds overhead, and the client's message limit may be lower than the store quota. Large-file chunking is not implemented.
 
-`tools/list` also advertises `upload_artifact` (`jsee_upload_artifact` if that name is already the computation ID). Send `{data: "<base64>", name: "data.csv", mime: "text/csv", offset: 0}` to start; continue with the returned `upload` ID and `offset`. Each chunk is at most 262,144 decoded bytes. Set `final: true` to publish `{artifact, metadata}`, then pass `{artifact: result.artifact}` to a compatible input. Set `{upload: id, cancel: true}` to discard an incomplete upload. Up to 16 incomplete uploads share the store byte quota; incomplete bytes are never listed as resources. The client transfers file chunks, so the model need not include file contents in its computation arguments. Configure client/server message limits to fit the base64 chunk plus protocol overhead.
+### Uploading MCP artifacts
+
+Discovery also lists `upload_artifact`, renamed `jsee_upload_artifact` if the
+computation already uses that ID.
+
+1. Start with `{data: "<base64>", name: "data.csv", mime: "text/csv", offset: 0}`.
+2. Continue with the returned `upload` ID and `offset`. Each chunk can contain at most 262,144 decoded bytes.
+3. Set `final: true` to publish `{artifact, metadata}`. Pass `{artifact: result.artifact}` to a compatible model input.
+4. To abandon an incomplete upload, send `{upload: id, cancel: true}`.
+
+Up to 16 incomplete uploads share the store byte quota and remain absent from
+resource listings. The client transfers the chunks; model arguments contain only
+the artifact reference. Client/server message limits must accommodate base64
+encoding and protocol overhead.
+
+### MCP support and limits
 
 Independent Node and Python SDK clients test both servers in legacy negotiation and protocol 2026-07-28 mode, including the [clean sales workflow](https://github.com/jseeio/jsee/tree/main/examples/clean-sales/README.md). MCP calls use the existing programmatic invocation lifecycle; persistent model state across calls is not a portable contract. This adapter supports terminal calls for one descriptor. Remote MCP, streams and forced cancellation remain pending; HTTP authentication is separate from stdio process access. Model source is trusted code; stdio separation is not a sandbox.
 
-## CLI — Node.js
+<a id="cli--nodejs"></a>
+
+## CLI: Node.js
 
 ```
 jsee [schema.json|package] [data...] [options]
@@ -1376,7 +1629,7 @@ Bundle modes:
 
 Select the runtime source for generated HTML:
 - `auto` (default): `inline` when `--bundle`, otherwise `cdn` for file output and `local` for dev server
-- `local`: `http://localhost:<port>/dist/...`
+- `local`: `/dist/...` for served pages; generated files use the configured server host and port
 - `cdn`: jsdelivr CDN URL
 - `inline`: embed runtime code directly in HTML
 - Any other value is used as a custom `<script src="...">` path/URL
@@ -1433,7 +1686,7 @@ For single files, JSEE auto-detects the output type from the file extension (ima
 
 The dev server file endpoints are app-root contained. `/__jsee/file` and `/__jsee/folder` only serve files under the schema/package root, or under the explicit file/folder path passed to identity serving (`jsee data/`, `jsee report.pdf`). Python schema static files are also contained to the schema root. Path traversal, symlinks that resolve outside the allowed root, dotfiles, and `node_modules` paths are denied.
 
-Output type auto-detection also works for model results — if a model returns a string ending in `.png`, it renders as an image automatically.
+Output type auto-detection also works for model results: if a model returns a string ending in `.png`, it renders as an image automatically.
 
 ### Serve bar
 
@@ -1441,10 +1694,13 @@ When serving, a top bar appears with the server address and, when server-side ex
 
 ## Whole-pipeline invocation
 
+Call a pipeline directly from Node or Python without starting a server. This API
+returns native values and intermediate results. Use the JSON CLI or HTTP API when
+you need declared-output filtering, serialization and stored file artifacts.
 
 | Contract | Browser | Node | Native Python |
 |---|---|---|---|
-| Groups, defaults, options, numeric constraints | Shared fixtures | Shared fixtures | Shared fixtures |
+| Groups, defaults, options, numeric constraints | Validated | Validated | Validated |
 | Custom input expressions and nonempty controls | UI validation | Not evaluated | Not evaluated |
 | Pipeline execution | Browser orchestrates stages | `invokeSchema`, JSON CLI, canonical HTTP and MCP execute JS pipelines; legacy stages remain | `invoke_schema`, JSON CLI, canonical HTTP/WSGI and MCP execute Python pipelines; legacy stages remain |
 | Python callable selection | Pyodide `entry` | Not a native Python runtime | `entry`, with a separate endpoint `name` |
@@ -1459,7 +1715,10 @@ The returned envelope is `{ runId, status: 'succeeded', result }` or `{ runId, s
 
 Results retain accumulated pipeline data, including intermediate values. Only records merge; arrays, scalars and null replace the previous value. Python `None` corresponds to JS null; JavaScript's undefined retains the previous value. The existing truthy `stop` field stops later stages. JSON input containers are copied before execution. Runtime values are returned directly, without HTTP serialization or file persistence.
 
-This interface supports local JS functions/classes/async initializers and native Python sync/async functions in files. Python uses keyword binding by default and schema input order for `container: 'args'`. Python stages retain the loader's unique-name requirement. Schema imports, remote models, and streaming are rejected explicitly; normal imports inside model source remain usable. Calls execute on the caller's thread without forced interruption, worker isolation, or enforcement of browser timeout/security flags.
+This interface supports local JS functions/classes/async initializers and native Python sync/async functions in files. Python uses keyword binding by default and schema input order for `container: 'args'`. Python stages retain the loader's unique-name requirement. Ordinary schema imports, unpinned remote models and streaming are rejected;
+normal imports inside model source remain usable. Node also supports remote JS
+model URLs and per-model imports with SHA-256 pins, verifying bytes before execution.
+Native Python requires local model files. Calls execute on the caller's thread without forced interruption, worker isolation, or enforcement of browser timeout/security flags.
 
 ### Legacy HTTP endpoints
 
@@ -1472,7 +1731,10 @@ Every server (both Node.js with `--execute` and Python) exposes these endpoints:
 | `/api/openapi.json` | GET | Auto-generated OpenAPI 3.1 spec |
 | `/{modelName}` | POST | Execute model with JSON or multipart input |
 
-Both servers support `application/json` and `multipart/form-data` POST bodies, CORS (`Access-Control-Allow-Origin: *`), and return JSON errors for invalid requests. The Node dev server accepts JSON and multipart request bodies up to 50 MiB. Python `serve()` and `create_app()` share request decoding and default to the same 50 MiB limit; set a positive `max_body_bytes` or the Python CLI's `--max-body-bytes` to change it. Invalid lengths or input values return 400; declared oversized bodies return 413 before reading the body. This size limit does not provide execution isolation or a request deadline. Python `serve()` runs with a threaded dev server, awaits async model functions, and streams sync or async generator functions as SSE when `stream=True`.
+Both servers accept `application/json` and `multipart/form-data` POST bodies and
+return JSON errors for invalid requests. Legacy serving defaults to wildcard CORS;
+canonical serving and explicit authentication/origin settings use the
+[host access policy](#http-authentication-and-cors). The Node dev server accepts JSON and multipart request bodies up to 50 MiB. Python `serve()` and `create_app()` share request decoding and default to the same 50 MiB limit; set a positive `max_body_bytes` or the Python CLI's `--max-body-bytes` to change it. Invalid lengths or input values return 400; declared oversized bodies return 413 before reading the body. This size limit does not provide execution isolation or a request deadline. Python `serve()` runs with a threaded dev server, awaits async model functions, and streams sync or async generator functions as SSE when `stream=True`.
 
 The OpenAPI spec is generated from the same schema contract: request bodies include JSON inputs and multipart file uploads, responses include declared output properties (including outputs nested in groups), streaming models advertise `text/event-stream`, `schema.examples` become request examples, and standard JSON error responses are documented. This is descriptive only; the runtime response payload remains backward-compatible.
 
@@ -1509,16 +1771,28 @@ Both servers normalize model return values consistently:
 
 ## Python
 
-The [Python README](py/README.md) covers installation, type annotations, schema generation, CLI commands, streaming and WSGI deployment. The [Python quick start](#python-serve-a-function) above is a complete runnable example.
+<a id="python-serve-a-function"></a>
+<a id="use-python-instead"></a>
+
+**Python**: includes the browser runtime; no Node.js required:
+
+```sh
+python -m pip install jsee
+```
+
+Requires Python 3.9+. For Python MCP support, use Python 3.10+ and `python -m pip install 'jsee[server]'`. Models may need additional packages.
+
+See the [Python quick start](py/README.md#quick-start) for a complete example and the [Python README](py/README.md) for type annotations, schema generation, CLI commands, streaming and WSGI deployment.
 
 ## Status and limitations
 
-- Browser regression coverage qualifies Chromium. Firefox and WebKit are not yet qualified. Strict Python/WASM CSP deployments need separate verification; see the [worker/CSP reference](#security-and-csp).
-- Native Node and Python canonical invocation support local, terminal computations. Schema imports, streaming and remote model execution are outside that invocation path. Browser execution and legacy streaming routes have different capabilities; see [whole-pipeline invocation](#whole-pipeline-invocation).
+- Browser regression tests run in Chromium. Firefox and WebKit have not been verified. Strict Python/WASM CSP deployments need separate verification; see the [worker/CSP reference](#security-and-csp).
+- Node and Python JSON CLI, HTTP `/run` and MCP calls execute local models and return a completed result. Streaming is unsupported on that path. Node accepts SHA-256-pinned remote
+  JavaScript models and per-model imports; native Python requires local model files. Browser execution and legacy streaming routes have different capabilities; see [whole-pipeline invocation](#whole-pipeline-invocation).
 - Identified pipeline stages are supported in browser/Node execution, not native Python. [Named stages](#named-stages-in-the-existing-pipeline) are optional; ordinary sequential pipelines remain available.
 - MCP supports one descriptor over **stdio**. Remote MCP, canonical streaming and forced server-side cancellation are pending.
-- Worker isolation keeps computation off the UI thread. Browser security flags gate JSEE operations; server execution runs trusted code with the process’s permissions. Neither is an OS sandbox.
-- Offline use depends on the model’s assets and dependencies. API models need their server; Python bundles need Pyodide assets and declared packages. See [bundle modes](#--bundle).
+- Worker isolation keeps computation off the UI thread. Browser security flags gate JSEE operations; server execution runs trusted code with the process's permissions. Neither is an OS sandbox.
+- Offline use depends on the model's assets and dependencies. API models need their server; Python bundles need Pyodide assets and declared packages. See [bundle modes](#--bundle).
 
 ### Versioning
 
@@ -1553,7 +1827,7 @@ The additional app suites exercise real computation:
 |---|---|
 | `npm run test:python` | Pinned Pyodide/NumPy, repeated entry calls, addition and CSV summary on the main thread and in workers |
 | `python -m pip install -r test/python/requirements.txt` then `npm run test:python-apps-native` | Native pandas summary against the same CSV/result fixtures as Pyodide |
-| `npm run test:ml` | GPT-2 text generation and camera → CLIP worker → view, with pinned weights and dependencies |
+| `npm run test:ml` | GPT-2 text generation and camera -> CLIP worker -> view, with pinned weights and dependencies |
 
 The app suites verify assets against `test/fixtures/runtime-assets.json`, downloading missing files into ignored `tmp/test-assets/`. Python assets use about 55 MB; ML assets use about 1.12 GB. These are download sizes, not runtime memory requirements. Browser requests use local assets; ML tests redirect the original apps' known external URLs to the pinned copies and block other external requests. GPT-2 is rebuilt from its reviewed source and lockfile with dependency installation scripts disabled. The tests use genuine model inference and a deterministic simulated camera frame.
 
