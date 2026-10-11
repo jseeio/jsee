@@ -67,7 +67,6 @@
     "src/",
     "templates/",
     "README.md",
-    "docs/",
     "CHANGELOG.md",
     "LICENSE",
     "schema.json",

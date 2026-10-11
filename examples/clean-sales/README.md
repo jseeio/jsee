@@ -53,7 +53,7 @@ For MCP, configure your client to launch `node` with arguments `['/absolute/path
 
 The client discovers `clean_sales` through `tools/list`, then calls it with `{"csv":"price,quantity\n10,2\n20,1\n,3\n","missing":"drop"}`. `structuredContent.outputs.summary` contains the counts above. The result also includes the table and a `resource_link`; `resources/read` retrieves the cleaned CSV as a base64 blob. Decode it and verify the run's size/SHA256. An invalid policy returns `isError: true` with `JSEE_INPUT_INVALID` before model execution. No separate tool handler or form is needed in the example.
 
-`npm run test:mcp` runs independent Node/Python SDK clients against both servers and all 13 shared CSV cases, including exact file bytes and invalid values. See the [MCP contract and limits](../../docs/cli/README.md#mcp-over-stdio).
+`npm run test:mcp` runs independent Node/Python SDK clients against both servers and all 13 shared CSV cases, including exact file bytes and invalid values. See the [MCP contract and limits](../../README.md#mcp-over-stdio).
 
 Build the browser form using the existing CLI:
 

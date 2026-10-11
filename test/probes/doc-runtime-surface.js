@@ -10,7 +10,7 @@ function countBacktickToken (text, token) {
 }
 
 const descriptor = require('../../schema.json')
-const readme = fs.readFileSync('docs/schema/README.md', 'utf8')
+const readme = fs.readFileSync('README.md', 'utf8')
 const inputTypes = descriptor.definitions.inputType.enum
 const modelTypes = descriptor.definitions.modelType.enum
 
@@ -37,7 +37,7 @@ assert(!/`tf`/.test(readme), 'Schema reference should not document removed tf mo
 // Parse Markdown so fenced code and inline example URLs are not treated as navigation.
 const path = require('path')
 const markdown = require('markdown-it')({ html: true })
-const documents = ['README.md', 'py/README.md', ...fs.readdirSync('docs').map(name => `docs/${name}/README.md`)]
+const documents = ['README.md', 'py/README.md']
 const anchorCache = new Map()
 function anchors (file) {
   if (anchorCache.has(file)) return anchorCache.get(file)

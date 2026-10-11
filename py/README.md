@@ -36,7 +36,7 @@ curl http://localhost:5050/multiply -H 'Content-Type: application/json' -d '{"a"
 
 The response is `{"result":12.0}`. Stop with Ctrl+C. You can also serve the function with `jsee app.py multiply --port 5050`; the main guard keeps importing the file from starting a second server.
 
-This callable-based server provides the UI at `/`, the function at `POST /multiply`, discovery at `/api` and OpenAPI at `/api/openapi.json`. For a schema-backed app with the shared `/run` route and MCP, follow [Your first computation](https://jsee.org/docs/guide/#use-python-instead).
+This callable-based server provides the UI at `/`, the function at `POST /multiply`, discovery at `/api` and OpenAPI at `/api/openapi.json`. For a schema-backed app with the shared `/run` route and MCP, follow [Your first computation](https://jsee.org/#use-python-instead).
 
 ### Whole-pipeline invocation
 
@@ -59,7 +59,7 @@ jsee serve schema.json --port 5050
 
 Use a descriptor with local Python files, optional stable `id`, declared inputs and outputs. Inspection and validation do not import the models. JSON execution reads stdin by default (`--input -`) and sends model prints to stderr. Success is `{runId, status: "succeeded", outputs, artifacts}`; failures contain `error: {code, message}`. CLI exit codes are 0 for success, 2 for descriptor/request errors, and 1 for invocation/output failures.
 
-File inputs accept inline UTF-8 text or `{artifact: "<runId>/<index>"}` from the current store. Artifact-backed `arrayBuffer: true` files and typed `image`/`audio`/`video` inputs become Python bytes. `object` accepts JSON, optionally constrained by the shared `valueSchema` vocabulary, and `table` accepts the existing output table shapes; their browser editors preserve those values. See the [shared input and artifact behavior](https://jsee.org/docs/schema/#structured-and-media-inputs).
+File inputs accept inline UTF-8 text or `{artifact: "<runId>/<index>"}` from the current store. Artifact-backed `arrayBuffer: true` files and typed `image`/`audio`/`video` inputs become Python bytes. `object` accepts JSON, optionally constrained by the shared `valueSchema` vocabulary, and `table` accepts the existing output table shapes; their browser editors preserve those values. See the [shared input and artifact behavior](https://jsee.org/#structured-and-media-inputs).
 
 Only declared outputs are returned; groups flatten and aliases retain their existing lookup order. Outputs must be JSON-compatible. Missing values and unsupported objects fail. Invalid values report their path and kind; non-finite numbers fail at any depth, for example `info.a: NaN is not a JSON value`. Canonical results must match the generated built-in output schema before files are stored, including numeric/string/boolean types, table containers and declared media fields. Null is rejected for numeric declarations; object `valueSchema` uses the bounded shared vocabulary; chart semantics and unsupported JSON Schema keywords are not validated. For `file` outputs, return text, `bytes`, `bytearray` or `memoryview`, optionally inside `{content, filename, mime}`. `value` and `data` are accepted content aliases. Paths and URLs are never read or fetched as file content.
 
@@ -69,7 +69,7 @@ A file output becomes `{artifact: "<runId>/<index>"}`. Its `artifacts` entry pro
 
 Limits are 50 MiB per JSON request (`--max-body-bytes`) and 64 MiB/1,024 artifacts per server or persistent CLI artifact directory (`--max-artifact-bytes` changes bytes). Programmatic options use underscores. Limit failures publish no partial file batch. Invalid inputs return 400; excessive bodies 413; non-JSON content 415; unsupported capabilities 422; model/output errors 500; artifact quotas 507. Canonical serving applies same-origin policy across all routes; legacy commands retain wildcard CORS until configured. Forced interruption and canonical streaming remain pending; these servers do not sandbox model code.
 
-The [CLI, HTTP and MCP reference](https://jsee.org/docs/cli/#json-commands-and-canonical-http) describes the common transport contract and validation scope. Existing Python CLI forms and stdlib/WSGI APIs retain their behavior.
+The [CLI, HTTP and MCP reference](https://jsee.org/#json-commands-and-canonical-http) describes the common transport contract and validation scope. Existing Python CLI forms and stdlib/WSGI APIs retain their behavior.
 
 ## HTTP authentication and CORS
 
@@ -77,7 +77,7 @@ Use `jsee serve schema.json --auth-token-env APP_TOKEN` to read a shared token f
 
 Bearer clients send `Authorization: Bearer TOKEN`; the browser login uses username `jsee` and the token as password. All routes require authentication, including the UI, scripts, static files, API descriptions, streams, artifacts and errors. No token is embedded in HTML/schema or passed to computation inputs. Use HTTPS via a trusted TLS proxy or an SSH tunnel; explicitly allow a TLS proxy's public HTTPS origin. Forwarded headers are not trusted automatically.
 
-Canonical serving defaults to same-origin requests. Legacy serving keeps public wildcard CORS until a token or origin list is configured. `cors_origins=[]` / `--cors-origin none` keeps same-origin access; `['*']` is public and cannot be combined with authentication. Allowed preflights do not require credentials; actual requests do. Invalid credentials return 401; denied origins/preflights return 403 before body reads. OpenAPI describes both authentication schemes, and authenticated responses use `Cache-Control: no-store`, including SSE. See the [common host policy](https://jsee.org/docs/cli/#http-authentication-and-cors) for details and limits.
+Canonical serving defaults to same-origin requests. Legacy serving keeps public wildcard CORS until a token or origin list is configured. `cors_origins=[]` / `--cors-origin none` keeps same-origin access; `['*']` is public and cannot be combined with authentication. Allowed preflights do not require credentials; actual requests do. Invalid credentials return 401; denied origins/preflights return 403 before body reads. OpenAPI describes both authentication schemes, and authenticated responses use `Cache-Control: no-store`, including SSE. See the [common host policy](https://jsee.org/#http-authentication-and-cors) for details and limits.
 
 ## MCP over stdio
 
@@ -85,9 +85,9 @@ Install `python -m pip install 'jsee[server]==0.9.0'` with Python 3.10+ (base Py
 
 Discovery does not import model code. Calls return the same validated output/artifact envelope as JSON CLI/HTTP in `structuredContent` and JSON text. Failures set `isError` and return the failed envelope as text. File outputs include MCP resource links; read them through `resources/read` and verify the decoded blob against the envelope's size and SHA256. Artifact storage defaults to 64 MiB/1,024 files per session and cleans up on orderly close or SIGTERM; a crash can leave files. Reads return entire files, subject to the client's message limits.
 
-The additional `upload_artifact` tool supports bounded chunks, completion and cancellation; handles from completed uploads or computation outputs are reusable within the session. The `jsee artifact-import data.csv --mime text/csv` CLI persists registrations for later CLI runs. See the [common upload protocol](https://jsee.org/docs/cli/#mcp-over-stdio).
+The additional `upload_artifact` tool supports bounded chunks, completion and cancellation; handles from completed uploads or computation outputs are reusable within the session. The `jsee artifact-import data.csv --mime text/csv` CLI persists registrations for later CLI runs. See the [common upload protocol](https://jsee.org/#mcp-over-stdio).
 
-Model prints go to stderr. Calls follow `invoke_schema`'s loading lifecycle; persistent model state is not a portable contract. The SDK parses messages before JSEE applies the decoded-argument limit. Remote MCP, streams and forced cancellation remain pending; HTTP auth options do not apply to stdio. See the [common MCP contract](https://jsee.org/docs/cli/#mcp-over-stdio) for client setup and limits.
+Model prints go to stderr. Calls follow `invoke_schema`'s loading lifecycle; persistent model state is not a portable contract. The SDK parses messages before JSEE applies the decoded-argument limit. Remote MCP, streams and forced cancellation remain pending; HTTP auth options do not apply to stdio. See the [common MCP contract](https://jsee.org/#mcp-over-stdio) for client setup and limits.
 
 ## How it works
 
@@ -188,7 +188,7 @@ jsee.serve(report, outputs={'summary': jsee.Markdown(), 'data': jsee.Table()})
 | `jsee.Svg()` | `svg` | Inline SVG |
 | `jsee.File(filename)` | `file` | Download button |
 
-Output dictionaries/lists also accept the shared schema types without annotation helpers. For ranked scores, use `outputs=[{'name': 'predictions', 'type': 'scores', 'format': 'percent'}]` and return `{'predictions': [{'label': 'cat', 'score': 0.72}]}`. Canonical CLI/HTTP/MCP preserve row order and numeric values; the browser sorts the display. Scores must be finite. See the [shared output reference](https://jsee.org/docs/schema/#schema).
+Output dictionaries/lists also accept the shared schema types without annotation helpers. For ranked scores, use `outputs=[{'name': 'predictions', 'type': 'scores', 'format': 'percent'}]` and return `{'predictions': [{'label': 'cat', 'score': 0.72}]}`. Canonical CLI/HTTP/MCP preserve row order and numeric values; the browser sorts the display. Scores must be finite. See the [shared output reference](https://jsee.org/#schema).
 
 Auto-detected output types:
 - `-> list` → `table` (list-of-dicts auto-converted to `{columns, rows}` format)

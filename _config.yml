@@ -1,6 +1,6 @@
 title: "JSEE"
 description: > # this means to ignore newlines until "show_excerpts:"
-  One computation, a web UI, a command line and an agent tool.
+  JavaScript Execution Environment
 
 show_excerpts: false
 
@@ -15,11 +15,7 @@ logo_footer:
   width: 50
 
 header_pages:
-  - docs/guide/README.md
-  - docs/schema/README.md
-  - docs/browser/README.md
-  - docs/cli/README.md
-  - py/README.md
+  -
 
 minima:
   social_links:
@@ -28,81 +24,3 @@ minima:
     github: jseeio
 
 remote_theme: "jseeio/minima"
-
-# README files are the source for both repository docs and the website.
-plugins:
-  - jekyll-readme-index
-  - jekyll-relative-links
-  - jekyll-optional-front-matter
-  - jekyll-titles-from-headings
-  - jekyll-remote-theme
-
-readme_index:
-  enabled: true
-relative_links:
-  enabled: true
-titles_from_headings:
-  enabled: true
-  strip_title: false
-
-defaults:
-  - scope:
-      path: ""
-    values:
-      layout: page
-      show_title: false
-  - scope:
-      path: docs/guide
-    values:
-      title: Get started
-  - scope:
-      path: docs/schema
-    values:
-      title: Schema
-  - scope:
-      path: docs/browser
-    values:
-      title: Browser API
-  - scope:
-      path: docs/cli
-    values:
-      title: CLI and servers
-  - scope:
-      path: py
-    values:
-      title: Python
-
-exclude:
-  - node_modules
-  - tmp
-  - test
-  - test-results
-  - playwright-report
-  - src
-  - templates
-  - scripts
-  - bin
-  - py/build
-  - py/dist
-  - py/jsee
-  - py/test
-  - py/jsee.egg-info
-  - apps
-  - references
-  - reference
-  - patches
-  - upstream
-  - build
-  - coverage
-  - archbird.json
-  - AGENTS.md
-  - CLAUDE.md
-  - LOG.md
-  - FEEDBACK.md
-  - MEMORY*.md
-  - PLAN*.md
-  - UPSTREAM.md
-  - JSEE.full.md
-  - "*.dump.txt"
-  - Gemfile
-  - Gemfile.lock

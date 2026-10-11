@@ -13,11 +13,6 @@ const files = pack.files.map(file => file.path)
 
 const required = [
   'README.md',
-  'docs/guide/README.md',
-  'docs/schema/README.md',
-  'docs/browser/README.md',
-  'docs/cli/README.md',
-  'docs/development/README.md',
   'CHANGELOG.md',
   'LICENSE',
   'package.json',
