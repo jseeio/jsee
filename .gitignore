@@ -19,3 +19,9 @@ py/jsee/static/
 *.md
 !README.md
 !**/README.md
+
+# Jekyll documentation preview
+_site/
+.sass-cache/
+.jekyll-cache/
+Gemfile.lock

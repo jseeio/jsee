@@ -118,6 +118,7 @@
 - Update the development build/audit tree by moving `sass-loader` to v17, removing the `node-sass` chain, raising `@babel/core` to the patched Babel 7 line, and pinning audited transitive `minimatch`/`js-yaml` versions through npm overrides.
 
 ### Updates:
+- Reorganize documentation into a getting-started landing page, a complete cross-runtime tutorial and schema/browser/CLI references. Add PyPI installation, working site navigation and documentation link/package checks.
 - Add inspect/validate/run/serve descriptor commands for Node and native Python, preserving legacy CLI forms.
 - Expose canonical whole-pipeline JSON HTTP/WSGI routes and OpenAPI with declared outputs and bounded, retrievable file artifacts.
 - Add Node invokeSchema and async native Python invoke_schema for validated whole-pipeline calls with separate run IDs, terminal results, and structured errors. Add a shared clean_sales example and offline form/download regression.
