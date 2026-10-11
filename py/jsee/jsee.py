@@ -1135,11 +1135,11 @@ def _stream_sse_result(result, write_chunk):
       write_chunk(chunk)
 
 
-def _sse_frames(result):
+def _sse_frames(result, outputs=None):
   try:
     with closing(_iter_model_result(result)) as chunks:
       for chunk in chunks:
-        yield 'data: {}\n\n'.format(json.dumps(_serialize_result(chunk))).encode('utf-8')
+        yield 'data: {}\n\n'.format(json.dumps(_serialize_result(chunk, outputs))).encode('utf-8')
   except Exception as error:
     yield 'event: error\ndata: {}\n\n'.format(json.dumps({'error': str(error)})).encode('utf-8')
   yield b'data: [DONE]\n\n'
@@ -1254,7 +1254,7 @@ def _binary_data_url(value):
   return 'data:{};base64,{}'.format(_sniff_binary_mime(data), b64)
 
 
-def _serialize_value(value):
+def _serialize_value(value, output_type=None):
   """Serialize a single value (may be nested inside a dict result)."""
   if isinstance(value, (bytes, bytearray)):
     return _binary_data_url(value)
@@ -1265,7 +1265,7 @@ def _serialize_value(value):
     b64 = base64.b64encode(buf.getvalue()).decode('ascii')
     mime = 'image/png' if fmt == 'PNG' else 'image/jpeg'
     return 'data:{};base64,{}'.format(mime, b64)
-  if isinstance(value, list) and value and isinstance(value[0], dict):
+  if output_type != 'scores' and isinstance(value, list) and value and isinstance(value[0], dict):
     return _to_table_format(value)
   return value
 
@@ -1281,19 +1281,27 @@ def _finite_json_numbers(value):
   return value
 
 
-def _serialize_result(result):
+def _serialize_result(result, outputs=None):
   """Serialize a function result for JSON response.
 
   Handles: dict, tuple, list, bytes, PIL Image, list-of-dicts, primitives.
   """
-  # Dict — serialize each value individually
+  declared = _flatten_outputs(outputs)
+  types = {}
+  for output in declared:
+    names = [output['name'], re.sub(r'[^a-z0-9_]', '_', output['name'].lower())]
+    aliases = output.get('alias', [])
+    names.extend([aliases] if isinstance(aliases, str) else aliases)
+    for name in names:
+      types[name] = output.get('type')
+  # Declared scores keep their row contract; undeclared lists retain legacy table conversion.
   if isinstance(result, dict):
-    return _finite_json_numbers({k: _serialize_value(v) for k, v in result.items()})
+    return _finite_json_numbers({k: _serialize_value(v, types.get(k)) for k, v in result.items()})
   # Tuple — convert to list
   if isinstance(result, tuple):
     return {'result': _finite_json_numbers([_serialize_value(v) for v in result])}
   # Top-level value
-  serialized = _serialize_value(result)
+  serialized = _serialize_value(result, declared[0].get('type') if len(declared) == 1 else None)
   if serialized is not result:
     return {'result': _finite_json_numbers(serialized)}
   return {'result': _finite_json_numbers(result)}
@@ -1553,11 +1561,11 @@ def serve(target, host='127.0.0.1', port=5050, max_body_bytes=DEFAULT_MAX_BODY_B
             def _write_frame(frame):
               self.wfile.write(frame)
               self.wfile.flush()
-            _stream_sse_result(_sse_frames(result), _write_frame)
+            _stream_sse_result(_sse_frames(result, schema.get('outputs')), _write_frame)
           except (BrokenPipeError, ConnectionResetError):
             pass
         else:
-          self._send_json(_serialize_result(result))
+          self._send_json(_serialize_result(result, schema.get('outputs')))
       except Exception as e:
         self._send_error(str(e), 500)
 
@@ -1745,8 +1753,8 @@ def create_app(target, **kwargs):
             ('Content-Type', 'text/event-stream; charset=utf-8'),
             ('Cache-Control', 'no-cache'),
           ])
-          return _sse_frames(result)
-        body = json.dumps(_serialize_result(result)).encode('utf-8')
+          return _sse_frames(result, schema.get('outputs'))
+        body = json.dumps(_serialize_result(result, schema.get('outputs'))).encode('utf-8')
         start_response('200 OK', [
           ('Content-Type', 'application/json; charset=utf-8'),
           ('Content-Length', str(len(body))),

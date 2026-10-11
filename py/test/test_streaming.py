@@ -25,11 +25,11 @@ runtime = importlib.import_module('jsee.jsee')
 @pytest.fixture(params=['http', 'wsgi'])
 def open_response(request, monkeypatch):
     @contextmanager
-    def open_app(target, data=None):
+    def open_app(target, data=None, **options):
         body = json.dumps(data or {}).encode()
         if request.param == 'wsgi':
             captured = {}
-            app = runtime.create_app(target, stream=True)
+            app = runtime.create_app(target, stream=True, **options)
             response = app({'REQUEST_METHOD': 'POST', 'PATH_INFO': '/' + target.__name__,
                             'CONTENT_TYPE': 'application/json', 'CONTENT_LENGTH': str(len(body)),
                             'wsgi.input': io.BytesIO(body)},
@@ -52,7 +52,7 @@ def open_response(request, monkeypatch):
 
         def start():
             try:
-                runtime.serve(target, port=0, stream=True)
+                runtime.serve(target, port=0, stream=True, **options)
             except BaseException as error:
                 errors.append(error)
 
@@ -73,6 +73,30 @@ def open_response(request, monkeypatch):
             assert not thread.is_alive()
             assert not errors
     return open_app
+
+
+@pytest.mark.parametrize('streaming', [False, True])
+@pytest.mark.parametrize('named', [False, True])
+def test_declared_scores_keep_rows_in_json_and_sse(open_response, streaming, named):
+    rows = [{'label': 'low', 'score': 0.2}, {'label': 'high', 'score': 0.8}]
+    result = {'ranked': rows, 'table': [{'x': 1}]} if named else rows
+    outputs = ([{'type': 'group', 'elements': [
+        {'name': 'predictions', 'type': 'scores', 'alias': ['ranked']},
+        {'name': 'table', 'type': 'table'},
+    ]}] if named else [{'name': 'result', 'type': 'scores'}])
+
+    def compute():
+        return result
+
+    def stream():
+        yield result
+
+    with open_response(stream if streaming else compute, outputs=outputs) as response:
+        assert response.status == 200
+        body = response.read().decode()
+    payload = json.loads(body.split('\n')[0][6:] if streaming else body)
+    assert payload == ({'ranked': rows, 'table': {'columns': ['x'], 'rows': [[1]]}}
+                       if named else {'result': rows})
 
 
 @pytest.mark.parametrize('asynchronous', [False, True])
