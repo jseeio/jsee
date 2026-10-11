@@ -75,9 +75,9 @@
   ],
   "private": false,
   "scripts": {
-    "build-dev": "webpack --mode=development --progress --stats-children --env DEVELOPMENT && node scripts/compat-runtime.js",
+    "build-dev": "webpack --mode=development --progress --stats-children --env DEVELOPMENT && node scripts/compat-runtime.js && node scripts/copy-example-runtimes.js",
     "build-full": "webpack --mode=production --progress --env FULL",
-    "build": "webpack --mode=production --progress && webpack --mode=production --progress --env FULL && node scripts/compat-runtime.js && npm run copy-runtime-py && npm test",
+    "build": "webpack --mode=production --progress && webpack --mode=production --progress --env FULL && node scripts/compat-runtime.js && node scripts/copy-example-runtimes.js && npm run copy-runtime-py && npm test",
     "build:python": "npm run build && python -m build py",
     "watch-dev": "nodemon --watch . --ignore dist,.git --ext vue,js,css,html --exec 'npm run build-dev'",
     "watch": "nodemon --watch . --ignore dist,.git --ext vue,js,css,html --exec 'npm run build-dev && npm run test:basic'",

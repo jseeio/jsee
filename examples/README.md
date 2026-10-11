@@ -1,12 +1,17 @@
 # JSEE Examples
 
-Self-contained HTML files demonstrating JSEE patterns. To run:
+HTML examples demonstrating JSEE patterns. To serve the collection from the repository root:
 
 ```bash
 npm run build-dev
 npx http-server . -p 8080
 # Open http://localhost:8080/examples/
 ```
+
+The `scores/`, `persistent-renderers/` and `image-annotations/` directory examples
+also work as individual site roots after a build: for example,
+`npx http-server examples/scores -p 8080`. Builds place a local runtime in each
+folder's ignored `dist/` directory. Include that directory when copying an example.
 
 ## Examples
 

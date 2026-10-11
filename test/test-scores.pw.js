@@ -81,3 +81,32 @@ test('scores built-in survives standalone offline export', async ({ page }) => {
     fs.rmSync(directory, { recursive: true, force: true })
   }
 })
+
+for (const example of ['scores', 'persistent-renderers', 'image-annotations']) {
+  test(`directory example ${example} runs when served as the site root`, async ({ page }) => {
+    const path = require('path')
+    const server = require('http-server').createServer({ root: path.resolve(__dirname, '../examples', example), cache: -1 })
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+    const errors = [], failed = []
+    page.on('pageerror', error => errors.push(error.message))
+    page.on('response', response => { if (response.status() >= 400) failed.push(response.url()) })
+    try {
+      await page.goto(`http://127.0.0.1:${server.server.address().port}/`)
+      await expect(page.locator('.jsee-app').first()).toBeVisible()
+      if (example === 'scores') {
+        await expect(page.getByRole('meter', { name: 'Alpha' })).toHaveAttribute('aria-valuenow', '0.72')
+        await page.getByLabel('Color scheme').selectOption('dark')
+        await expect(page.locator('.jsee-scores')).toHaveCSS('color', 'rgb(236, 236, 236)')
+        await page.locator('#alpha').fill('0.5')
+        await page.locator('#alpha').dispatchEvent('input')
+        await page.getByRole('button', { name: /^Run/ }).click()
+        await expect(page.getByRole('meter', { name: 'Alpha' })).toHaveAttribute('aria-valuenow', '0.5')
+      }
+      expect(errors).toEqual([])
+      expect(failed).toEqual([])
+    } finally {
+      await page.goto('about:blank')
+      await new Promise(resolve => server.server.close(resolve))
+    }
+  })
+}

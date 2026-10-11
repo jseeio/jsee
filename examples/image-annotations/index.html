@@ -7,7 +7,7 @@
 <p>Click the image to select a source pixel. Run with a different opacity; selection and zoom stay in place.</p>
 <label>Zoom <input id="zoom" type="range" min="1" max="3" step="0.1" value="1"></label>
 <p id="point" aria-live="polite">No point selected.</p><div id="app"></div>
-<script src="../../dist/jsee.core.js"></script>
+<script src="./dist/jsee.core.js"></script>
 <script>
   const source=document.createElement('canvas');source.width=640;source.height=320
   const ctx=source.getContext('2d');ctx.fillStyle='#dce7ef';ctx.fillRect(0,0,640,320)

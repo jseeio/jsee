@@ -8,7 +8,7 @@
 <nav><label for="scheme">Color scheme</label> <select id="scheme"><option value="auto">System</option><option value="light">Light</option><option value="dark">Dark</option></select></nav>
 <div id="app"></div>
 </main>
-<script src="../../dist/jsee.core.js"></script>
+<script src="./dist/jsee.core.js"></script>
 <script>
   const app = new JSEE({ container: '#app', schema: 'schema.json' })
   document.getElementById('scheme').onchange = event => app.setDesign({ colorScheme: event.target.value })
